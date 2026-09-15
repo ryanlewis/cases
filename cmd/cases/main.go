@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type CLI struct {
 	Withdraw WithdrawCmd `cmd:"" help:"Withdraw an open case that is no longer needed (agent)."`
 	Answer   AnswerCmd   `cmd:"" help:"Answer an open case (human)."`
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
+	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 }
 
 // Validate refuses an empty store, which kong's required check lets through
@@ -56,6 +58,10 @@ type Deps struct {
 	Stderr io.Writer
 	// Poll is how often `wait` checks the store.
 	Poll time.Duration
+	// Context ends serve. When nil, serve stops on SIGINT or SIGTERM. Signals
+	// are caught only inside serve, so every other command keeps the default
+	// behaviour of exiting on them.
+	Context context.Context
 }
 
 // exitError ends the process with a specific status and no "Error:" line.

@@ -1,0 +1,89 @@
+{{define "content"}}
+{{$c := .Case}}
+<article class="case">
+  <div class="meta">
+    <span class="badge">{{$c.Urgency}}</span>
+    <span>{{$c.Kind}}</span>
+    <span class="badge state">{{$c.State}}</span>
+    {{with $c.Worker}}<span>{{.}}</span>{{end}}
+    <span>opened {{stamp $c.OpenedAt}}</span>
+  </div>
+  <h1>{{$c.Title}}</h1>
+  {{with $c.Context}}<p class="context">{{.}}</p>{{end}}
+  <div class="body">{{markdown $c.Body}}</div>
+  {{if $c.Links}}
+  <ul class="links">{{range $c.Links}}<li><a href="{{.}}" rel="noreferrer">{{.}}</a></li>{{end}}</ul>
+  {{end}}
+</article>
+
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+{{if eq $c.State "open"}}
+<form method="post" action="/cases/{{$c.ID | pathEscape}}/answer" class="respond">
+  {{$form := .Form}}
+  {{if eq $c.Kind "decision"}}
+  <fieldset>
+    <legend>Choose one</legend>
+    {{range $i, $o := $c.Options}}{{$v := inc $i | print}}
+    <label class="choice"><input type="radio" name="choice" value="{{$v}}"{{if checked $form "choice" $v}} checked{{end}}> {{$o}}</label>
+    {{end}}
+    <label class="choice"><input type="radio" name="choice" value="other"{{if checked $form "choice" "other"}} checked{{end}}> Other, see note</label>
+  </fieldset>
+  {{else if eq $c.Kind "approval"}}
+  {{range $c.Rows}}{{$verdict := print "verdict." .ID}}{{$note := print "note." .ID}}
+  <fieldset class="row">
+    <legend>{{.Label}}</legend>
+    <p><a href="{{.Link}}" rel="noreferrer">{{.Link}}</a></p>
+    <pre>{{.Script}}</pre>
+    <div class="verdicts">
+      <label class="choice"><input type="radio" name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> Approve</label>
+      <label class="choice"><input type="radio" name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> Hold</label>
+      <label class="choice"><input type="radio" name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> Reject</label>
+    </div>
+    <label>Note on this row <input type="text" name="{{$note}}" value="{{formValue $form $note}}"></label>
+  </fieldset>
+  {{end}}
+  {{else if eq $c.Kind "signoff"}}
+  <fieldset>
+    <legend>Sign off</legend>
+    <label class="choice"><input type="radio" name="signoff" value="accept"{{if checked $form "signoff" "accept"}} checked{{end}}> Accept</label>
+    <label class="choice"><input type="radio" name="signoff" value="changes"{{if checked $form "signoff" "changes"}} checked{{end}}> Request changes (comment required)</label>
+  </fieldset>
+  {{else if eq $c.Kind "stuck"}}
+  <fieldset>
+    <legend>Unblock</legend>
+    <label class="choice"><input type="radio" name="stuck" value="text"{{if checked $form "stuck" "text"}} checked{{end}}> Give guidance</label>
+    <label>Guidance <textarea name="text" rows="4">{{formValue $form "text"}}</textarea></label>
+    <label class="choice"><input type="radio" name="stuck" value="park"{{if checked $form "stuck" "park"}} checked{{end}}> Park it</label>
+    <label class="choice"><input type="radio" name="stuck" value="drop"{{if checked $form "stuck" "drop"}} checked{{end}}> Drop it</label>
+  </fieldset>
+  {{else if eq $c.Kind "fyi"}}
+  <input type="hidden" name="ack" value="1">
+  {{end}}
+  <label>{{if eq $c.Kind "signoff"}}Comment{{else}}Note to the manager{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
+  <button type="submit">{{if eq $c.Kind "fyi"}}Acknowledge{{else}}Send{{end}}</button>
+</form>
+{{else if eq $c.State "parked"}}
+<form method="post" action="/cases/{{$c.ID | pathEscape}}/resume" class="respond">
+  <button type="submit">Resume</button>
+</form>
+{{end}}
+
+{{template "thread" .}}
+{{end}}
+
+{{define "thread"}}
+<section id="thread" hx-get="/cases/{{.Case.ID | pathEscape}}/thread?state={{.Case.State}}" hx-trigger="every 2s" hx-swap="outerHTML">
+  <h2>Thread</h2>
+  <ol class="thread">
+  {{range .Thread}}
+    <li class="event author-{{.Author}}">
+      <div class="meta"><span>{{.Author}}</span> <span>{{.Type}}</span> <span>{{stamp .At}}</span></div>
+      {{range .Lines}}<p>{{.}}</p>{{end}}
+      {{with .Markdown}}<div class="body">{{.}}</div>{{end}}
+    </li>
+  {{end}}
+  </ol>
+  {{range .Case.Problems}}<p class="error">{{.}}</p>{{end}}
+</section>
+{{end}}

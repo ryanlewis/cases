@@ -1,0 +1,27 @@
+{{define "content"}}
+<h1>Inbox</h1>
+{{template "inbox-list" .}}
+{{end}}
+
+{{define "inbox-fragment"}}<title>{{template "title" .}}</title>
+{{template "inbox-list" .}}{{end}}
+
+{{define "inbox-list"}}
+<div id="inbox" hx-get="/fragments/inbox" hx-trigger="every 2s" hx-swap="outerHTML">
+{{range .Cards}}
+<a class="card urgency-{{.Urgency}}" href="/cases/{{.ID | pathEscape}}">
+  <div class="meta">
+    <span class="badge">{{.Urgency}}</span>
+    <span>{{.Kind}}</span>
+    {{if eq .State "parked"}}<span class="badge parked">parked</span>{{end}}
+    {{with .Worker}}<span>{{.}}</span>{{end}}
+    <span>{{.Age}}</span>
+  </div>
+  <h2>{{.Title}}</h2>
+  {{range .Excerpt}}<p class="excerpt">{{.}}</p>{{end}}
+</a>
+{{else}}
+<p class="empty">Nothing waiting.</p>
+{{end}}
+</div>
+{{end}}

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/ryanlewis/cases/internal/store"
+	"github.com/ryanlewis/cases/internal/web"
 )
 
 type ListCmd struct {
@@ -40,13 +40,7 @@ func (c *ListCmd) Run(d *Deps) error {
 			shown = append(shown, cs)
 		}
 	}
-	// Inbox order: most urgent first, then oldest first.
-	slices.SortStableFunc(shown, func(a, b *store.Case) int {
-		if r := a.Urgency.Rank() - b.Urgency.Rank(); r != 0 {
-			return r
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
+	store.SortInbox(shown)
 
 	if c.JSON {
 		enc := json.NewEncoder(d.Stdout)
@@ -61,25 +55,7 @@ func (c *ListCmd) Run(d *Deps) error {
 	tw := tabwriter.NewWriter(d.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATE\tURGENCY\tKIND\tAGE\tTITLE")
 	for _, cs := range shown {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, age(cs.OpenedAt), cs.Title)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, web.Age(cs.OpenedAt, time.Now()), cs.Title)
 	}
 	return tw.Flush()
-}
-
-// age renders how long ago t was, coarsely.
-func age(t time.Time) string {
-	if t.IsZero() {
-		return "-"
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
 }
