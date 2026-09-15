@@ -1,0 +1,6 @@
+/cases
+/coverage.out
+/.claude/*
+!/.claude/settings.json
+/dist/
+/.worktrees/
