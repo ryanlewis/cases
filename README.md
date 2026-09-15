@@ -104,8 +104,9 @@ cases resume ID [--agent]
 Both:
 
 ```
-cases list [--state STATE,...] [--json]
-cases show ID [--json]
+cases list  [--state STATE,...] [--json]
+cases show  ID [--json]
+cases serve [--listen 127.0.0.1:8765]
 ```
 
 `open` prints the new case id. The other write commands print the id and the
@@ -124,6 +125,36 @@ wake it, so running it again does not wake on answers already reported. With
 `--id ID` (repeatable) waits on those cases only. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
+
+## serve
+
+`cases serve` runs a small web inbox over the same store:
+
+```sh
+cases serve --store ~/notes/work/assistant/cases
+# Serving … at http://127.0.0.1:8765/
+```
+
+The default address is `127.0.0.1:8765`; change it with `--listen`. Only
+loopback addresses (`127.0.0.1`, `::1`, `localhost`) are accepted for now.
+Each request is logged to stderr, except the page refreshes that run every two
+seconds. Stop it with Ctrl-C.
+
+- `/` is the inbox: open and parked cases, blocking first, then oldest first.
+  The tab title shows how many open cases are blocking.
+- `/cases/ID` shows one case: the body rendered as markdown, its links, a
+  response form that fits the kind, and the thread. Sending the form writes one
+  answer (or, for a stuck case, a park). A parked case has a Resume button.
+- `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
+  with the outcome of closed ones.
+
+The inbox and the thread refresh every two seconds. The page reloads itself if
+the case changes state while it is open.
+
+The app only answers requests addressed to its own host and port, refuses form
+posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends
+`Content-Security-Policy: default-src 'self'`. Raw HTML in a markdown body is
+dropped. htmx is included in the binary; nothing is fetched from the network.
 
 ## Example
 
