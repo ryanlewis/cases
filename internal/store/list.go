@@ -41,6 +41,17 @@ func List(root string) (cases []*Case, bad []*LoadError, err error) {
 	return cases, bad, nil
 }
 
+// SortInbox orders cases the way the inbox shows them: most urgent first, then
+// oldest first. The id starts with the open time, so it sorts by age.
+func SortInbox(cases []*Case) {
+	slices.SortStableFunc(cases, func(a, b *Case) int {
+		if r := a.Urgency.Rank() - b.Urgency.Rank(); r != 0 {
+			return r
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+}
+
 // caseDirs lists the case directories in root, sorted by name.
 func caseDirs(root string) ([]string, error) {
 	entries, err := os.ReadDir(root)

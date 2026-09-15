@@ -80,77 +80,13 @@ func printCase(w io.Writer, c *store.Case) {
 	fmt.Fprintln(w, "\nThread:")
 	for _, ev := range c.Events {
 		fmt.Fprintf(w, "  %04d %-5s %-8s %s\n", ev.Seq, ev.Author, ev.Type, stamp(ev.At))
-		for _, line := range eventLines(c, ev) {
+		for _, line := range c.Describe(ev) {
 			fmt.Fprintf(w, "       %s\n", line)
 		}
 	}
 	for _, p := range c.Problems {
 		fmt.Fprintf(w, "  problem: %s\n", p)
 	}
-}
-
-// eventLines summarises what an event said, for the thread view. The fold has
-// already validated the data, so decode errors are not expected here.
-func eventLines(c *store.Case, ev store.Event) []string {
-	var lines []string
-	add := func(format string, args ...any) {
-		for line := range strings.SplitSeq(strings.TrimSpace(fmt.Sprintf(format, args...)), "\n") {
-			lines = append(lines, line)
-		}
-	}
-	switch ev.Type {
-	case store.EventAnswer:
-		var a store.AnswerRecord
-		_ = json.Unmarshal(ev.Data, &a)
-		switch {
-		case a.Choice > 0 && a.Choice <= len(c.Options):
-			add("chose %d. %s", a.Choice, c.Options[a.Choice-1])
-		case a.Other:
-			add("chose other")
-		case a.Signoff != "":
-			add("signoff: %s", a.Signoff)
-		case a.Text != "":
-			add("guidance: %s", a.Text)
-		case a.Drop:
-			add("drop")
-		case a.Ack:
-			add("acknowledged")
-		}
-		for _, r := range a.Rows {
-			if r.Note != "" {
-				add("[%s] %s: %s", r.ID, r.Verdict, r.Note)
-			} else {
-				add("[%s] %s", r.ID, r.Verdict)
-			}
-		}
-		if a.Note != "" {
-			add("note: %s", a.Note)
-		}
-	case store.EventPickup:
-		var p store.PickupRecord
-		_ = json.Unmarshal(ev.Data, &p)
-		if p.By != "" {
-			add("by %s", p.By)
-		}
-	case store.EventNote:
-		var n store.NoteRecord
-		_ = json.Unmarshal(ev.Data, &n)
-		add("%s", n.Body)
-	case store.EventClose:
-		var cl store.CloseRecord
-		_ = json.Unmarshal(ev.Data, &cl)
-		add("%s", cl.Outcome)
-		for _, l := range cl.Links {
-			add("%s", l)
-		}
-	case store.EventPark:
-		var p store.ParkRecord
-		_ = json.Unmarshal(ev.Data, &p)
-		if p.Note != "" {
-			add("note: %s", p.Note)
-		}
-	}
-	return lines
 }
 
 func stamp(t time.Time) string {
