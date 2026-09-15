@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,6 +29,9 @@ func List(root string) (cases []*Case, bad []*LoadError, err error) {
 	}
 	for _, dir := range dirs {
 		c, err := Load(dir)
+		if errors.Is(err, ErrNoEvents) {
+			continue
+		}
 		if err != nil {
 			bad = append(bad, &LoadError{Dir: dir, Err: err})
 			continue
@@ -108,6 +112,9 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 			c, err := Load(dir)
 			entry = polled{mod: info.ModTime(), c: c, err: err}
 			p.cache[dir] = entry
+		}
+		if errors.Is(entry.err, ErrNoEvents) {
+			continue
 		}
 		if entry.err != nil {
 			bad = append(bad, &LoadError{Dir: dir, Err: entry.err})

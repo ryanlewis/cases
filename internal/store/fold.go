@@ -49,6 +49,11 @@ type Case struct {
 	lastSeq int
 }
 
+// ErrNoEvents is a case directory with no event files in it yet. Create makes
+// the directory a moment before it writes the open event, so a listing can
+// catch one in between; List and Poller skip such a directory silently.
+var ErrNoEvents = errors.New("no open event")
+
 // TransitionError is an event the case's current state does not allow.
 type TransitionError struct {
 	Event EventType
@@ -165,7 +170,7 @@ func Load(dir string) (*Case, error) {
 		if len(c.Problems) > 0 {
 			return nil, fmt.Errorf("no valid open event (%s)", strings.Join(c.Problems, "; "))
 		}
-		return nil, errors.New("no open event")
+		return nil, ErrNoEvents
 	}
 	return c, nil
 }

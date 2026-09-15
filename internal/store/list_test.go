@@ -129,6 +129,8 @@ func TestListSkipsBrokenCases(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A case directory caught between Create's mkdir and its open event.
+	writeFile(t, filepath.Join(root, "2026-09-15T10-00-00Z-being-created"), ".tmp-1", "{")
 
 	cases, bad, err := List(root)
 	if err != nil {
@@ -139,6 +141,9 @@ func TestListSkipsBrokenCases(t *testing.T) {
 	}
 	if len(bad) != 1 || !strings.Contains(bad[0].Error(), "broken") {
 		t.Errorf("bad = %v", bad)
+	}
+	if _, pbad, err := NewPoller(root).Poll(); err != nil || len(pbad) != 1 {
+		t.Errorf("poller bad = %v, err = %v", pbad, err)
 	}
 }
 
