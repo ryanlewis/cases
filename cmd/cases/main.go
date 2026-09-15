@@ -20,8 +20,8 @@ var (
 )
 
 // exitTimeout is the status `cases wait` exits with when --timeout passes with
-// nothing answered. It matches timeout(1).
-const exitTimeout = 124
+// nothing for the agent. It differs from 1, which every other failure uses.
+const exitTimeout = 2
 
 type CLI struct {
 	Store   string           `help:"Case store directory. Required; there is no default." env:"CASES_STORE" required:"" placeholder:"DIR"`
@@ -30,7 +30,7 @@ type CLI struct {
 	Open     OpenCmd     `cmd:"" help:"Open a case (agent)."`
 	List     ListCmd     `cmd:"" help:"List cases."`
 	Show     ShowCmd     `cmd:"" help:"Show one case and its thread."`
-	Wait     WaitCmd     `cmd:"" help:"Block until a case is answered, then print answered cases as JSON lines (agent)."`
+	Wait     WaitCmd     `cmd:"" help:"Block until a human answers, parks or resumes a case, then print the cases waiting on the agent as JSON lines (agent)."`
 	Pickup   PickupCmd   `cmd:"" help:"Record that the answer has been read (agent)."`
 	Note     NoteCmd     `cmd:"" help:"Add a follow-up to the thread; reopens an answered case (agent)."`
 	Close    CloseCmd    `cmd:"" help:"Record the outcome of a picked-up case (agent)."`

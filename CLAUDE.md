@@ -40,7 +40,7 @@ make fmt     # gofmt -w . && goimports -w .
 - Timestamps are UTC, set by the store when the record leaves them zero.
 - `Event.Data` holds the file bytes as written, so unknown fields survive and appear in `show --json`.
 - `[]string` flags whose values can contain commas need `sep:"none"`.
-- `cases wait` exits 124 on timeout (`exitTimeout`).
+- `cases wait` wakes on a new human answer, park or resume. New means the file was not there on its first poll, or is later than `--since`. It exits 2 on timeout (`exitTimeout`).
 
 ## Testing
 

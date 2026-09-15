@@ -65,7 +65,7 @@ Every answer may carry a `note`.
 A file that is not valid JSON, has an unexpected name, or records an event the
 case could not accept at that point is skipped. The case still loads, and the
 file is reported as a problem (`cases show` lists it; `list` and `wait` print
-it as a warning on stderr). A case directory with no valid open event is
+it as a warning on stderr). A case directory whose open event is damaged is
 reported and the other cases are still listed. Fields the CLI does not know are
 kept: `cases show --json` prints every event file as written.
 
@@ -85,7 +85,7 @@ Agent side:
 cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
                [--body-file FILE|-] [--option TEXT]... [--row JSON]...
                [--link URL]... [--worker NAME] [--brief PATH] [--context TEXT]
-cases wait     [--since TIME] [--timeout DURATION]
+cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
 cases pickup   ID [--by NAME]
 cases note     ID --body-file FILE|-
 cases close    ID --outcome-file FILE|- [--link URL]...
@@ -114,11 +114,16 @@ new state.
 `--row` on `open` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 
-`wait` checks the store every second. When it finds answered cases it prints
-each one as a line of JSON and exits 0. Without `--since` it reports every case
-that is currently answered, so a case still waiting to be picked up is reported
-again. With `--since` it reports only answers written after that time. If
-`--timeout` passes first it exits 124.
+`wait` is for an agent to run in the background. It checks the store every
+second and returns as soon as a human answers, parks or resumes a case. It then
+prints every case still waiting on the agent, one JSON object per line, and
+exits 0. A case is waiting on the agent when its last event is one of those
+three human events. By default only events that land after `wait` starts can
+wake it, so running it again does not wake on answers already reported. With
+`--since TIME` it also wakes on human events recorded after that time.
+`--id ID` (repeatable) waits on those cases only. If `--timeout` passes first,
+it prints one line to stderr and exits 2; other errors exit 1. `wait` also
+starts if the store directory does not exist yet.
 
 ## Example
 

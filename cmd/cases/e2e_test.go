@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestDecisionEndToEnd drives a decision case through the CLI the way the
@@ -24,16 +23,12 @@ func TestDecisionEndToEnd(t *testing.T) {
 		"--kind", "decision", "--urgency", "blocking", "--worker", "bun-pins", "--brief", "/briefs/bun-pins.md",
 		"--title", "Pin bun or float?", "--body-file", body,
 		"--option", "Pin to 1.2.3", "--option", "Float and fix the lockfile", "--link", "https://github.com/oven-sh/bun/issues/1"))
-	start := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
-
-	waited := make(chan result, 1)
-	go func() { waited <- runCases(t, "", "--store", root, "wait", "--since", start, "--timeout", "10s") }()
+	wait := startWait(t, root, "--timeout", "10s")
 
 	// The human answers from the other side of the store.
-	time.Sleep(30 * time.Millisecond)
 	mustRun(t, "--store", root, "answer", id, "--option", "1", "--note", "Revisit after 1.3")
 
-	w := <-waited
+	w := <-wait
 	if w.err != nil {
 		t.Fatalf("wait: %v", w.err)
 	}
@@ -59,10 +54,8 @@ func TestDecisionEndToEnd(t *testing.T) {
 		t.Fatalf("close: %v", r.err)
 	}
 
-	// A closed case is no longer waited on.
-	if r := runCases(t, "", "--store", root, "wait", "--timeout", "50ms"); r.err == nil {
-		t.Errorf("wait returned %q for a store with nothing answered", r.stdout)
-	}
+	// A closed case is no longer waited on, even from before it was opened.
+	assertTimedOut(t, runCases(t, "", "--store", root, "wait", "--since", "2000-01-01T00:00:00Z", "--timeout", "50ms"))
 
 	entries, err := os.ReadDir(filepath.Join(root, id))
 	if err != nil {
