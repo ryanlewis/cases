@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,5 +70,17 @@ func TestWaitSinceAndTimeout(t *testing.T) {
 
 	if r := runCases(t, "", "--store", root, "wait", "--since", "yesterday"); r.err == nil {
 		t.Error("bad --since accepted")
+	}
+}
+
+func TestWaitReportsAnswerWithoutTimestamp(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Hand answered"))
+	// An answer written by hand or by another tool may leave answered_at out.
+	if err := os.WriteFile(filepath.Join(root, id, "0002-human-answer.json"), []byte(`{"ack":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := mustRun(t, "--store", root, "wait", "--timeout", "1s"); !strings.Contains(out, id) {
+		t.Errorf("wait output %q, want %s", out, id)
 	}
 }

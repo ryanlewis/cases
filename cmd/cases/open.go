@@ -46,6 +46,9 @@ func (c *OpenCmd) Run(d *Deps) error {
 		if err := dec.Decode(&row); err != nil {
 			return fmt.Errorf("--row %d: %w", i+1, err)
 		}
+		if dec.More() {
+			return fmt.Errorf("--row %d: unexpected data after the row object; pass one --row per row", i+1)
+		}
 		rec.Rows = append(rec.Rows, row)
 	}
 	created, err := store.Create(d.Store, rec)

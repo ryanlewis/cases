@@ -74,6 +74,7 @@ func TestOpenRefusals(t *testing.T) {
 		{"decision without options", []string{"--kind", "decision", "--urgency", "today", "--title", "x"}, "at least one option"},
 		{"row that is not JSON", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", "deps=npm ci"}, "--row 1"},
 		{"row with an unknown field", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k","cmd":"x"}`}, `unknown field "cmd"`},
+		{"two rows in one flag", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k"},{"id":"b","label":"l","script":"s","link":"k"}`}, "one --row per row"},
 		{"row without a link", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s"}`}, "link is empty"},
 		{"options on fyi", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases"},
 	}

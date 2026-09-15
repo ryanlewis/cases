@@ -48,7 +48,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 
 		var answered []*store.Case
 		for _, cs := range cases {
-			if cs.State == store.StateAnswered && cs.Answer.AnsweredAt.After(since) {
+			if cs.State == store.StateAnswered && (since.IsZero() || cs.Answer.AnsweredAt.After(since)) {
 				answered = append(answered, cs)
 			}
 		}
