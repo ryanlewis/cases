@@ -8,6 +8,7 @@ CLI and local web inbox for a store of cases raised by an agent and answered by 
 - **DO** use Conventional Commits.
 - **NEVER** edit or delete event files in a store. Changes to the record format must keep reading files written by earlier versions.
 - **DO** update README.md in the same change when a command, flag, event or record field changes.
+- **DO** update `internal/skill/SKILL.md` when adding, removing or changing a subcommand's surface. The bundled agent skill ships in the binary and drifts silently otherwise.
 
 ## Commands
 
@@ -32,6 +33,7 @@ make fmt     # gofmt -w . && goimports -w .
   - `lock_unix.go` — `flock` on the case directory. It stops two local writers taking the same sequence number; it does nothing across machines.
   - `describe.go` — `(*Case).Describe(ev)`, plain-text lines for an event, shared by `show` and the web thread.
 - `internal/web/` — `cases serve`. `web.go` holds the `Server`, routes, the request guard (Host must be the loopback listen address; POSTs with a foreign `Sec-Fetch-Site` or `Origin` get 403; CSP `default-src 'self'`) and the request log. `views.go` holds the handlers, view data and form parsing. Templates in `templates/` and `static/` are embedded. Reads go through one mutex-guarded `store.Poller`; POSTs load the case from disk and write through `store.Answer`, `store.Park` or `store.Resume`, then redirect.
+- `internal/skill/` — the bundled agent skill. `SKILL.md` is the neutral source, embedded; one adapter per agent (`claude.go`, `codex.go`, `pi.go`) renders it and knows the agent's skill directory. `cases skill install|uninstall|show|list` in `cmd/cases/skill.go`.
 - `internal/config/` — the TOML config file (`$XDG_CONFIG_HOME/cases/config.toml`). `Keys` is the allow-list of settings, each naming the flag it seeds. `Load` returns a `File` that is never nil, so `cases config` can report a broken file. `(*File).Resolver()` is a kong resolver; it yields nothing for a flag whose env var is set, so precedence is flag > env > file > default.
 - `cmd/cases/` — kong CLI. One file per subcommand, each with a `_test.go` sibling. `Deps` carries the store path, the streams and the loaded config. `main` and `runCases` both load the config off the argv before building the parser, and a config error stops every command except the `config` subcommands (marked by `diagnosesConfig`).
 
