@@ -1,6 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -15,5 +19,40 @@ func TestWithdraw(t *testing.T) {
 	}
 	if r := runCases(t, "", "--store", root, "withdraw", id); r.err == nil {
 		t.Error("withdrew twice")
+	}
+}
+
+func TestWithdrawReason(t *testing.T) {
+	withdrawFile := func(t *testing.T, root, id string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, id, "0002-agent-withdraw.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "withdraw", id)
+	// Without a reason the file is what earlier versions wrote.
+	if got := withdrawFile(t, root, id); !regexp.MustCompile(`^\{\s*"withdrawn_at": "[^"]+"\s*\}\s*$`).MatchString(got) {
+		t.Errorf("file without a reason = %s", got)
+	}
+	if out := mustRun(t, "--store", root, "show", id); strings.Contains(out, "reason:") {
+		t.Errorf("show without a reason:\n%s", out)
+	}
+
+	root = t.TempDir()
+	id = openDecision(t, root)
+	mustRun(t, "--store", root, "withdraw", id, "--reason", "found it in the lockfile")
+	if got := withdrawFile(t, root, id); !strings.Contains(got, `"reason": "found it in the lockfile"`) {
+		t.Errorf("file with a reason = %s", got)
+	}
+	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "0002 agent withdraw") || !strings.Contains(out, "       reason: found it in the lockfile\n") {
+		t.Errorf("show with a reason:\n%s", out)
+	}
+	if c := loadCase(t, root, id); c.State != "withdrawn" {
+		t.Errorf("state = %s", c.State)
 	}
 }

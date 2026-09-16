@@ -580,6 +580,17 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	}
 }
 
+func TestThreadShowsWithdrawReason(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindSignoff])
+	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{Reason: "superseded by <the other case>"}); err != nil {
+		t.Fatal(err)
+	}
+	if page := a.get(t, "/cases/"+c.ID); !strings.Contains(page, "<p>reason: superseded by &lt;the other case&gt;</p>") {
+		t.Errorf("thread missing the reason:\n%s", page)
+	}
+}
+
 func TestApprovalRowNote(t *testing.T) {
 	a := newApp(t)
 	rows := slices.Clone(approvalRows)

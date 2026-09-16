@@ -62,6 +62,12 @@ func (c *Case) Describe(ev Event) []string {
 		for _, l := range cl.Links {
 			add("%s", l)
 		}
+	case EventWithdraw:
+		var wd WithdrawRecord
+		_ = json.Unmarshal(ev.Data, &wd)
+		if wd.Reason != "" {
+			add("reason: %s", wd.Reason)
+		}
 	case EventPark:
 		var p ParkRecord
 		_ = json.Unmarshal(ev.Data, &p)

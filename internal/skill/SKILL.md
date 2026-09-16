@@ -120,13 +120,13 @@ cases status [--json]
 cases pickup   ID [--by NAME]
 cases note     ID --body-file FILE|-
 cases close    ID --outcome-file FILE|- [--link URL]...
-cases withdraw ID
+cases withdraw ID [--reason TEXT]
 ```
 
 - `pickup` records that you have read the answer. Do it before you act, so the human can see the answer was received.
 - `note` adds a follow-up in markdown. Use it to ask a clarifying question about the answer; the case goes back to `open` for another answer.
 - `close` records the outcome in markdown: what you did, and anything that did not go as planned. The outcome must not be empty. `--link` (repeatable) points at the evidence: a commit, PR or log.
-- `withdraw` an open case that no longer needs an answer, for example because you found the answer yourself. You cannot withdraw a case once it is answered; pick it up and close it instead.
+- `withdraw` an open case that no longer needs an answer, for example because you found the answer yourself. `--reason` tells the human why. You cannot withdraw a case once it is answered; pick it up and close it instead.
 - Each prints the case id and its new state.
 
 ## Workflow
