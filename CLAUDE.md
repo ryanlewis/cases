@@ -28,7 +28,7 @@ make fmt     # gofmt -w . && goimports -w .
 - `internal/store/` — the store.
   - `types.go` — kinds, urgencies, states, authors, event types, and one record struct per event.
   - `fold.go` — `Load(dir)` folds a case directory into a `Case`. `(*Case).apply` is the only place transitions and answer shapes are checked.
-  - `write.go` — `Create` and one append function per event. Each append locks the case directory, loads it, runs `apply` on the new event, and only then writes the file atomically (temp file plus rename). `Answer`, `Park` and `Resume` take an optional `AtRevision(rev)`, checked in the same locked section before `apply`; a case whose `Revision()` (its number of event files) has moved on fails with `ErrStale`.
+  - `write.go` — `Create` and one append function per event. Each append locks the case directory, loads it, runs `apply` on the new event, and only then writes the file atomically: the temp file is hard-linked to the event's name, which fails if the name is taken, and renamed only after a second check where hard links do not work. `Answer`, `Park` and `Resume` take an optional `AtRevision(rev)`, checked in the same locked section before `apply`; a case whose `Revision()` (its number of event files) has moved on fails with `ErrStale`.
   - `list.go` — `List(root)` and `Poller`, which reloads only case directories whose mtime changed. `cases wait` uses it.
   - `lock_unix.go` — `flock` on the case directory. It stops two local writers taking the same sequence number; it does nothing across machines.
   - `describe.go` — `(*Case).Describe(ev)`, plain-text lines for an event, shared by `show` and the web thread.
@@ -53,7 +53,7 @@ make fmt     # gofmt -w . && goimports -w .
 ## Testing
 
 - Fold tests build events in memory with `fold(t, steps...)` in `internal/store/fold_test.go`. `TestTransitionMatrix` tries every event from every state against the lifecycle diagram. Add to it when the lifecycle changes.
-- Store tests use `t.TempDir()`. `fixClock` pins the event clock; `rename` can be swapped to fail a write.
+- Store tests use `t.TempDir()`. `fixClock` pins the event clock; `link`, `rename` and `remove` can be swapped to fail or race a write.
 - CLI tests call `runCases(t, stdin, args...)` in `cmd/cases/main_test.go`. It parses with the real kong grammar and captures stdout and stderr. `Deps.Poll` is 10ms in tests. `TestMain` points `HOME` and the XDG directories at a scratch directory, so tests never see the developer's config file or default store; `writeConfig(t, body)` in `config_test.go` puts a file at the default location for one test.
 - Web tests (`internal/web`) use `newApp(t)` and `a.do(method, path, form, headers)` with `httptest`. Requests carry `Host: 127.0.0.1:8765` unless the test sets another.
 - `e2e_test.go` runs a decision case through open, answer, wait, pickup and close.
