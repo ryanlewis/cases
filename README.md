@@ -289,7 +289,9 @@ case no longer needs an answer; `show` and the web thread print it.
 `amend` changes an open case as described in [store format](#store-format):
 `--option`, `--row`, `--link` and `--label` add to the case, and `--body-file` and
 `--context` replace its body and context. It refuses an amend that changes
-nothing, an empty body file and an empty `--context`.
+nothing, an empty body file and an empty `--context`. `show` prints the body
+or context an amend replaced in full under the thread line that says so, and
+the web thread shows it under a `previous body` or `previous context` toggle.
 
 `list --label TEXT` and `list --worker NAME` (each repeatable) show only cases
 that have any of the given labels, or come from any of the given workers.

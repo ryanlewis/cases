@@ -6,21 +6,37 @@ import (
 	"strings"
 )
 
+// Line is one line of what an event said. When an amend replaced the body or
+// the context, the text the case had before is in PreviousBody or
+// PreviousContext on the last line about that change. A context with line
+// breaks takes several lines, and the old text is on the last of them. There
+// is no old text when it was empty or only space.
+type Line struct {
+	Text            string
+	PreviousBody    string
+	PreviousContext string
+}
+
 // Describe summarises what an event said, as plain lines for a thread view.
 // The fold has already validated the data, so decode errors are not expected.
-func (c *Case) Describe(ev Event) []string {
-	var lines []string
+func (c *Case) Describe(ev Event) []Line {
+	var lines []Line
 	add := func(format string, args ...any) {
 		for line := range strings.SplitSeq(strings.TrimSpace(fmt.Sprintf(format, args...)), "\n") {
-			lines = append(lines, line)
+			lines = append(lines, Line{Text: line})
 		}
 	}
 	switch ev.Type {
 	case EventAmend:
 		var a AmendRecord
 		_ = json.Unmarshal(ev.Data, &a)
-		if a.Body != "" {
+		// An amend that sets the body or context the case already has changed
+		// nothing there, so no line says it replaced it.
+		if a.Body != "" && a.Body != ev.replacedBody {
 			add("replaced the body")
+			if strings.TrimSpace(ev.replacedBody) != "" {
+				lines[len(lines)-1].PreviousBody = ev.replacedBody
+			}
 		}
 		for _, o := range a.Options {
 			add("added option: %s", o)
@@ -34,8 +50,11 @@ func (c *Case) Describe(ev Event) []string {
 		for _, l := range a.Labels {
 			add("added label: %s", l)
 		}
-		if a.Context != "" {
+		if a.Context != "" && a.Context != ev.replacedContext {
 			add("replaced the context: %s", a.Context)
+			if strings.TrimSpace(ev.replacedContext) != "" {
+				lines[len(lines)-1].PreviousContext = ev.replacedContext
+			}
 		}
 	case EventAnswer:
 		var a AnswerRecord

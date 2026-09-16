@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -256,6 +258,80 @@ func TestAmendedCase(t *testing.T) {
 	}
 	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-agent-amend.json", "0003-human-answer.json"}) {
 		t.Errorf("files = %v", files)
+	}
+}
+
+// The thread shows the body and context an amend replaced, each in a details
+// element the poll keeps as the human left it: the body as markdown with raw
+// HTML dropped, and the context escaped. A case that had no body before has
+// no previous body to show.
+func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
+	const body, context = "Was **bold** & <script>alert(1)</script> <b>raw</b>", `Release <1.4> & "quoted"`
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up", Body: body, Context: context})
+	if _, err := store.Amend(c.Dir, store.AmendRecord{Body: "Now plain.", Context: "Release 1.4.1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/cases/" + c.ID, "/cases/" + c.ID + "/thread?state=open"} {
+		page := a.get(t, target)
+		for _, want := range []string{
+			`<p>replaced the body</p>`,
+			`<details id="previous-body-2-` + textID(body) + `" hx-preserve><summary>previous body</summary><div class="body"><p>Was <strong>bold</strong> &amp; <!-- raw HTML omitted -->alert(1)<!-- raw HTML omitted --> <!-- raw HTML omitted -->raw<!-- raw HTML omitted --></p>`,
+			`<p>replaced the context: Release 1.4.1</p>`,
+			`<details id="previous-context-2-` + textID(context) + `" hx-preserve><summary>previous context</summary><p class="context">Release &lt;1.4&gt; &amp; &#34;quoted&#34;</p></details>`,
+		} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s missing %s:\n%s", target, want, page)
+			}
+		}
+		for _, bad := range []string{"<script>", "<b>raw</b>", "Release <1.4>"} {
+			if strings.Contains(page, bad) {
+				t.Errorf("%s contains %s", target, bad)
+			}
+		}
+	}
+
+	bare := a.open(t, openRecords[store.KindFYI])
+	if _, err := store.Amend(bare.Dir, store.AmendRecord{Body: "A body at last.", Context: "Release 1.4"}); err != nil {
+		t.Fatal(err)
+	}
+	if page := a.get(t, "/cases/"+bare.ID); !strings.Contains(page, "<p>replaced the body</p>") || strings.Contains(page, "<details") {
+		t.Errorf("a case with no body or context before shows a previous one:\n%s", page)
+	}
+}
+
+// An amend that syncs in after a later one changes what the later one
+// replaced. The details under the later one then gets a new id, so the poll
+// does not keep the old text in its place.
+func TestThreadDetailsFollowTheText(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up", Body: "First."})
+	arrive := func(name, data string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(c.Dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread := "/cases/" + c.ID + "/thread?state=open"
+
+	arrive("0003-agent-amend.json", `{"body":"Third."}`)
+	stale := `<details id="previous-body-3-` + textID("First.") + `" hx-preserve>`
+	if page := a.get(t, thread); !strings.Contains(page, stale) {
+		t.Fatalf("thread missing %s:\n%s", stale, page)
+	}
+
+	arrive("0002-agent-amend.json", `{"body":"Second."}`)
+	page := a.get(t, thread)
+	for _, want := range []string{
+		`<details id="previous-body-2-` + textID("First.") + `" hx-preserve>`,
+		`<details id="previous-body-3-` + textID("Second.") + `" hx-preserve>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("thread missing %s:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, stale) {
+		t.Errorf("thread keeps the id of text amend 0003 no longer replaced:\n%s", page)
 	}
 }
 

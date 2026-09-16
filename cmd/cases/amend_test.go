@@ -79,6 +79,31 @@ func TestAmendRoundTrip(t *testing.T) {
 	}
 }
 
+// show prints the body and context an amend replaced, in full, under the line
+// saying so. The first amend replaced no body, so it has none to print.
+func TestShowPrintsWhatAnAmendReplaced(t *testing.T) {
+	root := t.TempDir()
+	id := openApproval(t, root)
+	if r := runCases(t, "# Scripts\n\nTwo scripts now.\n", "--store", root, "amend", id, "--body-file", "-"); r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r := runCases(t, "Three scripts now.\n", "--store", root, "amend", id, "--body-file", "-", "--context", "Release 1.4.1"); r.err != nil {
+		t.Fatal(r.err)
+	}
+	out := mustRun(t, "--store", root, "show", id)
+	want := "       replaced the body\n" +
+		"         previous body:\n" +
+		"         | # Scripts\n" +
+		"         | \n" +
+		"         | Two scripts now.\n" +
+		"       replaced the context: Release 1.4.1\n" +
+		"         previous context:\n" +
+		"         | Release 1.4\n"
+	if !strings.Contains(out, want) || strings.Count(out, "previous body:") != 1 {
+		t.Errorf("show output lacks the replaced text, or has it twice:\n%s", out)
+	}
+}
+
 func TestAmendAddsOptions(t *testing.T) {
 	root := t.TempDir()
 	id := openDecision(t, root)

@@ -91,7 +91,7 @@ cases amend ID [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
 - Changes an open case before the human answers it: another option, another script to approve, a link, or a body or context that is wrong or out of date. The answer is checked against the case as amended, so an approval answer covers the rows you add.
 - `--option` adds options to a `decision` case, numbered after the ones it has. `--row` adds rows to an `approval` case; each `id` must be new to the case. `--link` adds links and `--label` adds labels. An option, link or label the case already has is refused, and so is an amend that changes nothing, so sending the same amend twice writes nothing the second time.
 - `--body-file` replaces the whole body, so write all of it, not only what changed. `--context` replaces the context.
-- An amend erases nothing: the body and context it replaces stay in the store and in `show --json`. If a case holds a secret, amending it out does not remove it; tell the human so they can rotate it.
+- An amend erases nothing: the body and context it replaces stay in the store, and `show`, `show --json` and the web thread show them. If a case holds a secret, amending it out does not remove it; tell the human so they can rotate it.
 - Nothing can be removed or reordered. If the question itself has changed, withdraw the case and open a new one; for a second question, open a second case.
 - Put every change in one amend: each one can send the human back to read the case again. To add to the thread without changing the case, use `note`.
 - An amend does not wake `wait`; leave your wait running.
