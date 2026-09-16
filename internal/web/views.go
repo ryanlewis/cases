@@ -138,7 +138,7 @@ type page struct {
 	Nav      string // the header link to mark as current
 }
 
-// countBlocking counts open blocking cases: the ones a worker is idle on.
+// countBlocking counts open blocking cases: the ones an agent is idle on.
 func countBlocking(cases []*store.Case) int {
 	n := 0
 	for _, c := range cases {

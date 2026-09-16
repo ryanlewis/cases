@@ -64,7 +64,7 @@ func answerOf(kind Kind) AnswerRecord {
 }
 
 var (
-	pickupStep   = agent(EventPickup, PickupRecord{By: "manager"})
+	pickupStep   = agent(EventPickup, PickupRecord{By: "bun-pins"})
 	noteStep     = agent(EventNote, NoteRecord{Body: "One more thing?"})
 	closeStep    = agent(EventClose, CloseRecord{Outcome: "Done."})
 	withdrawStep = agent(EventWithdraw, WithdrawRecord{})

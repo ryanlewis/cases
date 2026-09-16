@@ -38,11 +38,11 @@ func TestCreateWritesOpenEvent(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cases")
 	fixClock(t, time.Date(2026, 9, 15, 9, 12, 3, 0, time.UTC))
 
-	c, err := Create(root, OpenRecord{Kind: KindFYI, Urgency: UrgencyWhenever, Title: "Kristi: chair?"})
+	c, err := Create(root, OpenRecord{Kind: KindFYI, Urgency: UrgencyWhenever, Title: "Pin bun or float?"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ID != "2026-09-15T09-12-03Z-kristi-chair" {
+	if c.ID != "2026-09-15T09-12-03Z-pin-bun-or-float" {
 		t.Errorf("id = %s", c.ID)
 	}
 	if got := fileNames(t, c.Dir); !slices.Equal(got, []string{"0001-agent-open.json"}) {
@@ -52,12 +52,12 @@ func TestCreateWritesOpenEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.State != StateOpen || loaded.Title != "Kristi: chair?" || !loaded.OpenedAt.Equal(now()) {
+	if loaded.State != StateOpen || loaded.Title != "Pin bun or float?" || !loaded.OpenedAt.Equal(now()) {
 		t.Errorf("loaded = %+v", loaded)
 	}
 
 	// Same second, same title: a second directory, not a clash.
-	c2, err := Create(root, OpenRecord{Kind: KindFYI, Urgency: UrgencyWhenever, Title: "Kristi: chair?"})
+	c2, err := Create(root, OpenRecord{Kind: KindFYI, Urgency: UrgencyWhenever, Title: "Pin bun or float?"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCreateRefusesInvalidOpenWithoutLeavingADirectory(t *testing.T) {
 
 func TestSlug(t *testing.T) {
 	tests := map[string]string{
-		"Kristi: chair?":          "kristi-chair",
+		"Pin bun or float?":       "pin-bun-or-float",
 		"  Bun pins -- 1.2.3  ":   "bun-pins-1-2-3",
 		"ÉTÉ café":                "t-caf",
 		"!!!":                     "case",

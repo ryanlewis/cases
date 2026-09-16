@@ -10,7 +10,7 @@ import (
 )
 
 // TestDecisionEndToEnd drives a decision case through the CLI the way the
-// manager and the human would: open, answer, wait, pickup, close.
+// agent and the human would: open, answer, wait, pickup, close.
 func TestDecisionEndToEnd(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cases")
 	body := filepath.Join(t.TempDir(), "body.md")
@@ -18,7 +18,7 @@ func TestDecisionEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The manager opens the case and starts waiting before anyone answers.
+	// The agent opens the case and starts waiting before anyone answers.
 	id := strings.TrimSpace(mustRun(t, "--store", root, "open",
 		"--kind", "decision", "--urgency", "blocking", "--worker", "bun-pins", "--brief", "/briefs/bun-pins.md",
 		"--title", "Pin bun or float?", "--body-file", body,
@@ -49,7 +49,7 @@ func TestDecisionEndToEnd(t *testing.T) {
 		t.Errorf("wait printed %+v", got)
 	}
 
-	mustRun(t, "--store", root, "pickup", id, "--by", "manager")
+	mustRun(t, "--store", root, "pickup", id, "--by", "bun-pins")
 	if r := runCases(t, "Pinned in #12.\n", "--store", root, "close", id, "--outcome-file", "-"); r.err != nil {
 		t.Fatalf("close: %v", r.err)
 	}

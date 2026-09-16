@@ -342,7 +342,7 @@ func TestThreadFragment(t *testing.T) {
 	if _, err := store.Answer(c.Dir, store.AnswerRecord{Choice: 1, Note: "ship it"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Pickup(c.Dir, store.PickupRecord{By: "manager"}); err != nil {
+	if _, err := store.Pickup(c.Dir, store.PickupRecord{By: "bun-pins"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Which **patch**?"}); err != nil {
@@ -354,7 +354,7 @@ func TestThreadFragment(t *testing.T) {
 		t.Error("case page does not poll its thread")
 	}
 	frag := a.get(t, "/cases/"+c.ID+"/thread?state=open")
-	for _, want := range []string{"chose 1. Pin", "note: ship it", "by manager", "Which <strong>patch</strong>?", "human", "agent"} {
+	for _, want := range []string{"chose 1. Pin", "note: ship it", "by bun-pins", "Which <strong>patch</strong>?", "human", "agent"} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("thread missing %q:\n%s", want, frag)
 		}
