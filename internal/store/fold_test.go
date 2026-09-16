@@ -546,40 +546,52 @@ func TestAmendAddsLabels(t *testing.T) {
 	}
 }
 
-// An answer is not checked against labels, so one written without seeing an
-// amend that only adds labels still counts. An earlier amend that changed the
-// question still has to have been seen.
+// An answer numbered at or below an amend was written without seeing it. It
+// still counts when that amend only added labels, which an answer is never
+// checked against and which do not change the question, but not when the
+// amend added anything else or replaced the body or context. An earlier amend
+// that changed the question still has to have been seen.
 func TestAnswerNeedNotSeeALabelAmend(t *testing.T) {
-	open, err := json.Marshal(openOf(KindDecision))
-	if err != nil {
-		t.Fatal(err)
+	const unseen = "the answer was written without seeing amend 0002"
+	accept := AnswerRecord{Signoff: SignoffAccept}
+	tests := []struct {
+		name    string
+		kind    Kind
+		amends  []step
+		answer  AnswerRecord
+		wantErr string
+	}{
+		{name: "labels", kind: KindDecision, amends: []step{agent(EventAmend, AmendRecord{Options: []string{"Vendor it"}}), agent(EventAmend, AmendRecord{Labels: []string{"round 3"}})}, answer: AnswerRecord{Choice: 3}},
+		{name: "labels and an option", kind: KindDecision, amends: []step{agent(EventAmend, AmendRecord{Labels: []string{"round 3"}, Options: []string{"Vendor it"}})}, answer: AnswerRecord{Choice: 1}, wantErr: unseen},
+		{name: "a row", kind: KindApproval, amends: []step{agent(EventAmend, AmendRecord{Rows: []Row{{ID: "c", Label: "Deploy", Script: "make deploy", Link: "https://example.com/c"}}})}, answer: answerOf(KindApproval), wantErr: unseen},
+		// A signoff answer is not checked against anything an amend adds, so
+		// only the question can refuse it.
+		{name: "a link", kind: KindSignoff, amends: []step{agent(EventAmend, AmendRecord{Links: []string{"https://example.com/pr/13"}})}, answer: accept, wantErr: unseen},
+		{name: "a body", kind: KindSignoff, amends: []step{agent(EventAmend, AmendRecord{Body: "Now with the log."})}, answer: accept, wantErr: unseen},
+		{name: "context", kind: KindSignoff, amends: []step{agent(EventAmend, AmendRecord{Context: "Release 1.4.1"})}, answer: accept, wantErr: unseen},
 	}
-	c := &Case{}
-	for _, ev := range []Event{
-		{Seq: 1, Author: AuthorAgent, Type: EventOpen, Data: open},
-		{Seq: 2, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"options":["Vendor it"]}`)},
-		{Seq: 3, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"labels":["round 3"]}`)},
-		{Seq: 3, Author: AuthorHuman, Type: EventAnswer, Data: []byte(`{"choice":3}`)},
-	} {
-		if err := c.apply(ev); err != nil {
-			t.Fatalf("%04d %s: %v", ev.Seq, ev.Type, err)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, err := fold(t, append([]step{agent(EventOpen, openOf(tt.kind))}, tt.amends...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(tt.answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// fold numbers events from 1, so the answer takes the last amend's
+			// number: it has seen the amends before that one, not that one.
+			err = c.apply(Event{Seq: len(c.Events), Author: AuthorHuman, Type: EventAnswer, Data: data})
+			checkErr(t, err, tt.wantErr)
+			if tt.wantErr == "" && c.State != StateAnswered {
+				t.Errorf("state = %s", c.State)
+			}
+			if tt.wantErr != "" && (c.State != StateOpen || c.Answer != nil) {
+				t.Errorf("refused answer changed the case: state %s, answer %+v", c.State, c.Answer)
+			}
+		})
 	}
-	if c.State != StateAnswered {
-		t.Errorf("state = %s", c.State)
-	}
-
-	c = &Case{}
-	for _, ev := range []Event{
-		{Seq: 1, Author: AuthorAgent, Type: EventOpen, Data: open},
-		{Seq: 2, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"labels":["round 3"],"options":["Vendor it"]}`)},
-	} {
-		if err := c.apply(ev); err != nil {
-			t.Fatalf("%04d %s: %v", ev.Seq, ev.Type, err)
-		}
-	}
-	err = c.apply(Event{Seq: 2, Author: AuthorHuman, Type: EventAnswer, Data: []byte(`{"choice":1}`)})
-	checkErr(t, err, "the answer was written without seeing amend 0002")
 }
 
 // The answer is checked against the case as amended, not as it was opened.
