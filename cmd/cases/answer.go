@@ -21,7 +21,8 @@ type AnswerCmd struct {
 	Drop    bool     `help:"stuck: drop the work." xor:"response"`
 	Ack     bool     `help:"fyi: acknowledge." xor:"response"`
 
-	Note string `help:"A note to the agent. Allowed with every response."`
+	Note     string `help:"A note to the agent. Allowed with every response."`
+	Revision *int   `help:"Refuse the answer if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *AnswerCmd) Run(d *Deps) error {
@@ -30,7 +31,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		return err
 	}
 	if c.Park {
-		cs, err := store.Park(dir, store.ParkRecord{Note: c.Note})
+		cs, err := store.Park(dir, store.ParkRecord{Note: c.Note}, atRevision(c.Revision)...)
 		if err != nil {
 			return err
 		}
@@ -58,11 +59,20 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		}
 		rec.Rows = append(rec.Rows, row)
 	}
-	cs, err := store.Answer(dir, rec)
+	cs, err := store.Answer(dir, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}
 	return d.done(cs)
+}
+
+// atRevision is the precondition for a --revision flag, or none when it was
+// not given.
+func atRevision(rev *int) []store.Precondition {
+	if rev == nil {
+		return nil
+	}
+	return []store.Precondition{store.AtRevision(*rev)}
 }
 
 // parseRowVerdict reads id=verdict or id=verdict:note.

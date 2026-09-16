@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,10 +30,17 @@ func (c *ShowCmd) Run(d *Deps) error {
 		enc := json.NewEncoder(d.Stdout)
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)
-		return enc.Encode(cs)
+		return enc.Encode(shownCase{cs, cs.Revision()})
 	}
 	printCase(d.Stdout, cs)
 	return nil
+}
+
+// shownCase is the case as show --json prints it: the case's own JSON with its
+// revision beside it, which answer and resume take as --revision.
+type shownCase struct {
+	*store.Case
+	Revision int `json:"revision"`
 }
 
 func printCase(w io.Writer, c *store.Case) {
@@ -47,6 +55,7 @@ func printCase(w io.Writer, c *store.Case) {
 	field("kind", string(c.Kind))
 	field("urgency", string(c.Urgency))
 	field("opened", stamp(c.OpenedAt))
+	field("revision", strconv.Itoa(c.Revision()))
 	field("labels", strings.Join(c.Labels, ", "))
 	field("worker", c.Worker)
 	field("brief", c.Brief)

@@ -103,7 +103,7 @@ cases wait [--since TIME] [--timeout DURATION] [--id ID]... \
   [--label TEXT]... [--worker NAME]...
 ```
 
-- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`.
+- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision`.
 - Run it in the background; it can take hours.
 - `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.
 - `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those labels, or from any of those workers. Given together, a case must match both, and with `--id` as well, all three. A filter that matches none of your cases waits until the timeout, as an `--id` that is never answered does, so check the label you pass is the one you opened with.
@@ -117,7 +117,7 @@ cases show ID [--json]
 cases list [--state STATE,...] [--label TEXT]... [--worker NAME]... [--json]
 ```
 
-- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, and `events`, which holds every event file as written. Read the answer from here, not from the plain-text output.
+- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, and `revision`, the number of event files including any that were skipped. Read the answer from here, not from the plain-text output.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated.
 - `list --label TEXT` and `list --worker NAME` (each repeatable) show cases with any of those labels, or from any of those workers. Given together, a case must match both.
 - A damaged event file is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not fix the file.

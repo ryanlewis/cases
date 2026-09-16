@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,7 +14,7 @@ func TestShow(t *testing.T) {
 	mustRun(t, "--store", root, "answer", id, "--option", "2", "--note", "watch the lockfile")
 
 	out := mustRun(t, "--store", root, "show", id)
-	for _, want := range []string{"Pin bun?", "state:    answered", "1. Pin to 1.2.3", "other. Other, see note", "0002 human answer", "chose 2. Float, with renovate", "note: watch the lockfile"} {
+	for _, want := range []string{"Pin bun?", "state:    answered", "1. Pin to 1.2.3", "other. Other, see note", "revision: 2", "0002 human answer", "chose 2. Float, with renovate", "note: watch the lockfile"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q:\n%s", want, out)
 		}
@@ -59,4 +61,34 @@ func TestShowRefusesPathsAndMissingCases(t *testing.T) {
 			t.Errorf("show %q succeeded", id)
 		}
 	}
+}
+
+func TestShowJSONRevisionCountsSkippedFiles(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	// A malformed file is skipped by the fold but still counts: the next
+	// write goes after it.
+	if err := os.WriteFile(filepath.Join(root, id, "0002-human-answer.json"), []byte(`{"choice": 2`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := runCases(t, "", "--store", root, "show", id, "--json")
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	var c struct {
+		Revision *int              `json:"revision"`
+		Events   []json.RawMessage `json:"events"`
+		Problems []string          `json:"problems"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Revision == nil || *c.Revision != 2 || len(c.Events) != 1 || len(c.Problems) != 1 {
+		t.Fatalf("revision %v, %d events, problems %q:\n%s", c.Revision, len(c.Events), c.Problems, r.stdout)
+	}
+	if n := len(eventFiles(t, root, id)); n != *c.Revision {
+		t.Errorf("revision %d, %d files", *c.Revision, n)
+	}
+	mustRun(t, "--store", root, "answer", id, "--option", "1", "--revision", "2")
 }
