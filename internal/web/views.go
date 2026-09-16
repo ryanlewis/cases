@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 
 	"github.com/ryanlewis/cases/internal/store"
 )
@@ -34,8 +35,9 @@ var staticFS, _ = fs.Sub(embedded, "static")
 const htmxSHA256 = "71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145c0de"
 
 // markdown renders bodies. The default renderer omits raw HTML and blanks
-// dangerous link targets, so a body cannot inject markup.
-var markdown = goldmark.New()
+// dangerous link targets, so a body cannot inject markup. The GFM table
+// extension is added so status/comparison tables in bodies render as tables.
+var markdown = goldmark.New(goldmark.WithExtensions(extension.Table))
 
 func renderMarkdown(src string) template.HTML {
 	var buf bytes.Buffer

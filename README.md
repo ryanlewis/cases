@@ -178,9 +178,10 @@ seconds. Stop it with Ctrl-C.
 
 - `/` is the inbox: open and parked cases, blocking first, then oldest first.
   The tab title shows how many open cases are blocking.
-- `/cases/ID` shows one case: the body rendered as markdown, its links, a
-  response form that fits the kind, and the thread. Sending the form writes one
-  answer (or, for a stuck case, a park). A parked case has a Resume button.
+- `/cases/ID` shows one case: the body rendered as markdown (GFM tables
+  included), its links, a response form that fits the kind, and the thread.
+  Sending the form writes one answer (or, for a stuck case, a park). A parked
+  case has a Resume button.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.
 
