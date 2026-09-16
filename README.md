@@ -113,7 +113,7 @@ written.
 | Kind | Open with | Answer with |
 | --- | --- | --- |
 | `decision` | one or more `options` | `choice` (1-based option number), or `other` with a note |
-| `approval` | `rows`, each with `id`, `label`, `script` (the text itself) and `link` | a verdict per row: `approve`, `hold` or `reject`, each with an optional note |
+| `approval` | `rows`, each with `id`, `label`, `script` (the text itself), `link` and an optional `note` shown under the label | a verdict per row: `approve`, `hold` or `reject`, each with an optional note |
 | `signoff` | | `accept`, or `changes` with a note |
 | `stuck` | | guidance `text`, or `drop`; parking is a separate `park` event |
 | `question` | | reply `text` |
@@ -213,6 +213,7 @@ new state.
 
 `--row` on `open` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
+Add `"note":"…"` to show a line under the row's label.
 
 `--worker`, `--brief` and `--context` on `open` set the fields described in
 [store format](#store-format). `--by` on `pickup` records who picked the case

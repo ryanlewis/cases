@@ -46,7 +46,7 @@ open --park--> parked --resume--> open     (stuck cases only)
 
 Any answer may carry a `note`. Read it: it often narrows or conditions the choice.
 
-An approval row is a JSON object with four non-empty fields. The `id` may use letters, digits, `.`, `-` and `_`, and must be unique in the case. `script` is the text itself, so it can be read on a phone, and `link` points at where it lives:
+An approval row is a JSON object with four non-empty fields. The `id` may use letters, digits, `.`, `-` and `_`, and must be unique in the case. `script` is the text itself, so it can be read on a phone, and `link` points at where it lives. An optional `note` is shown under the label; use it for what the human should know before approving, such as a side effect:
 
 ```sh
 --row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://github.com/o/r/blob/main/setup.sh"}'

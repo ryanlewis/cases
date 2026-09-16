@@ -14,7 +14,7 @@ type OpenCmd struct {
 	Title    string   `help:"One-line title; also names the case directory." required:""`
 	BodyFile string   `help:"Markdown body. - reads stdin." name:"body-file" placeholder:"FILE"`
 	Option   []string `help:"An option for a decision case. Repeat per option; \"Other, see note\" is always offered." sep:"none" placeholder:"TEXT"`
-	Row      []string `help:"A row for an approval case, as a JSON object with id, label, script and link, e.g. '{\"id\":\"deps\",\"label\":\"Install deps\",\"script\":\"npm ci\",\"link\":\"https://…\"}'. Repeat per row." sep:"none" placeholder:"JSON"`
+	Row      []string `help:"A row for an approval case, as a JSON object with id, label, script, link and an optional note, e.g. '{\"id\":\"deps\",\"label\":\"Install deps\",\"script\":\"npm ci\",\"link\":\"https://…\"}'. Repeat per row." sep:"none" placeholder:"JSON"`
 	Link     []string `help:"A link to show with the case. Repeatable." sep:"none" placeholder:"URL"`
 	Worker   string   `help:"The agent session waiting on this case."`
 	Brief    string   `help:"Path to the instructions that session started from, so the work can be restarted after parking."`
