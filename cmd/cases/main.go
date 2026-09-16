@@ -41,6 +41,7 @@ type CLI struct {
 	Withdraw WithdrawCmd `cmd:"" help:"Withdraw an open case that is no longer needed (agent)."`
 	Answer   AnswerCmd   `cmd:"" help:"Answer an open case (human)."`
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
+	Sweep    SweepCmd    `cmd:"" help:"Withdraw the open cases that match, to clear the inbox (human). Prints what it would do unless --yes."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 	Status   StatusCmd   `cmd:"" help:"Print where cases serve is running for the store; exits 1 when it is not."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`

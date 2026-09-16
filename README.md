@@ -216,6 +216,8 @@ cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
                 --accept | --changes | --text TEXT | --park | --drop | --ack
                 [--note TEXT] [--revision N]
 cases resume ID [--agent] [--revision N]
+cases sweep  [--reason TEXT] [--older-than DURATION] [--label TEXT]...
+             [--worker NAME]... [--yes]
 ```
 
 Both:
@@ -278,6 +280,21 @@ that matches no case, like an `--id` that is never answered, waits until the
 timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
+
+### Clearing the inbox
+
+`sweep` changes many cases at once, so it only prints what it would do unless
+given `--yes` (`-y`).
+
+`sweep` withdraws every open case that matches, with `--reason` recorded on
+each withdraw (default `swept`). `--label` and `--worker` filter as on `list`,
+and `--older-than DURATION` takes only cases opened longer ago than that.
+Withdraw is only allowed on an open case, so a matching case that is answered
+or parked is listed as left and not changed. Each withdraw is the same `agent`
+withdraw event `cases withdraw` writes, and goes through the same check. If one
+is refused, for example because the case changed state in the meantime, sweep
+carries on with the rest, then names the cases it could not withdraw and exits
+1.
 
 ## serve
 
