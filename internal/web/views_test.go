@@ -24,6 +24,7 @@ var (
 		store.KindApproval: {Kind: store.KindApproval, Urgency: store.UrgencyToday, Title: "Scripts", Rows: approvalRows},
 		store.KindSignoff:  {Kind: store.KindSignoff, Urgency: store.UrgencyToday, Title: "Handover"},
 		store.KindStuck:    {Kind: store.KindStuck, Urgency: store.UrgencyBlocking, Title: "Blocked"},
+		store.KindQuestion: {Kind: store.KindQuestion, Urgency: store.UrgencyToday, Title: "Which host?"},
 		store.KindFYI:      {Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Heads up"},
 	}
 )
@@ -153,6 +154,12 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 			kind:      store.KindStuck,
 			formParts: []string{`name="stuck" value="text"`, `name="text"`, `name="stuck" value="drop"`, `name="park" value="1" formnovalidate>park</button>`},
 			form:      url.Values{"stuck": {"text"}, "text": {"use the mirror"}},
+			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
+		},
+		{
+			kind:      store.KindQuestion,
+			formParts: []string{`<textarea name="text" rows="4" required>`, "reply"},
+			form:      url.Values{"text": {"the staging one"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
 		{
@@ -295,6 +302,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "verdict.mig": {"maybe"}}, "verdict &#34;maybe&#34;", ""},
 		{store.KindSignoff, url.Values{"signoff": {"changes"}}, "requesting changes needs a note", `value="changes" checked`},
 		{store.KindStuck, url.Values{"stuck": {"text"}}, "write the guidance", ""},
+		{store.KindQuestion, url.Values{"text": {"  "}, "note": {"hm"}}, "write the reply", "hm"},
 		{store.KindFYI, url.Values{}, "no fyi response", ""},
 	}
 	for _, tt := range tests {
@@ -653,7 +661,7 @@ func TestEmptyAnswersAreRefused(t *testing.T) {
 
 func TestChoicesAreRequiredInTheBrowser(t *testing.T) {
 	a := newApp(t)
-	for kind, radios := range map[store.Kind]int{store.KindDecision: 3, store.KindApproval: 6, store.KindSignoff: 2, store.KindStuck: 0, store.KindFYI: 0} {
+	for kind, radios := range map[store.Kind]int{store.KindDecision: 3, store.KindApproval: 6, store.KindSignoff: 2, store.KindStuck: 0, store.KindQuestion: 0, store.KindFYI: 0} {
 		c := a.open(t, openRecords[kind])
 		page := a.get(t, "/cases/"+c.ID)
 		// Stuck is left to the server: guidance typed without ticking its

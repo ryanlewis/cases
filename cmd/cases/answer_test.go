@@ -56,6 +56,19 @@ func TestAnswerByKind(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "question text", open: []string{"--kind", "question"}, answer: []string{"--text", "the staging one", "--note", "ask again if it moves"}, wantState: store.StateAnswered,
+			check: func(t *testing.T, c *store.Case) {
+				if c.Answer.Text != "the staging one" || c.Answer.Note != "ask again if it moves" {
+					t.Errorf("answer = %+v", c.Answer)
+				}
+			},
+		},
+		{name: "question blank text", open: []string{"--kind", "question"}, answer: []string{"--text", "  "}, wantErr: "reply text is empty"},
+		{name: "question no response", open: []string{"--kind", "question"}, answer: []string{"--note", "hm"}, wantErr: "no question response"},
+		{name: "question drop", open: []string{"--kind", "question"}, answer: []string{"--drop"}, wantErr: "question answers cannot set drop"},
+		{name: "question ack", open: []string{"--kind", "question"}, answer: []string{"--ack"}, wantErr: "question answers cannot set ack"},
+		{name: "park a question", open: []string{"--kind", "question"}, answer: []string{"--park"}, wantErr: "only stuck cases park"},
 		{name: "park a decision", open: []string{"--kind", "decision", "--option", "x"}, answer: []string{"--park"}, wantErr: "only stuck cases park"},
 		{name: "fyi ack", open: []string{"--kind", "fyi"}, answer: []string{"--ack", "--note", "thanks"}, wantState: store.StateAnswered},
 		{name: "fyi with signoff flag", open: []string{"--kind", "fyi"}, answer: []string{"--accept"}, wantErr: "fyi answers cannot set signoff"},

@@ -538,6 +538,10 @@ func answerFromForm(c *store.Case, f url.Values) (rec store.AnswerRecord, park b
 		default:
 			return rec, false, errors.New("choose guidance or drop, or park it")
 		}
+	case store.KindQuestion:
+		if rec.Text = strings.TrimSpace(f.Get("text")); rec.Text == "" {
+			return rec, false, errors.New("write the reply")
+		}
 	case store.KindFYI:
 		rec.Ack = f.Get("ack") != ""
 	}

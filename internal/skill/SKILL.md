@@ -1,6 +1,6 @@
 # cases — ask a human and act on the answer
 
-Use the `cases` CLI when you cannot go on without a person: a choice between options, approval to run scripts, sign-off on finished work, guidance when you are stuck, or something they should know. You open a case, wait for the answer in the background, pick it up, act on it, and close the case with what happened. The human answers from the terminal or from the web inbox (`cases serve`); you never answer.
+Use the `cases` CLI when you cannot go on without a person: a choice between options, approval to run scripts, sign-off on finished work, guidance when you are stuck, a reply to an open question, or something they should know. You open a case, wait for the answer in the background, pick it up, act on it, and close the case with what happened. The human answers from the terminal or from the web inbox (`cases serve`); you never answer.
 
 ## Safety
 
@@ -41,6 +41,7 @@ open --park--> parked --resume--> open     (stuck cases only)
 | `approval` | Running scripts or gated actions | `--row JSON`, one per row (at least one) | `rows`: one `{id, verdict, note}` per row. `verdict` is `approve`, `hold` or `reject`. |
 | `signoff` | Finished work that needs accepting | | `signoff`: `accept`, or `changes` with a `note` |
 | `stuck` | You are blocked and need guidance | | `text` (guidance) or `drop: true`. The human may park the case instead of answering. |
+| `question` | A question the human answers in their own words, not by picking an option | | `text` (the reply) |
 | `fyi` | Something the human should know; you are not blocked | | `ack: true` |
 
 Any answer may carry a `note`. Read it: it often narrows or conditions the choice.
@@ -157,6 +158,7 @@ When `wait` returns, read the case's `state` and act on it:
   - `approval`: run only the rows with `approve`. Do not run `hold` or `reject` rows. Say in the outcome which rows ran and what they did.
   - `signoff`: on `accept`, close. On `changes`, make the changes the note asks for, then `note` the case to ask for another look, and close once it is accepted.
   - `stuck`: follow the `text`, or on `drop` stop that work. Close with what you did.
+  - `question`: use the `text`. Close with what you did with it.
   - `fyi`: close with a short outcome, for example "Acknowledged".
 - `parked` — the human has set the work aside. Stop the work, do not pick up, and wait again with `--since` set to the case's `updated_at` from the line `wait` printed, not the old time: the park is later than the old time, so `wait` would return at once, again and again, and with no `--since` a resume that lands before `wait` starts is missed. The next event will be a `resume`.
 - `open` after a resume — re-read your instructions and the thread, then wait for the answer, again with `--since` set to the case's new `updated_at`. If you are no longer stuck, withdraw the case.

@@ -58,6 +58,8 @@ func answerOf(kind Kind) AnswerRecord {
 		return AnswerRecord{Signoff: SignoffAccept}
 	case KindStuck:
 		return AnswerRecord{Text: "Try the other mirror."}
+	case KindQuestion:
+		return AnswerRecord{Text: "The staging one."}
 	default:
 		return AnswerRecord{Ack: true}
 	}
@@ -195,6 +197,16 @@ func TestTransitions(t *testing.T) {
 			wantErr: "only stuck cases park",
 		},
 		{
+			name:  "question full lifecycle",
+			steps: []step{agent(EventOpen, openOf(KindQuestion)), human(EventAnswer, answerOf(KindQuestion)), pickupStep, closeStep},
+			want:  StateClosed,
+		},
+		{
+			name:    "park a question case",
+			steps:   []step{agent(EventOpen, openOf(KindQuestion)), parkStep},
+			wantErr: "cannot park a question case; only stuck cases park",
+		},
+		{
 			name:    "park an answered stuck case",
 			steps:   []step{agent(EventOpen, openOf(KindStuck)), human(EventAnswer, answerOf(KindStuck)), parkStep},
 			wantErr: "cannot park a case that is answered",
@@ -299,6 +311,7 @@ func TestOpenValidation(t *testing.T) {
 		{name: "valid approval", kind: KindApproval},
 		{name: "valid signoff", kind: KindSignoff},
 		{name: "valid stuck", kind: KindStuck},
+		{name: "valid question", kind: KindQuestion},
 		{name: "valid fyi", kind: KindFYI},
 		{name: "unknown kind", kind: KindFYI, mutate: func(r *OpenRecord) { r.Kind = "poll" }, wantErr: `unknown kind "poll"`},
 		{name: "unknown urgency", kind: KindFYI, mutate: func(r *OpenRecord) { r.Urgency = "asap" }, wantErr: `unknown urgency "asap"`},
@@ -306,6 +319,8 @@ func TestOpenValidation(t *testing.T) {
 		{name: "decision without options", kind: KindDecision, mutate: func(r *OpenRecord) { r.Options = nil }, wantErr: "at least one option"},
 		{name: "decision with empty option", kind: KindDecision, mutate: func(r *OpenRecord) { r.Options[1] = "" }, wantErr: "option 2 is empty"},
 		{name: "options on fyi", kind: KindFYI, mutate: func(r *OpenRecord) { r.Options = []string{"x"} }, wantErr: "options are for decision cases"},
+		{name: "options on question", kind: KindQuestion, mutate: func(r *OpenRecord) { r.Options = []string{"x"} }, wantErr: "options are for decision cases, not question"},
+		{name: "rows on question", kind: KindQuestion, mutate: func(r *OpenRecord) { r.Rows = openOf(KindApproval).Rows }, wantErr: "rows are for approval cases, not question"},
 		{name: "rows on decision", kind: KindDecision, mutate: func(r *OpenRecord) { r.Rows = openOf(KindApproval).Rows }, wantErr: "rows are for approval cases"},
 		{name: "approval without rows", kind: KindApproval, mutate: func(r *OpenRecord) { r.Rows = nil }, wantErr: "at least one row"},
 		{name: "row id with =", kind: KindApproval, mutate: func(r *OpenRecord) { r.Rows[0].ID = "a=b" }, wantErr: "must be letters"},
@@ -359,6 +374,18 @@ func TestAnswerValidation(t *testing.T) {
 		{name: "stuck drop", kind: KindStuck, answer: AnswerRecord{Drop: true}},
 		{name: "stuck blank text", kind: KindStuck, answer: AnswerRecord{Text: "  "}, wantErr: "guidance text is empty"},
 		{name: "stuck text and drop", kind: KindStuck, answer: AnswerRecord{Text: "x", Drop: true}, wantErr: "not both"},
+
+		{name: "question text", kind: KindQuestion, answer: AnswerRecord{Text: "the staging one"}},
+		{name: "question text with note", kind: KindQuestion, answer: AnswerRecord{Text: "the staging one", Note: "ask again if it moves"}},
+		{name: "question nothing", kind: KindQuestion, answer: AnswerRecord{Note: "hm"}, wantErr: "no question response"},
+		{name: "question blank text", kind: KindQuestion, answer: AnswerRecord{Text: " \n "}, wantErr: "reply text is empty"},
+		{name: "question with drop", kind: KindQuestion, answer: AnswerRecord{Drop: true}, wantErr: "question answers cannot set drop"},
+		{name: "question text and drop", kind: KindQuestion, answer: AnswerRecord{Text: "x", Drop: true}, wantErr: "question answers cannot set drop"},
+		{name: "question with choice", kind: KindQuestion, answer: AnswerRecord{Text: "x", Choice: 1}, wantErr: "question answers cannot set choice"},
+		{name: "question with other", kind: KindQuestion, answer: AnswerRecord{Text: "x", Other: true}, wantErr: "question answers cannot set other"},
+		{name: "question with rows", kind: KindQuestion, answer: AnswerRecord{Text: "x", Rows: answerOf(KindApproval).Rows}, wantErr: "question answers cannot set rows"},
+		{name: "question with signoff", kind: KindQuestion, answer: AnswerRecord{Text: "x", Signoff: SignoffAccept}, wantErr: "question answers cannot set signoff"},
+		{name: "question with ack", kind: KindQuestion, answer: AnswerRecord{Text: "x", Ack: true}, wantErr: "question answers cannot set ack"},
 
 		{name: "fyi ack", kind: KindFYI, answer: AnswerRecord{Ack: true, Note: "thanks"}},
 		{name: "fyi nothing", kind: KindFYI, answer: AnswerRecord{}, wantErr: "no fyi response"},

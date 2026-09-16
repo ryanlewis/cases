@@ -343,6 +343,7 @@ var answerFields = map[Kind][]string{
 	KindApproval: {"rows"},
 	KindSignoff:  {"signoff"},
 	KindStuck:    {"text", "drop"},
+	KindQuestion: {"text"},
 	KindFYI:      {"ack"},
 }
 
@@ -425,6 +426,10 @@ func (r *AnswerRecord) validate(open *OpenRecord) error {
 		}
 		if !r.Drop && strings.TrimSpace(r.Text) == "" {
 			return errors.New("guidance text is empty")
+		}
+	case KindQuestion:
+		if strings.TrimSpace(r.Text) == "" {
+			return errors.New("reply text is empty")
 		}
 	case KindFYI:
 		// Ack is the only field allowed and at least one field is set.

@@ -36,6 +36,22 @@ func TestShow(t *testing.T) {
 	}
 }
 
+func TestShowQuestionReply(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "question", "--urgency", "today", "--title", "Which host?"))
+	mustRun(t, "--store", root, "answer", id, "--text", "the staging one")
+
+	out := mustRun(t, "--store", root, "show", id)
+	for _, want := range []string{"kind:     question", "0002 human answer", "reply: the staging one"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "guidance:") {
+		t.Errorf("question reply described as guidance:\n%s", out)
+	}
+}
+
 func TestShowRefusesPathsAndMissingCases(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"../etc", "nope"} {

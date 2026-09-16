@@ -76,6 +76,8 @@ func TestOpenRefusals(t *testing.T) {
 		{"row with an unknown field", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k","cmd":"x"}`}, `unknown field "cmd"`},
 		{"two rows in one flag", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k"},{"id":"b","label":"l","script":"s","link":"k"}`}, "one --row per row"},
 		{"row without a link", []string{"--kind", "approval", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s"}`}, "link is empty"},
+		{"options on question", []string{"--kind", "question", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases, not question"},
+		{"rows on question", []string{"--kind", "question", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k"}`}, "rows are for approval cases, not question"},
 		{"options on fyi", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases"},
 	}
 	for _, tt := range tests {
