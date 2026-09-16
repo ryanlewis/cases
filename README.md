@@ -9,6 +9,14 @@ agent picks the answer up and closes the case with what happened. Each case is
 a directory of JSON files, one file per event, so the store can sit in a synced
 folder such as an Obsidian vault. No server is needed.
 
+**Working with agents.** The binary carries a skill that teaches Claude Code,
+Codex and Pi when to open a case, how to wait for the answer and how to act on
+it. Install it once per agent; see [skill](#skill).
+
+```sh
+cases skill install claude    # also: codex, pi
+```
+
 ## Store format
 
 The store is a directory. By default it is `$XDG_DATA_HOME/cases`, which is
@@ -144,6 +152,15 @@ cases show  ID [--json]
 cases serve [--listen 127.0.0.1:8765]
 ```
 
+Setup:
+
+```
+cases skill install   AGENT [--path DIR] [-y]
+cases skill uninstall AGENT [--path DIR] [-y]
+cases skill show      [AGENT]
+cases skill list
+```
+
 `open` prints the new case id. The other write commands print the id and the
 new state.
 
@@ -204,6 +221,31 @@ The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends
 `Content-Security-Policy: default-src 'self'`. Raw HTML in a markdown body is
 dropped. htmx is included in the binary; nothing is fetched from the network.
+
+## skill
+
+The agent skill is a `SKILL.md` embedded in the binary, so it always matches
+the commands the binary has. It is written for an agent: the lifecycle, the
+kinds and what each answer looks like, the agent-side commands, what not to do,
+and a recipe for open, wait, pickup and close.
+
+```sh
+cases skill install claude   # write SKILL.md into the agent's skills directory
+cases skill uninstall claude # remove it (and the directory, if empty)
+cases skill show             # print the skill
+cases skill list             # each agent, where the skill goes, and whether it is installed
+```
+
+| Agent | Directory | Relocated by |
+| --- | --- | --- |
+| `claude` | `~/.claude/skills/cases` | `$CLAUDE_CONFIG_DIR` |
+| `codex` | `~/.codex/skills/cases` | `$CODEX_HOME` |
+| `pi` | `~/.pi/agent/skills/cases` | `$PI_CODING_AGENT_DIR` (a leading `~` is expanded) |
+
+`--path DIR` installs to or uninstalls from another directory. `install`
+overwrites an installed skill only after asking, or with `-y`; `uninstall`
+lists the files and asks, or needs `-y`. When stdin is not a terminal
+neither command asks: without `-y` they refuse.
 
 ## Example
 

@@ -42,6 +42,7 @@ type CLI struct {
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
+	Skill    SkillCmd    `cmd:"" help:"Install, show and list the bundled agent skill."`
 }
 
 // AfterApply settles the store path: an empty value (CASES_STORE set but
