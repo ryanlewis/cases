@@ -214,8 +214,8 @@ Human side:
 ```
 cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
                 --accept | --changes | --text TEXT | --park | --drop | --ack
-                [--note TEXT]
-cases resume ID [--agent]
+                [--note TEXT] [--revision N]
+cases resume ID [--agent] [--revision N]
 ```
 
 Both:
@@ -238,6 +238,12 @@ cases skill list
 
 `open` prints the new case id. The other write commands print the id and the
 new state.
+
+`cases show` prints the case's revision, the number of event files it has, and
+`show --json` has it as `revision`. Pass it to `answer` or `resume` as
+`--revision N` and the write is refused, with nothing written, if an event has
+been added to the case since it was read. The error names the revision read and
+the current one, and the command exits non-zero.
 
 `--row` on `open` and `amend` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
@@ -371,7 +377,8 @@ refused and nothing is written. The case is shown again as it is now, so the
 thread can be read before sending again; if the case is still open, the form
 keeps what was typed. This stops a tab left open from answering a case that was
 answered somewhere else and then reopened by a note, or a case that has been
-amended since the page was loaded.
+amended since the page was loaded. `cases answer` and `cases resume` do the same when given
+`--revision N`.
 
 The tab title is the selected case's title, with the number of open blocking
 cases in front; the header shows the same count beside the `inbox` and `done`

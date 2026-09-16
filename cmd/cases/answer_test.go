@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -102,5 +106,68 @@ func TestAnswerByKind(t *testing.T) {
 				tt.check(t, c)
 			}
 		})
+	}
+}
+
+// eventFiles names the files in a case directory, so a test can tell that a
+// refused write left nothing behind.
+func eventFiles(t *testing.T, root, id string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// refusedAsStale runs a write that should be refused because the case has
+// moved on from revision read to revision now, and checks that it wrote
+// nothing.
+func refusedAsStale(t *testing.T, root, id string, read, now int, args ...string) {
+	t.Helper()
+	before := eventFiles(t, root, id)
+	r := runCases(t, "", append([]string{"--store", root}, args...)...)
+	if !errors.Is(r.err, store.ErrStale) {
+		t.Fatalf("err = %v, want ErrStale", r.err)
+	}
+	want := fmt.Sprintf("read at revision %d, now at %d", read, now)
+	if msg := r.err.Error(); !strings.Contains(msg, want) || strings.Contains(msg, "\n") {
+		t.Errorf("err = %q, want one line containing %q", msg, want)
+	}
+	if after := eventFiles(t, root, id); len(after) != len(before) {
+		t.Errorf("refused write changed the files: %v, then %v", before, after)
+	}
+}
+
+func TestAnswerAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "amend", id, "--option", "Vendor it")
+
+	refusedAsStale(t, root, id, 1, 2, "answer", id, "--option", "3", "--revision", "1")
+	refusedAsStale(t, root, id, 0, 2, "answer", id, "--option", "3", "--revision", "0")
+	if out := mustRun(t, "--store", root, "answer", id, "--option", "3", "--revision", "2"); out != id+" answered\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if c := loadCase(t, root, id); c.Answer == nil || c.Answer.Choice != 3 || c.Revision() != 3 {
+		t.Errorf("answer = %+v, revision %d", c.Answer, c.Revision())
+	}
+}
+
+func TestAnswerParkAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
+	mustRun(t, "--store", root, "amend", id, "--context", "CI is red")
+
+	refusedAsStale(t, root, id, 1, 2, "answer", id, "--park", "--revision", "1")
+	if out := mustRun(t, "--store", root, "answer", id, "--park", "--note", "after release", "--revision", "2"); out != id+" parked\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if c := loadCase(t, root, id); c.State != store.StateParked || c.Revision() != 3 {
+		t.Errorf("state %s, revision %d", c.State, c.Revision())
 	}
 }

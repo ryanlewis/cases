@@ -27,3 +27,21 @@ func TestResume(t *testing.T) {
 		t.Errorf("state %s, last event %+v", c.State, last)
 	}
 }
+
+func TestResumeAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
+	mustRun(t, "--store", root, "answer", id, "--park")
+	// A resume and a second park elsewhere leave the case parked, as it was
+	// read, but at a later revision.
+	mustRun(t, "--store", root, "resume", id, "--agent")
+	mustRun(t, "--store", root, "answer", id, "--park")
+
+	refusedAsStale(t, root, id, 2, 4, "resume", id, "--revision", "2")
+	if out := mustRun(t, "--store", root, "resume", id, "--revision", "4"); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if c := loadCase(t, root, id); c.State != store.StateOpen || c.Revision() != 5 {
+		t.Errorf("state %s, revision %d", c.State, c.Revision())
+	}
+}
