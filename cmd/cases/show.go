@@ -64,7 +64,11 @@ func printCase(w io.Writer, c *store.Case) {
 	if len(c.Rows) > 0 {
 		fmt.Fprintln(w, "\nRows:")
 		for _, r := range c.Rows {
-			fmt.Fprintf(w, "  [%s] %s\n      %s\n", r.ID, r.Label, r.Link)
+			fmt.Fprintf(w, "  [%s] %s\n", r.ID, r.Label)
+			if r.Note != "" {
+				fmt.Fprintf(w, "      note: %s\n", r.Note)
+			}
+			fmt.Fprintf(w, "      %s\n", r.Link)
 			for line := range strings.SplitSeq(strings.TrimRight(r.Script, "\n"), "\n") {
 				fmt.Fprintf(w, "      | %s\n", line)
 			}

@@ -45,6 +45,7 @@
   {{range $c.Rows}}{{$verdict := print "verdict." .ID}}{{$note := print "note." .ID}}
   <fieldset class="row">
     <legend>{{.Label}}</legend>
+    {{with .Note}}<p class="context">{{.}}</p>{{end}}
     <p><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a></p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">

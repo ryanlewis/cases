@@ -103,10 +103,12 @@ var rowIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Row is one line of an approval case: a script or gated action. The script
 // text is carried inline so it can be read on a phone, and the link points at
-// where it lives.
+// where it lives. Note is optional context for the human, shown under the
+// label.
 type Row struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
+	Note   string `json:"note,omitempty"`
 	Script string `json:"script"`
 	Link   string `json:"link"`
 }

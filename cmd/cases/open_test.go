@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,10 +58,29 @@ func TestOpenApprovalRows(t *testing.T) {
 	root := t.TempDir()
 	out := mustRun(t, "--store", root, "open", "--kind", "approval", "--urgency", "blocking", "--title", "Scripts",
 		"--row", `{"id":"deps","label":"Install deps","script":"npm ci --ignore-scripts\nnpm test","link":"https://example.com/deps"}`,
-		"--row", `{"id":"mig","label":"Migrate","script":"make migrate","link":"https://example.com/mig"}`)
-	c := loadCase(t, root, strings.TrimSpace(out))
+		"--row", `{"id":"mig","label":"Migrate","note":"takes the site down for a minute","script":"make migrate","link":"https://example.com/mig"}`)
+	id := strings.TrimSpace(out)
+	c := loadCase(t, root, id)
 	if len(c.Rows) != 2 || c.Rows[0].Script != "npm ci --ignore-scripts\nnpm test" || c.Rows[1].ID != "mig" {
 		t.Errorf("rows = %+v", c.Rows)
+	}
+
+	var shown struct {
+		Rows []struct {
+			ID   string  `json:"id"`
+			Note *string `json:"note"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &shown); err != nil {
+		t.Fatal(err)
+	}
+	// A row without a note is written as before, with no note key.
+	if len(shown.Rows) != 2 || shown.Rows[0].Note != nil || shown.Rows[1].Note == nil || *shown.Rows[1].Note != "takes the site down for a minute" {
+		t.Errorf("show --json rows = %+v", shown.Rows)
+	}
+	if text := mustRun(t, "--store", root, "show", id); !strings.Contains(text, "  [mig] Migrate\n      note: takes the site down for a minute\n      https://example.com/mig\n") ||
+		strings.Count(text, "note:") != 1 {
+		t.Errorf("show output:\n%s", text)
 	}
 }
 

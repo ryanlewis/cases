@@ -580,6 +580,21 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	}
 }
 
+func TestApprovalRowNote(t *testing.T) {
+	a := newApp(t)
+	rows := slices.Clone(approvalRows)
+	rows[1].Note = "takes the site down <briefly>"
+	c := a.open(t, store.OpenRecord{Kind: store.KindApproval, Urgency: store.UrgencyToday, Title: "Scripts", Rows: rows})
+	page := a.get(t, "/cases/"+c.ID)
+	if want := `<legend>Migrate</legend>
+    <p class="context">takes the site down &lt;briefly&gt;</p>`; !strings.Contains(page, want) {
+		t.Errorf("page missing %s:\n%s", want, page)
+	}
+	if got := strings.Count(page, `<p class="context">`); got != 1 {
+		t.Errorf("%d notes, want 1", got)
+	}
+}
+
 func TestExternalLinksOpenInANewTab(t *testing.T) {
 	a := newApp(t)
 	const newTab = `target="_blank" rel="noopener noreferrer"`
