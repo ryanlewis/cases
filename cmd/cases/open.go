@@ -62,7 +62,9 @@ func parseRows(values []string) ([]store.Row, error) {
 		if err := dec.Decode(&row); err != nil {
 			return nil, fmt.Errorf("--row %d: %w", i+1, err)
 		}
-		if dec.More() {
+		// Decoder.More misses a stray ] or } after the object, so check that
+		// only space is left.
+		if strings.TrimSpace(raw[dec.InputOffset():]) != "" {
 			return nil, fmt.Errorf("--row %d: unexpected data after the row object; pass one --row per row", i+1)
 		}
 		rows = append(rows, row)

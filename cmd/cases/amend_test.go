@@ -111,6 +111,7 @@ func TestAmendRefusals(t *testing.T) {
 		{"options on approval", "", []string{"--option", "Skip it"}, "options are for decision cases"},
 		{"row that is not JSON", "", []string{"--row", "mig=make migrate"}, "--row 1"},
 		{"row id already on the case", "", []string{"--row", `{"id":"deps","label":"Again","script":"npm ci","link":"https://example.com/deps"}`}, `id "deps" is already on the case`},
+		{"row with a stray bracket", "", []string{"--row", `{"id":"mig","label":"Migrate","script":"make migrate","link":"https://example.com/mig"}] {"id":"x"}`}, "pass one --row per row"},
 		// The store would take an empty context as no change and add the link.
 		{"empty context with a link", "", []string{"--context", "", "--link", "https://example.com/log"}, "amend context is empty"},
 		{"blank link", "", []string{"--link", " "}, "link 1 is empty"},
