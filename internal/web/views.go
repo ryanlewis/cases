@@ -16,7 +16,11 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 
 	"github.com/ryanlewis/cases/internal/store"
 )
@@ -37,7 +41,57 @@ const htmxSHA256 = "71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145
 // markdown renders bodies. The default renderer omits raw HTML and blanks
 // dangerous link targets, so a body cannot inject markup. The GFM table
 // extension is added so status/comparison tables in bodies render as tables.
-var markdown = goldmark.New(goldmark.WithExtensions(extension.Table))
+var markdown = goldmark.New(
+	goldmark.WithExtensions(extension.Table),
+	goldmark.WithParserOptions(parser.WithASTTransformers(util.Prioritized(newTab{}, 100))),
+)
+
+// newTab makes links that leave the inbox open in a new tab. The attributes
+// are set on the parsed tree here, never taken from the body: goldmark's
+// attribute syntax is not enabled.
+type newTab struct{}
+
+func (newTab) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var dest []byte
+		switch l := n.(type) {
+		case *ast.Link:
+			dest = l.Destination
+		case *ast.AutoLink:
+			dest = l.URL(reader.Source())
+		default:
+			return ast.WalkContinue, nil
+		}
+		if leavesInbox(string(dest)) {
+			n.SetAttributeString("target", "_blank")
+			n.SetAttributeString("rel", "noopener noreferrer")
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+// leavesInbox reports whether a link destination points off the inbox: it has
+// a scheme or is protocol-relative. It does not use url.Parse, which rejects
+// destinations such as "https://example.com/100%" that browsers still follow.
+func leavesInbox(dest string) bool {
+	if strings.HasPrefix(dest, "//") {
+		return true
+	}
+	for i, r := range dest {
+		switch {
+		case r == ':':
+			return i > 0
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z':
+		case i > 0 && ('0' <= r && r <= '9' || r == '+' || r == '-' || r == '.'):
+		default:
+			return false
+		}
+	}
+	return false
+}
 
 func renderMarkdown(src string) template.HTML {
 	var buf bytes.Buffer

@@ -23,7 +23,7 @@
   {{with $c.Context}}<p class="context">{{.}}</p>{{end}}
   <div class="body">{{markdown $c.Body}}</div>
   {{if $c.Links}}
-  <ul class="links">{{range $c.Links}}<li><a href="{{.}}" rel="noreferrer">{{.}}</a></li>{{end}}</ul>
+  <ul class="links">{{range $c.Links}}<li><a href="{{.}}" target="_blank" rel="noopener noreferrer">{{.}}</a></li>{{end}}</ul>
   {{end}}
 </article>
 
@@ -44,7 +44,7 @@
   {{range $c.Rows}}{{$verdict := print "verdict." .ID}}{{$note := print "note." .ID}}
   <fieldset class="row">
     <legend>{{.Label}}</legend>
-    <p><a href="{{.Link}}" rel="noreferrer">{{.Link}}</a></p>
+    <p><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a></p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">
       <label class="choice"><input type="radio" name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve</label>

@@ -430,3 +430,57 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 		t.Errorf("plain fragment: %d", w.Code)
 	}
 }
+
+func TestExternalLinksOpenInANewTab(t *testing.T) {
+	a := newApp(t)
+	const newTab = `target="_blank" rel="noopener noreferrer"`
+	c := a.open(t, store.OpenRecord{
+		Kind: store.KindApproval, Urgency: store.UrgencyToday, Title: "Links", Rows: approvalRows,
+		Body:  "[ext](https://example.com/body) <https://example.com/auto> [inbox](/done) [top](#top) [pct](https://example.com/100%) [rel](//example.com/rel)\n\n[forged](https://example.com/forged){target=_self}",
+		Links: []string{"https://example.com/listed"},
+	})
+	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "see [the note link](https://example.com/note)"}); err != nil {
+		t.Fatal(err)
+	}
+	page := a.get(t, "/cases/"+c.ID)
+	for _, want := range []string{
+		`<a href="https://example.com/body" ` + newTab + `>ext</a>`,
+		`<a href="https://example.com/auto" ` + newTab + `>https://example.com/auto</a>`,
+		// The body cannot set its own attributes: that syntax stays text.
+		`<a href="https://example.com/forged" ` + newTab + `>forged</a>{target=_self}`,
+		`<a href="https://example.com/note" ` + newTab + `>the note link</a>`,
+		`<a href="https://example.com/listed" ` + newTab + `>`,
+		`<a href="https://example.com/deps" ` + newTab + `>`,
+		`<a href="/done">inbox</a>`,
+		`<a href="#top">top</a>`,
+		`<a href="https://example.com/100%25" ` + newTab + `>pct</a>`,
+		`<a href="//example.com/rel" ` + newTab + `>rel</a>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page missing %s", want)
+		}
+	}
+	// Only the external links, both approval rows included: nothing internal
+	// opens a new tab.
+	if got := strings.Count(page, `target="_blank"`); got != 9 {
+		t.Errorf("%d links with a target, want 9:\n%s", got, page)
+	}
+
+	closed := a.open(t, openRecords[store.KindFYI])
+	for _, step := range []func() error{
+		func() error { _, err := store.Answer(closed.Dir, store.AnswerRecord{Ack: true}); return err },
+		func() error { _, err := store.Pickup(closed.Dir, store.PickupRecord{}); return err },
+		func() error {
+			_, err := store.Close(closed.Dir, store.CloseRecord{Outcome: "Shipped in [#12](https://example.com/pr/12)."})
+			return err
+		},
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := a.get(t, "/done")
+	if !strings.Contains(done, `<a href="https://example.com/pr/12" `+newTab+`>#12</a>`) || strings.Count(done, `target="_blank"`) != 1 {
+		t.Errorf("done page links:\n%s", done)
+	}
+}
