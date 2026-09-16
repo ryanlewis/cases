@@ -133,3 +133,36 @@ func TestTemplateLoads(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadNamesWrongTypes gives every key a value of each TOML type that is
+// not a string, and checks the error names the type as TOML spells it, or
+// as the decoder's Go type for the date and time forms.
+func TestLoadNamesWrongTypes(t *testing.T) {
+	values := []struct{ toml, want string }{
+		{"true", "boolean"},
+		{"42", "number"},
+		{"1.5", "number"},
+		{"inf", "number"},
+		{"{ a = \"b\" }", "table"},
+		{"[\"a\", \"b\"]", "array"},
+		{"1979-05-27T07:32:00Z", "time.Time"},
+		{"1979-05-27T07:32:00", "toml.LocalDateTime"},
+		{"1979-05-27", "toml.LocalDate"},
+		{"07:32:00", "toml.LocalTime"},
+	}
+	for _, k := range Keys {
+		for _, v := range values {
+			t.Run(k.Name+"="+v.toml, func(t *testing.T) {
+				_, err := Load(write(t, k.Name+" = "+v.toml+"\n"))
+				want := `key "` + k.Name + `" must be a string, got ` + v.want
+				if err == nil || !strings.HasSuffix(err.Error(), want) {
+					t.Errorf("err = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+	// A table header decodes to the same map as an inline table.
+	if _, err := Load(write(t, "[store]\npath = \"x\"\n")); err == nil || !strings.HasSuffix(err.Error(), "got table") {
+		t.Errorf("[store] table: err = %v", err)
+	}
+}
