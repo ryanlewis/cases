@@ -102,7 +102,9 @@ The `open` file stays as it was written. The case shows the amended fields,
 and the answer is checked against them: an approval answer needs a verdict on
 the added rows too. An answer with the same sequence number as an amend was
 written without seeing it, for example on a machine the amend had not synced
-to yet, so it is refused and the case stays open for another answer.
+to yet. Unless the amend only added labels, the answer is refused and the case
+stays open for another answer. An amend that sets a body or context counts
+even when it is the one the case already has.
 
 A `cases` from before `amend` skips amend files as unknown events: it shows an
 amended case as it was opened and checks answers against that. A `cases` from

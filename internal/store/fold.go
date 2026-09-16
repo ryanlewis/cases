@@ -48,7 +48,15 @@ type Case struct {
 
 	lastSeq int
 	files   int
-	// amendSeq is the sequence number of the last amend folded in.
+	// amendSeq is the sequence number of the last amend a later answer must
+	// have seen. Every amend counts except one that only adds labels: an
+	// answer is never checked against labels, and they do not change the
+	// question. Options and rows are what an answer is checked against. A
+	// body, context or link can change the question, such as the PR a signoff
+	// accepts, and every build with amend has counted links, so exempting
+	// them would change how existing stores fold. A body or context counts
+	// whenever it is set, even to the text the case already has. (An answer
+	// written with AtRevision is still refused, as for any new event.)
 	amendSeq int
 }
 
@@ -230,10 +238,7 @@ func (c *Case) apply(ev Event) error {
 			return err
 		}
 		// The open event keeps what it said; the case shows the amended
-		// fields, and answers are checked against them. An answer is never
-		// checked against labels, so an answer written without seeing an
-		// amend that only adds labels still folds. (A web form sent with
-		// AtRevision is still refused, as for any new event.)
+		// fields, and answers are checked against them.
 		if r.Body != "" || len(r.Options) > 0 || len(r.Rows) > 0 || len(r.Links) > 0 || r.Context != "" {
 			c.amendSeq = ev.Seq
 		}
@@ -253,8 +258,8 @@ func (c *Case) apply(ev Event) error {
 			return refuse
 		}
 		// Every writer numbers its event after the latest one it has read, so
-		// an answer numbered at or below the last amend was written without
-		// it, such as on a machine the amend had not synced to yet.
+		// an answer numbered at or below amendSeq was written without that
+		// amend, such as on a machine the amend had not synced to yet.
 		if c.amendSeq > 0 && ev.Seq <= c.amendSeq {
 			return fmt.Errorf("the answer was written without seeing amend %04d", c.amendSeq)
 		}
