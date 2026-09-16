@@ -347,6 +347,9 @@ func TestOpenValidation(t *testing.T) {
 		{name: "row without script", kind: KindApproval, mutate: func(r *OpenRecord) { r.Rows[0].Script = "" }, wantErr: "script is empty"},
 		{name: "row without link", kind: KindApproval, mutate: func(r *OpenRecord) { r.Rows[0].Link = "" }, wantErr: "link is empty"},
 		{name: "row without label", kind: KindApproval, mutate: func(r *OpenRecord) { r.Rows[0].Label = "" }, wantErr: "label is empty"},
+		{name: "labels", kind: KindApproval, mutate: func(r *OpenRecord) { r.Labels = []string{"feat-labels", "round 3"} }},
+		{name: "blank label", kind: KindFYI, mutate: func(r *OpenRecord) { r.Labels = []string{"feat-labels", " "} }, wantErr: "label 2 is empty"},
+		{name: "label twice", kind: KindDecision, mutate: func(r *OpenRecord) { r.Labels = []string{"feat-labels", "feat-labels"} }, wantErr: `label "feat-labels" is used twice`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -433,8 +436,12 @@ func TestAmendValidation(t *testing.T) {
 		{name: "links on fyi", kind: KindFYI, amend: AmendRecord{Links: []string{"https://example.com/log"}}},
 		{name: "options on decision", kind: KindDecision, amend: AmendRecord{Options: []string{"Vendor it"}}},
 		{name: "rows on approval", kind: KindApproval, amend: AmendRecord{Rows: []Row{row("c"), row("d")}}},
+		{name: "labels on question", kind: KindQuestion, amend: AmendRecord{Labels: []string{"round 3"}}},
 
-		{name: "nothing", kind: KindFYI, amend: AmendRecord{}, wantErr: "the amend has no body, options, rows, links or context"},
+		{name: "nothing", kind: KindFYI, amend: AmendRecord{}, wantErr: "the amend has no body, options, rows, links, labels or context"},
+		{name: "blank label", kind: KindFYI, amend: AmendRecord{Labels: []string{"round 3", ""}}, wantErr: "label 2 is empty"},
+		{name: "label already on the case", kind: KindFYI, amend: AmendRecord{Labels: []string{"round 3", "feat-labels"}}, wantErr: `label "feat-labels" is already on the case`},
+		{name: "label twice in the amend", kind: KindFYI, amend: AmendRecord{Labels: []string{"round 3", "round 3"}}, wantErr: `label "round 3" is used twice`},
 		{name: "blank body", kind: KindFYI, amend: AmendRecord{Body: " \n", Links: []string{"https://example.com/log"}}, wantErr: "amend body is empty"},
 		{name: "blank context", kind: KindFYI, amend: AmendRecord{Context: "  "}, wantErr: "amend context is empty"},
 		{name: "options on approval", kind: KindApproval, amend: AmendRecord{Options: []string{"x"}}, wantErr: "options are for decision cases, not approval"},
@@ -462,6 +469,7 @@ func TestAmendValidation(t *testing.T) {
 			open := openOf(tt.kind)
 			open.Links = []string{"https://example.com/pr"}
 			open.Context = "Release 1.4"
+			open.Labels = []string{"feat-labels"}
 			checkErr(t, tt.amend.validate(&open), tt.wantErr)
 		})
 	}
@@ -513,6 +521,65 @@ func TestAmendChangesTheCase(t *testing.T) {
 	if c.Body != before.Body || len(c.Rows) != 3 || len(c.Links) != 3 || len(c.Events) != 3 {
 		t.Errorf("refused amend changed the case: %+v", c.OpenRecord)
 	}
+}
+
+func TestAmendAddsLabels(t *testing.T) {
+	open := openOf(KindFYI)
+	open.Labels = []string{"feat-labels"}
+	c, _, err := fold(t,
+		agent(EventOpen, open),
+		agent(EventAmend, AmendRecord{Labels: []string{"round 3", "review"}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Labels, []string{"feat-labels", "round 3", "review"}) {
+		t.Errorf("labels = %q", c.Labels)
+	}
+	// The same amend sent again is refused and adds nothing.
+	err = c.apply(Event{Seq: 3, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"labels":["round 3"]}`)})
+	if err == nil || !strings.Contains(err.Error(), `label "round 3" is already on the case`) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(c.Labels) != 3 || len(c.Events) != 2 {
+		t.Errorf("refused amend changed the case: labels %q, %d events", c.Labels, len(c.Events))
+	}
+}
+
+// An answer is not checked against labels, so one written without seeing an
+// amend that only adds labels still counts. An earlier amend that changed the
+// question still has to have been seen.
+func TestAnswerNeedNotSeeALabelAmend(t *testing.T) {
+	open, err := json.Marshal(openOf(KindDecision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Case{}
+	for _, ev := range []Event{
+		{Seq: 1, Author: AuthorAgent, Type: EventOpen, Data: open},
+		{Seq: 2, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"options":["Vendor it"]}`)},
+		{Seq: 3, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"labels":["round 3"]}`)},
+		{Seq: 3, Author: AuthorHuman, Type: EventAnswer, Data: []byte(`{"choice":3}`)},
+	} {
+		if err := c.apply(ev); err != nil {
+			t.Fatalf("%04d %s: %v", ev.Seq, ev.Type, err)
+		}
+	}
+	if c.State != StateAnswered {
+		t.Errorf("state = %s", c.State)
+	}
+
+	c = &Case{}
+	for _, ev := range []Event{
+		{Seq: 1, Author: AuthorAgent, Type: EventOpen, Data: open},
+		{Seq: 2, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"labels":["round 3"],"options":["Vendor it"]}`)},
+	} {
+		if err := c.apply(ev); err != nil {
+			t.Fatalf("%04d %s: %v", ev.Seq, ev.Type, err)
+		}
+	}
+	err = c.apply(Event{Seq: 2, Author: AuthorHuman, Type: EventAnswer, Data: []byte(`{"choice":1}`)})
+	checkErr(t, err, "the answer was written without seeing amend 0002")
 }
 
 // The answer is checked against the case as amended, not as it was opened.

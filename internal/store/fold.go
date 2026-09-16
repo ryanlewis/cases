@@ -230,11 +230,17 @@ func (c *Case) apply(ev Event) error {
 			return err
 		}
 		// The open event keeps what it said; the case shows the amended
-		// fields, and answers are checked against them.
-		c.amendSeq = ev.Seq
+		// fields, and answers are checked against them. An answer is never
+		// checked against labels, so an answer written without seeing an
+		// amend that only adds labels still folds. (A web form sent with
+		// AtRevision is still refused, as for any new event.)
+		if r.Body != "" || len(r.Options) > 0 || len(r.Rows) > 0 || len(r.Links) > 0 || r.Context != "" {
+			c.amendSeq = ev.Seq
+		}
 		c.Options = append(c.Options, r.Options...)
 		c.Rows = append(c.Rows, r.Rows...)
 		c.Links = append(c.Links, r.Links...)
+		c.Labels = append(c.Labels, r.Labels...)
 		if r.Body != "" {
 			c.Body = r.Body
 		}
@@ -336,21 +342,25 @@ func (r *OpenRecord) validate() error {
 		if len(r.Options) == 0 {
 			return errors.New("a decision case needs at least one option")
 		}
-		return checkOptions(r.Options)
+		if err := checkOptions(r.Options); err != nil {
+			return err
+		}
 	case KindApproval:
 		if len(r.Rows) == 0 {
 			return errors.New("an approval case needs at least one row")
 		}
-		return checkRows(r.Rows, nil)
+		if err := checkRows(r.Rows, nil); err != nil {
+			return err
+		}
 	}
-	return nil
+	return checkLabels(r.Labels, nil)
 }
 
 // validate checks the amend against cur, the case as it stands: the open
 // event and any earlier amends.
 func (r *AmendRecord) validate(cur *OpenRecord) error {
-	if r.Body == "" && len(r.Options) == 0 && len(r.Rows) == 0 && len(r.Links) == 0 && r.Context == "" {
-		return errors.New("the amend has no body, options, rows, links or context")
+	if r.Body == "" && len(r.Options) == 0 && len(r.Rows) == 0 && len(r.Links) == 0 && len(r.Labels) == 0 && r.Context == "" {
+		return errors.New("the amend has no body, options, rows, links, labels or context")
 	}
 	if err := checkKindFields(cur.Kind, r.Options, r.Rows); err != nil {
 		return err
@@ -382,7 +392,10 @@ func (r *AmendRecord) validate(cur *OpenRecord) error {
 	if err := checkNew("link", r.Links, cur.Links); err != nil {
 		return err
 	}
-	if len(r.Options) == 0 && len(r.Rows) == 0 && len(r.Links) == 0 &&
+	if err := checkLabels(r.Labels, cur.Labels); err != nil {
+		return err
+	}
+	if len(r.Options) == 0 && len(r.Rows) == 0 && len(r.Links) == 0 && len(r.Labels) == 0 &&
 		(r.Body == "" || r.Body == cur.Body) && (r.Context == "" || r.Context == cur.Context) {
 		return errors.New("the amend changes nothing")
 	}
@@ -413,6 +426,17 @@ func checkNew(what string, added, have []string) error {
 		}
 	}
 	return nil
+}
+
+// checkLabels checks labels added to a case that already has the labels in
+// have: none is blank, on the case already, or added twice.
+func checkLabels(added, have []string) error {
+	for i, l := range added {
+		if strings.TrimSpace(l) == "" {
+			return fmt.Errorf("label %d is empty", i+1)
+		}
+	}
+	return checkNew("label", added, have)
 }
 
 // checkOptions checks that no option is blank.

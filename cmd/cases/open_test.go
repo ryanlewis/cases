@@ -84,6 +84,25 @@ func TestOpenApprovalRows(t *testing.T) {
 	}
 }
 
+func TestOpenLabels(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "whenever", "--title", "Labelled",
+		"--label", "feat-labels", "--label", "round 3, part 2", "--worker", "w1", "--brief", "Resume from LEDGER.md"))
+	var shown struct {
+		Labels []string `json:"labels"`
+		Brief  string   `json:"brief"`
+	}
+	if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &shown); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"feat-labels", "round 3, part 2"}; !slices.Equal(shown.Labels, want) || shown.Brief != "Resume from LEDGER.md" {
+		t.Errorf("show --json = %+v, want labels %q", shown, want)
+	}
+	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "labels:   feat-labels, round 3, part 2\n") {
+		t.Errorf("show:\n%s", out)
+	}
+}
+
 func TestOpenRefusals(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -100,6 +119,8 @@ func TestOpenRefusals(t *testing.T) {
 		{"options on question", []string{"--kind", "question", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases, not question"},
 		{"rows on question", []string{"--kind", "question", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k"}`}, "rows are for approval cases, not question"},
 		{"options on fyi", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases"},
+		{"blank label", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--label", "a", "--label", " "}, "label 2 is empty"},
+		{"the same label twice", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--label", "a", "--label", "a"}, `label "a" is used twice`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

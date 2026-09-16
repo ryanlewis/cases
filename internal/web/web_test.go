@@ -257,6 +257,27 @@ func TestMarkdownCannotInjectMarkup(t *testing.T) {
 	}
 }
 
+func TestLabelsAreShownAsText(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{
+		Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Labelled",
+		Labels: []string{"feat-labels", `<i>round</i> "3"`},
+	})
+	want := []string{`<span class="tag">feat-labels</span>`, `<span class="tag">&lt;i&gt;round&lt;/i&gt; &#34;3&#34;</span>`}
+	for _, page := range []string{"/", "/fragments/inbox", "/cases/" + c.ID} {
+		body := a.get(t, page)
+		if strings.Contains(body, "<i>round</i>") {
+			t.Errorf("%s has the label unescaped", page)
+		}
+		for _, w := range want {
+			// The case page also lists the case in the inbox beside it.
+			if n := strings.Count(body, w); n == 0 || page == "/cases/"+c.ID && n != 2 {
+				t.Errorf("%s has %q %d times", page, w, n)
+			}
+		}
+	}
+}
+
 func TestRequestsAreLogged(t *testing.T) {
 	a := newApp(t)
 	a.get(t, "/done")

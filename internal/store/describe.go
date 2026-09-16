@@ -31,6 +31,9 @@ func (c *Case) Describe(ev Event) []string {
 		for _, l := range a.Links {
 			add("added link: %s", l)
 		}
+		for _, l := range a.Labels {
+			add("added label: %s", l)
+		}
 		if a.Context != "" {
 			add("replaced the context: %s", a.Context)
 		}

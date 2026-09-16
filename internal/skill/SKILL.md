@@ -68,25 +68,27 @@ An approval row is a JSON object with four non-empty fields. The `id` may use le
 ```sh
 cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
   [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
-  [--link URL]... [--worker NAME] [--brief PATH] [--context TEXT]
+  [--link URL]... [--label TEXT]... [--worker NAME] [--brief TEXT] \
+  [--context TEXT]
 ```
 
 - `--title` is one line; it also names the case directory.
 - `--body-file` is markdown; `-` reads stdin. Write it for someone reading on a phone with no other context: what you are doing, what the question is, what each option costs, and what you recommend and why.
 - `--option` is for `decision` only and `--row` for `approval` only; they are refused on any other kind.
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
-- `--worker NAME` names your session, the one waiting on the case. `--brief PATH` is the path to the instructions your session started from, so the work can be restarted if the case is parked. `--context TEXT` is free text shown to the human with the case.
+- `--label TEXT` (repeatable) groups the case with others, such as every case one piece of work opens. `list` and `wait` filter by it. A blank label, or the same label twice, is refused.
+- `--worker NAME` names your session, the one waiting on the case. `--brief TEXT` says where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line. `--context TEXT` is free text shown to the human with the case.
 - Prints the new case id.
 
 ### `cases amend`
 
 ```sh
 cases amend ID [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
-  [--link URL]... [--context TEXT]
+  [--link URL]... [--label TEXT]... [--context TEXT]
 ```
 
 - Changes an open case before the human answers it: another option, another script to approve, a link, or a body or context that is wrong or out of date. The answer is checked against the case as amended, so an approval answer covers the rows you add.
-- `--option` adds options to a `decision` case, numbered after the ones it has. `--row` adds rows to an `approval` case; each `id` must be new to the case. `--link` adds links. An option or link the case already has is refused, and so is an amend that changes nothing, so sending the same amend twice writes nothing the second time.
+- `--option` adds options to a `decision` case, numbered after the ones it has. `--row` adds rows to an `approval` case; each `id` must be new to the case. `--link` adds links and `--label` adds labels. An option, link or label the case already has is refused, and so is an amend that changes nothing, so sending the same amend twice writes nothing the second time.
 - `--body-file` replaces the whole body, so write all of it, not only what changed. `--context` replaces the context.
 - An amend erases nothing: the body and context it replaces stay in the store and in `show --json`. If a case holds a secret, amending it out does not remove it; tell the human so they can rotate it.
 - Nothing can be removed or reordered. If the question itself has changed, withdraw the case and open a new one; for a second question, open a second case.
@@ -97,12 +99,14 @@ cases amend ID [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
 ### `cases wait`
 
 ```sh
-cases wait [--since TIME] [--timeout DURATION] [--id ID]...
+cases wait [--since TIME] [--timeout DURATION] [--id ID]... \
+  [--label TEXT]... [--worker NAME]...
 ```
 
 - Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`.
 - Run it in the background; it can take hours.
-- `--id ID` (repeatable) waits on those cases only. **Always pass it for your own cases.** Without it, `wait` wakes on any case in the store, including other agents' cases.
+- `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.
+- `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those labels, or from any of those workers. Given together, a case must match both, and with `--id` as well, all three. A filter that matches none of your cases waits until the timeout, as an `--id` that is never answered does, so check the label you pass is the one you opened with.
 - By default only human events written after `wait` starts can wake it. An answer that lands between `cases open` and `cases wait` would be missed, so pass `--since` with a time from before you opened the case: an RFC 3339 time such as `2026-09-16T09:12:03Z`, or the case's `opened_at` from `show --json`.
 - `--timeout` takes a Go duration (`30m`, `2h`). When it passes with nothing to report, `wait` prints one line to stderr and **exits 2**. Other errors exit 1. The default, 0, waits forever.
 
@@ -110,11 +114,12 @@ cases wait [--since TIME] [--timeout DURATION] [--id ID]...
 
 ```sh
 cases show ID [--json]
-cases list [--state STATE,...] [--json]
+cases list [--state STATE,...] [--label TEXT]... [--worker NAME]... [--json]
 ```
 
 - `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, and `events`, which holds every event file as written. Read the answer from here, not from the plain-text output.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated.
+- `list --label TEXT` and `list --worker NAME` (each repeatable) show cases with any of those labels, or from any of those workers. Given together, a case must match both.
 - A damaged event file is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not fix the file.
 
 ### `cases status`
@@ -179,5 +184,7 @@ When `wait` returns, read the case's `state` and act on it:
   - `fyi`: close with a short outcome, for example "Acknowledged".
 - `parked` — the human has set the work aside. Stop the work, do not pick up, and wait again with `--since` set to the case's `updated_at` from the line `wait` printed, not the old time: the park is later than the old time, so `wait` would return at once, again and again, and with no `--since` a resume that lands before `wait` starts is missed. The next event will be a `resume`.
 - `open` after a resume — re-read your instructions and the thread, then wait for the answer, again with `--since` set to the case's new `updated_at`. If you are no longer stuck, withdraw the case.
+
+A session that opens several cases gives them all the same `--label`, such as the name of its work, and waits with `--label` rather than one `--id` per case, so a case it opens later is covered without restarting `wait`.
 
 If the answer is unclear, `pickup` and then `note` with the question, rather than guessing. Close every case you pick up: an unclosed case looks to the human like work still in progress.

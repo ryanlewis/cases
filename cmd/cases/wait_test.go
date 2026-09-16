@@ -159,6 +159,49 @@ func TestWaitOnSpecificCases(t *testing.T) {
 	}
 }
 
+func TestWaitByLabelAndWorker(t *testing.T) {
+	root := t.TempDir()
+	open := func(args ...string) string {
+		return strings.TrimSpace(mustRun(t, append([]string{"--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Labelled"}, args...)...))
+	}
+	mine := open("--label", "round-1", "--worker", "w1")
+	theirs := open("--label", "round-2", "--worker", "w2")
+	otherWorker := open("--label", "round-1", "--worker", "w2")
+
+	// Answers on cases that do not match do not wake it.
+	ch := startWait(t, root, "--label", "round-1", "--worker", "w1", "--timeout", "5s")
+	mustRun(t, "--store", root, "answer", theirs, "--ack")
+	mustRun(t, "--store", root, "answer", otherWorker, "--ack")
+	time.Sleep(60 * time.Millisecond)
+	mustRun(t, "--store", root, "answer", mine, "--ack")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != mine {
+		t.Errorf("wait --label --worker printed %+v, want only %s", got, mine)
+	}
+
+	// A filter no case matches waits until the timeout.
+	ch = startWait(t, root, "--label", "nope", "--timeout", "300ms")
+	fresh := open("--label", "round-1")
+	mustRun(t, "--store", root, "answer", fresh, "--ack")
+	assertTimedOut(t, <-ch)
+}
+
+func TestWaitByIDAndLabel(t *testing.T) {
+	root := t.TempDir()
+	labelled := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "A", "--label", "round-1"))
+	unlabelled := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "B"))
+	other := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "C", "--label", "round-1"))
+
+	// --id and --label together wait on cases that pass both.
+	ch := startWait(t, root, "--id", labelled, "--id", unlabelled, "--label", "round-1", "--timeout", "5s")
+	mustRun(t, "--store", root, "answer", unlabelled, "--ack")
+	mustRun(t, "--store", root, "answer", other, "--ack")
+	time.Sleep(60 * time.Millisecond)
+	mustRun(t, "--store", root, "answer", labelled, "--ack")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != labelled {
+		t.Errorf("wait --id --label printed %+v, want only %s", got, labelled)
+	}
+}
+
 func TestWaitForAStoreThatDoesNotExistYet(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "not-yet")
 	ch := startWait(t, root, "--timeout", "5s")

@@ -67,8 +67,8 @@ Each write adds a new file:
 ```
 cases/
   2026-09-15T09-12-03Z-pin-bun-or-float/
-    0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], worker, brief, context
-    0002-agent-amend.json      # options[], rows[], links[] to add; body, context to replace; amended_at
+    0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], labels[], worker, brief, context
+    0002-agent-amend.json      # options[], rows[], links[], labels[] to add; body, context to replace; amended_at
     0003-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
     0004-agent-pickup.json     # picked_up_at, by
     0005-agent-note.json       # follow-up question, reopens the case
@@ -80,18 +80,20 @@ File names are `NNNN-<author>-<event>.json`. The author is `agent` or `human`.
 The events are `open`, `amend`, `answer`, `pickup`, `note`, `close`,
 `withdraw`, `park` and `resume`. Timestamps are RFC 3339 in UTC.
 
-The `worker`, `brief` and `context` fields on `open` are optional and help the
-human act on a case. `worker` names the agent session waiting on it. `brief`
-is the path to the instructions that session started from, so the work can be
-restarted after the case is parked. `context` is free text shown with the case.
+The `labels`, `worker`, `brief` and `context` fields on `open` are optional
+and help the human act on a case. `labels` group cases, such as the ones one
+piece of work opened; a label may not be blank or appear twice on a case.
+`worker` names the agent session waiting on it. `brief` says where to restart
+the work from if the case is parked: a brief, a ledger or a note, as a path or
+a short line. `context` is free text shown with the case.
 
-An `amend` changes a case that is still open. Its `options`, `rows` and
-`links` are added after the ones the case has, and its `body` or `context`
+An `amend` changes a case that is still open. Its `options`, `rows`,
+`links` and `labels` are added after the ones the case has, and its `body` or `context`
 replaces the case's. A field it leaves out stays as it was. Nothing can be
 removed, and options keep their numbers.
 
-An amend is refused if it sets a blank `body`, `context`, option or link, adds
-an option, link or row `id` the case already has, or changes nothing, such as
+An amend is refused if it sets a blank `body`, `context`, option, link or
+label, adds an option, link, label or row `id` the case already has, or changes nothing, such as
 setting the `body` the case already has. So the same amend sent twice writes
 nothing the second time.
 
@@ -195,10 +197,12 @@ Agent side:
 ```
 cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
                [--body-file FILE|-] [--option TEXT]... [--row JSON]...
-               [--link URL]... [--worker NAME] [--brief PATH] [--context TEXT]
+               [--link URL]... [--label TEXT]... [--worker NAME]
+               [--brief TEXT] [--context TEXT]
 cases amend    ID [--body-file FILE|-] [--option TEXT]... [--row JSON]...
-               [--link URL]... [--context TEXT]
+               [--link URL]... [--label TEXT]... [--context TEXT]
 cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
+               [--label TEXT]... [--worker NAME]...
 cases pickup   ID [--by NAME]
 cases note     ID --body-file FILE|-
 cases close    ID --outcome-file FILE|- [--link URL]...
@@ -217,7 +221,7 @@ cases resume ID [--agent]
 Both:
 
 ```
-cases list   [--state STATE,...] [--json]
+cases list   [--state STATE,...] [--label TEXT]... [--worker NAME]... [--json]
 cases show   ID [--json]
 cases serve  [--listen 127.0.0.1:8765] [--no-open]
 cases status [--json]
@@ -239,15 +243,19 @@ new state.
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 Add `"note":"…"` to show a line under the row's label.
 
-`--worker`, `--brief` and `--context` on `open` set the fields described in
+`--label`, `--worker`, `--brief` and `--context` on `open` set the fields described in
 [store format](#store-format). `--by` on `pickup` records who picked the case
 up, such as the agent session name. `--reason` on `withdraw` records why the
 case no longer needs an answer; `show` and the web thread print it.
 
 `amend` changes an open case as described in [store format](#store-format):
-`--option`, `--row` and `--link` add to the case, and `--body-file` and
+`--option`, `--row`, `--link` and `--label` add to the case, and `--body-file` and
 `--context` replace its body and context. It refuses an amend that changes
 nothing, an empty body file and an empty `--context`.
+
+`list --label TEXT` and `list --worker NAME` (each repeatable) show only cases
+that have any of the given labels, or come from any of the given workers.
+Given together, a case must match both.
 
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
@@ -256,7 +264,12 @@ exits 0. A case is waiting on the agent when its last event is one of those
 three human events. By default only events that land after `wait` starts can
 wake it, so running it again does not wake on answers already reported. With
 `--since TIME` it also wakes on human events recorded after that time.
-`--id ID` (repeatable) waits on those cases only. If `--timeout` passes first,
+`--id ID` (repeatable) waits on those cases only.
+`--label TEXT` and `--worker NAME` (each repeatable) wait on cases that have
+any of the given labels, or come from any of the given workers; given
+together, a case must match both, and with `--id` as well, all three. A filter
+that matches no case, like an `--id` that is never answered, waits until the
+timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
 

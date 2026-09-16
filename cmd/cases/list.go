@@ -15,7 +15,23 @@ import (
 
 type ListCmd struct {
 	State []string `help:"Only cases in these states (open, answered, pickedup, closed, withdrawn, parked). Repeat or comma-separate." placeholder:"STATE"`
-	JSON  bool     `help:"Print JSON." short:"j"`
+	CaseFilter
+	JSON bool `help:"Print JSON." short:"j"`
+}
+
+// CaseFilter picks cases by label and worker, for list and wait.
+type CaseFilter struct {
+	Label  []string `help:"Only cases with this label. Repeat for cases with any of them." sep:"none" placeholder:"TEXT"`
+	Worker []string `help:"Only cases from this worker. Repeat for cases from any of them." sep:"none" placeholder:"NAME"`
+}
+
+// match reports whether the case has one of the labels and one of the workers
+// asked for. A filter left empty matches every case.
+func (f CaseFilter) match(c *store.Case) bool {
+	if len(f.Label) > 0 && !slices.ContainsFunc(c.Labels, func(l string) bool { return slices.Contains(f.Label, l) }) {
+		return false
+	}
+	return len(f.Worker) == 0 || slices.Contains(f.Worker, c.Worker)
 }
 
 func (c *ListCmd) Run(d *Deps) error {
@@ -42,7 +58,7 @@ func (c *ListCmd) Run(d *Deps) error {
 	shown := []*store.Case{}
 	for _, cs := range cases {
 		d.warn(cs, nil)
-		if len(want) == 0 || slices.Contains(want, cs.State) {
+		if (len(want) == 0 || slices.Contains(want, cs.State)) && c.match(cs) {
 			shown = append(shown, cs)
 		}
 	}

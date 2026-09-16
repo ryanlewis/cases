@@ -15,6 +15,7 @@ type AmendCmd struct {
 	Option   []string `help:"An option to add to a decision case, numbered after the options it has. Repeat per option." sep:"none" placeholder:"TEXT"`
 	Row      []string `help:"A row to add to an approval case, as a JSON object with id, label, script, link and an optional note. The id must not be on the case already. Repeat per row." sep:"none" placeholder:"JSON"`
 	Link     []string `help:"A link to add to the case. Repeatable." sep:"none" placeholder:"URL"`
+	Label    []string `help:"A label to add to the case. Repeatable." sep:"none" placeholder:"TEXT"`
 	Context  *string  `help:"Free-text context that replaces the case's." placeholder:"STRING"`
 }
 
@@ -27,7 +28,7 @@ func (c *AmendCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	rec := store.AmendRecord{Options: c.Option, Rows: rows, Links: c.Link}
+	rec := store.AmendRecord{Options: c.Option, Rows: rows, Links: c.Link, Labels: c.Label}
 	// The store reads an empty body or context as no change, which is not
 	// what an empty --body-file or --context asks for. The store refuses one
 	// that is only whitespace.

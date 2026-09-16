@@ -14,7 +14,7 @@ import (
 func openApproval(t *testing.T, root string) string {
 	t.Helper()
 	out := mustRun(t, "--store", root, "open", "--kind", "approval", "--urgency", "today", "--title", "Scripts",
-		"--context", "Release 1.4", "--row", `{"id":"deps","label":"Install deps","script":"npm ci","link":"https://example.com/deps"}`)
+		"--context", "Release 1.4", "--label", "release", "--row", `{"id":"deps","label":"Install deps","script":"npm ci","link":"https://example.com/deps"}`)
 	return strings.TrimSpace(out)
 }
 
@@ -94,6 +94,18 @@ func TestAmendAddsOptions(t *testing.T) {
 	}
 }
 
+func TestAmendAddsLabels(t *testing.T) {
+	root := t.TempDir()
+	id := openApproval(t, root)
+	mustRun(t, "--store", root, "amend", id, "--label", "round 3", "--label", "a,b")
+	if c := loadCase(t, root, id); !slices.Equal(c.Labels, []string{"release", "round 3", "a,b"}) {
+		t.Errorf("labels = %q", c.Labels)
+	}
+	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "added label: round 3") {
+		t.Errorf("show:\n%s", out)
+	}
+}
+
 func TestAmendRefusals(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.md")
 	tests := []struct {
@@ -102,7 +114,7 @@ func TestAmendRefusals(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{"nothing to amend", "", nil, "the amend has no body, options, rows, links or context"},
+		{"nothing to amend", "", nil, "the amend has no body, options, rows, links, labels or context"},
 		{"blank body", " \n", []string{"--body-file", "-"}, "amend body is empty"},
 		// The store would take an empty body as no change and add the link.
 		{"empty body file with a link", "", []string{"--body-file", "-", "--link", "https://example.com/log"}, "amend body is empty"},
@@ -117,6 +129,8 @@ func TestAmendRefusals(t *testing.T) {
 		{"blank link", "", []string{"--link", " "}, "link 1 is empty"},
 		{"the context the case has", "", []string{"--context", "Release 1.4"}, "the amend changes nothing"},
 		{"the same link twice", "", []string{"--link", "https://example.com/log", "--link", "https://example.com/log"}, "is used twice"},
+		{"blank label", "", []string{"--label", ""}, "label 1 is empty"},
+		{"label already on the case", "", []string{"--label", "release"}, `label "release" is already on the case`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
