@@ -232,7 +232,8 @@ in the inbox, or to `/` if it was the last one. A parked case stays in the
 inbox. If the form is refused, the same case is shown again with the error.
 
 The tab title is the selected case's title, with the number of open blocking
-cases in front. The list and the thread refresh every two seconds. The page
+cases in front; the header shows the same count beside the `inbox` and `done`
+links. The list, the count and the thread refresh every two seconds. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
 `/`, which selects whichever case is now first.
 

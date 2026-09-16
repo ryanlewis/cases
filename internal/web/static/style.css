@@ -1,60 +1,219 @@
+/* Visual system, adapted from shout.sh the way relwatch and job-scout adapt it,
+ * so the tools read as one family.
+ *
+ * Borrowed: one monospace face with ligatures off, square corners, 1px rules
+ * with dashed ones as separators, 11px/.08em uppercase micro-labels, outline
+ * badges, [ bracket ] buttons and a chip group that invert, reverse video for
+ * what is chosen, the `>` marker on the selected row, a dashed empty box.
+ *
+ * Broken: shout's black ground. The inbox is light-first warm paper like
+ * relwatch, because it is visited when a case arrives, read and answered, and
+ * left, often on a phone; it is skimmed, not sat in.
+ * Broken: shout's rule that state is spelled and never coloured. Blocking
+ * urgency is the one thing that must not be misread, so it alone has a hue:
+ * the rail, the filled badge and the header tally. Everything else is
+ * intensity, inversion and characters.
+ *
+ * The face is the system mono stack, not shout's Google-hosted one: the page is
+ * served from one local binary and CSP allows nothing from elsewhere.
+ */
+
 :root {
-  --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #deddd8;
-  --card: #ffffff; --selected: #e8eefc; --accent: #2d5bd8; --blocking: #c2410c; --error: #b91c1c;
+  --bg: #fbfbfa; --bg-1: #f2f1ec; --bg-2: #e8e7e0;
+  --fg: #1a1a18; --fg-1: #45453d; --fg-2: #6b6b64; --fg-3: #9c9c92;
+  --rule: #d9d9d0; --rule-strong: #b0b0a5;
+  --blocking: #a11b2b;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161615; --fg: #ecebe6; --muted: #a09f99; --line: #34332f;
-    --card: #1f1f1d; --selected: #232b40; --accent: #8aa8ff; --blocking: #fb923c; --error: #f87171;
+    --bg: #131312; --bg-1: #1f1f1c; --bg-2: #2a2a26;
+    --fg: #ebebe3; --fg-1: #c2c2b8; --fg-2: #8e8e85; --fg-3: #62625b;
+    --rule: #302f2b; --rule-strong: #55554d;
+    --blocking: #f2929c;
   }
 }
+
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.5 system-ui, sans-serif; overflow-wrap: anywhere; }
-header { padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); }
-main { max-width: 42rem; margin: 0 auto; padding: 0.75rem 1rem; }
-main:has(> .split) { max-width: none; margin: 0; padding: 0; }
-.split > * { padding: 0.75rem 1rem; }
-.work > * { max-width: 46rem; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/24px var(--mono); font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
+}
+a { color: var(--fg); text-underline-offset: 2px; }
+a:hover { background: var(--fg); color: var(--bg); text-decoration: none; }
+::selection { background: var(--fg); color: var(--bg); }
+:focus-visible { outline: 1px dashed var(--fg); outline-offset: 2px; }
+h1 { font-size: 20px; line-height: 28px; font-weight: 700; margin: 8px 0 12px; }
+h2 { font-size: 15px; font-weight: 700; margin: 0; }
+
+/* Micro-label: every piece of secondary chrome. */
+.label, .meta, .section, legend, .body th {
+  font-size: 11px; line-height: 16px; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+}
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.meta .age { color: var(--fg-3); }
+h1.section, h2.section {
+  display: flex; align-items: center; gap: 8px; margin: 24px 0 12px;
+}
+h1.section::before, h2.section::before { content: "\2500\2500"; content: "\2500\2500" / ""; color: var(--fg-3); letter-spacing: 0; }
+h1.section::after, h2.section::after { content: ""; flex: 1; border-top: 1px dashed var(--rule); }
+
+/* Masthead: wordmark, a rule that eats the slack, the tally, the views. */
+header.top {
+  display: flex; align-items: center; gap: 12px;
+  height: 48px; padding: 0 16px; border-bottom: 1px solid var(--rule);
+}
+.brand {
+  font-size: 13px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--fg); text-decoration: none; padding: 0 4px;
+}
+.rule { flex: 1 1 32px; border-top: 1px dashed var(--rule); height: 0; }
+.tally strong { color: var(--fg); font-weight: 700; }
+.tally.hot, .tally.hot strong { color: var(--blocking); }
+
+/* Chip group: one outer border, dividers between, the current view inverted. */
+.chips { display: flex; border: 1px solid var(--rule-strong); }
+.chips a {
+  padding: 4px 12px; font-size: 11px; line-height: 16px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--fg-2); text-decoration: none;
+  border-right: 1px solid var(--rule-strong);
+}
+.chips a:last-child { border-right: 0; }
+.chips a:hover { background: var(--bg-1); color: var(--fg); }
+.chips a.on { background: var(--fg); color: var(--bg); }
+
+main { max-width: 960px; padding: 8px 16px 48px; }
+main:has(> .split) { max-width: none; padding: 0; }
+.split > * { padding: 0 16px 48px; }
+.work > * { max-width: 760px; }
+
 /* Narrow screens show one column: the list on /, the case on /cases/ID. */
 @media (width < 56rem) {
   .split.home .work, .split:not(.home) .list { display: none; }
+  .split > .list { padding: 0 0 48px; }
+  /* The case on / is not shown here, so nothing in the list is selected. */
+  .split.home .list .card.selected { background: none; }
+  .split.home .list .card.selected h2::before { content: none; }
 }
 /* Wide screens show both, each scrolling on its own within the window. */
 @media (width >= 56rem) {
   body:has(.split) { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   main:has(> .split) { flex: 1; min-height: 0; }
-  .split { display: grid; grid-template-columns: 24rem minmax(0, 1fr); height: 100%; }
+  .split { display: grid; grid-template-columns: clamp(320px, 28%, 440px) minmax(0, 1fr); height: 100%; }
   .split > * { overflow-y: auto; }
-  .list { border-right: 1px solid var(--line); }
+  .split > .list { padding: 0; border-right: 1px solid var(--rule); }
 }
-nav a { display: inline-block; padding: 0.6rem 0.9rem; margin-right: 0.25rem; color: var(--accent); text-decoration: none; }
-h1 { font-size: 1.4rem; margin: 0.5rem 0; }
-h2 { font-size: 1.1rem; margin: 0.25rem 0; }
-a { color: var(--accent); }
-.card { display: block; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; margin: 0.75rem 0; color: inherit; text-decoration: none; }
-.card.urgency-blocking { border-left: 5px solid var(--blocking); }
-.card.selected { background: var(--selected); outline: 2px solid var(--accent); outline-offset: -1px; }
-.meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; color: var(--muted); font-size: 0.85rem; }
-.badge { font-weight: 600; }
-.urgency-blocking .badge:first-child { color: var(--blocking); }
-.excerpt { margin: 0.2rem 0 0; color: var(--muted); }
-.empty { color: var(--muted); }
+
+/* Cards. In the list they are rows with a permanent left gutter, so the `>`
+   marker costs no reflow, and a 2px rail that is only coloured when blocking. */
+.card {
+  position: relative; display: block; color: inherit; text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.list .card { padding: 12px 16px 12px 28px; border-bottom: 1px solid var(--rule); }
+.list .card:hover { background: var(--bg-1); color: inherit; }
+.list .card.selected { background: var(--bg-2); }
+.list .card.selected h2::before {
+  content: ">"; content: ">" / ""; position: absolute; left: 12px; font-weight: 700; color: var(--fg);
+}
+.card.urgency-blocking { border-left-color: var(--blocking); }
+.card h2 { margin: 4px 0; }
+.excerpt { margin: 0; font-size: 13px; line-height: 20px; color: var(--fg-2); }
+main > .card { padding: 12px 16px; margin: 0 0 8px; border: 1px solid var(--rule); border-left-width: 2px; }
+main > .card h2 a { text-decoration: none; }
+
+/* Outline badges, so exactly one thing is loud: a blocking case's urgency. */
+.badge {
+  font-size: 10px; line-height: 16px; letter-spacing: .1em; padding: 0 4px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.urgency-blocking .badge.urgency { color: var(--bg); background: var(--blocking); border-color: var(--blocking); font-weight: 700; }
+.badge.parked { color: var(--fg-3); border-style: dashed; }
+.badge.state { color: var(--fg); }
+
+.empty {
+  border: 1px dashed var(--rule); padding: 32px 16px; margin: 16px;
+  color: var(--fg-2); font-size: 13px;
+}
+main > .empty { margin: 0; }
+
+/* The case. */
+.case { padding-top: 16px; }
+.context { color: var(--fg-1); margin: 0 0 12px; }
+.body > :first-child { margin-top: 0; }
+.body h1, .body h2, .body h3, .body h4 { font-size: 15px; line-height: 24px; margin: 24px 0 8px; }
+.body h1 { font-size: 17px; }
 .body img { max-width: 100%; }
-.body table { border-collapse: collapse; max-width: 100%; overflow-x: auto; display: block; }
-.body th, .body td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left; }
-.body th { font-weight: 600; background: var(--card); }
-pre { overflow-x: auto; padding: 0.75rem; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 0.85rem; white-space: pre; overflow-wrap: normal; }
-fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 10px; margin: 1rem 0; padding: 0.75rem 1rem; background: var(--card); }
-legend { font-weight: 600; padding: 0 0.25rem; }
-label { display: block; margin: 0.5rem 0; }
-label.choice { display: flex; align-items: center; gap: 0.6rem; min-height: 2.75rem; }
-input[type=radio] { width: 1.3rem; height: 1.3rem; }
-textarea, input[type=text] { display: block; width: 100%; margin-top: 0.25rem; padding: 0.6rem; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
-button { display: block; width: 100%; min-height: 3rem; margin: 0.75rem 0; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 10px; }
-.error { color: var(--error); font-weight: 600; }
-.thread { list-style: none; padding: 0; }
-.event { border-left: 3px solid var(--line); padding: 0.25rem 0 0.25rem 0.75rem; margin: 0.75rem 0; }
-.event.author-human { border-left-color: var(--accent); }
-.event p { margin: 0.2rem 0; }
-.outcome { margin-top: 0.5rem; }
+.body blockquote { margin: 12px 0; padding-left: 12px; border-left: 1px solid var(--rule-strong); color: var(--fg-1); }
+.body hr { border: 0; border-top: 1px dashed var(--rule); }
+code { font-family: inherit; font-size: 13px; background: var(--bg-1); color: var(--fg-1); padding: 0 4px; }
+pre {
+  overflow-x: auto; padding: 12px; background: var(--bg-1); border: 1px solid var(--rule);
+  font-size: 13px; line-height: 20px; white-space: pre; overflow-wrap: normal;
+}
+pre code { padding: 0; background: none; }
+.body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+.body th, .body td { padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }
+.body th { border-bottom: 1px solid var(--rule-strong); }
+.body td { border-bottom: 1px dashed var(--rule); }
+.links { padding-left: 0; list-style: none; font-size: 13px; }
+.links li::before { content: "-> "; content: "-> " / ""; color: var(--fg-3); }
+
+/* [ERR] inline, in reverse video, never a toast. */
+.error { color: var(--fg); font-weight: 700; }
+.error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 4px; margin-right: 8px; }
+
+/* The answer form. */
+fieldset { min-width: 0; margin: 16px 0; padding: 8px 12px 12px; border: 1px solid var(--rule); }
+legend { padding: 0 4px; }
+label { display: block; margin: 8px 0; }
+label.choice { display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 0; padding: 0 8px; cursor: pointer; }
+label.choice:hover { background: var(--bg-1); }
+label.choice:has(:checked) { background: var(--fg); color: var(--bg); }
+input[type=radio] { width: 16px; height: 16px; margin: 0; accent-color: var(--fg); flex: none; }
+label.choice:has(:checked) input { accent-color: var(--bg); }
+textarea, input[type=text] {
+  display: block; width: 100%; margin-top: 4px; padding: 8px;
+  font: inherit; font-size: 13px; line-height: 20px; color: var(--fg);
+  background: var(--bg-1); border: 1px solid var(--rule-strong); border-radius: 0;
+}
+textarea:focus-visible, input[type=text]:focus-visible { outline-offset: -3px; }
+
+/* Buttons wear their brackets in CSS with empty alt text, so they stay out of
+   the accessible name. Browsers without the alt syntax keep the first content. */
+button {
+  font: inherit; font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+  margin: 12px 0; padding: 8px 12px; border: 0; background: transparent;
+  color: var(--fg); cursor: pointer;
+}
+button::before { content: "["; content: "[" / ""; color: var(--fg-3); margin-right: 8px; }
+button::after { content: "]"; content: "]" / ""; color: var(--fg-3); margin-left: 8px; }
+button:hover, button:hover::before, button:hover::after { background: var(--fg); color: var(--bg); }
+button:active::before { content: "*"; }
+button:focus-visible { outline-offset: -1px; }
+
+/* The thread: a stream with [author] prefixes and dashed separators. */
+.thread { list-style: none; padding: 0; margin: 0; }
+.event { padding: 12px 0; border-top: 1px dashed var(--rule); }
+.event:first-child { border-top: 0; padding-top: 0; }
+.event .who { color: var(--fg-2); font-weight: 500; }
+.event.author-human .who { color: var(--fg); font-weight: 700; }
+.event p { margin: 4px 0 0; }
+.event .body { margin-top: 4px; }
+.outcome { margin-top: 8px; font-size: 13px; }
+
+/* Phone: the header drops the rule, and controls get a real border and 16px
+   text, which stops iOS zooming in on focus. */
+@media (width < 720px) {
+  header.top { gap: 8px; padding: 0 12px; }
+  header.top .rule { display: none; }
+  .tally { margin-left: auto; }
+  .chips a { padding: 8px 12px; }
+  textarea, input[type=text] { font-size: 16px; }
+  button { display: block; width: 100%; min-height: 44px; border: 1px solid var(--rule-strong); }
+  button::before, button::after, button:active::before { content: none; }
+}

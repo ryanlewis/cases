@@ -79,8 +79,15 @@ func TestInboxOrderAndContent(t *testing.T) {
 	if frag.Code != http.StatusOK || !slices.Equal(idsInOrder(list), want) {
 		t.Errorf("fragment %d, ids %v", frag.Code, idsInOrder(list))
 	}
-	if !strings.Contains(list, "<title>(1) Inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
+	if !strings.Contains(list, "<title>(1) inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
 		t.Errorf("fragment is not a bare list with a title and no selection:\n%s", list)
+	}
+	// The header tally is swapped out of band, so it keeps up with the title.
+	if !strings.Contains(list, `<span id="tally" class="label tally hot" hx-swap-oob="true"><strong>1</strong> blocking</span>`) {
+		t.Errorf("fragment lacks the out-of-band tally:\n%s", list)
+	}
+	if !strings.Contains(body, `<span id="tally" class="label tally hot"><strong>1</strong> blocking</span>`) || !strings.Contains(body, `<a href="/" class="on" aria-current="page">inbox</a>`) {
+		t.Error("page header lacks the tally or the current view")
 	}
 	for _, s := range []string{"First line.", "Second line.", "Third.", "bun-pins", "stuck", "blocking", "parked", "Old blocker"} {
 		if !strings.Contains(list, s) {
@@ -102,7 +109,7 @@ func TestInboxOrderAndContent(t *testing.T) {
 	// A case page shows the list beside it, with that case selected.
 	page := a.get(t, "/cases/"+today.ID)
 	if !strings.Contains(page, `<div class="split">`) || !slices.Equal(idsInOrder(page), want) ||
-		!strings.Contains(page, `urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) || strings.Count(page, `aria-current`) != 1 {
+		!strings.Contains(page, `urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) || strings.Count(page, `selected" href=`) != 1 {
 		t.Errorf("case page lacks the list with the case selected:\n%s", page)
 	}
 
@@ -123,7 +130,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 	}{
 		{
 			kind:      store.KindDecision,
-			formParts: []string{`name="choice" value="1"`, `name="choice" value="2"`, `value="other"`, "Other, see note", "Pin", "Float"},
+			formParts: []string{`name="choice" value="1"`, `name="choice" value="2"`, `value="other"`, "other, see note", "Pin", "Float"},
 			form:      url.Values{"choice": {"2"}, "note": {"go"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
@@ -136,7 +143,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 		},
 		{
 			kind:      store.KindSignoff,
-			formParts: []string{`name="signoff" value="accept"`, `name="signoff" value="changes"`, "Comment"},
+			formParts: []string{`name="signoff" value="accept"`, `name="signoff" value="changes"`, "comment"},
 			form:      url.Values{"signoff": {"changes"}, "note": {"rename the flag"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
@@ -148,7 +155,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 		},
 		{
 			kind:      store.KindFYI,
-			formParts: []string{`name="ack"`, "Acknowledge"},
+			formParts: []string{`name="ack"`, "acknowledge"},
 			form:      url.Values{"ack": {"1"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
@@ -407,7 +414,7 @@ func TestDoneView(t *testing.T) {
 func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	a := newApp(t)
 	body := a.get(t, "/")
-	if !strings.Contains(body, "No open cases.") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
+	if !strings.Contains(body, "no open cases.") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
 		t.Fatalf("empty / does not poll for a first case:\n%s", body)
 	}
 	hx := map[string]string{"HX-Request": "true"}

@@ -1,4 +1,5 @@
 {{define "inbox-fragment"}}<title>{{template "title" .}}</title>
+<span id="tally" class="label tally{{if .Blocking}} hot{{end}}" hx-swap-oob="true">{{template "tally-body" .}}</span>
 {{template "inbox-list" .}}{{end}}
 
 {{define "inbox-list"}}
@@ -6,17 +7,17 @@
 {{range .Cards}}
 <a class="card urgency-{{.Urgency}}{{if eq .ID $.Selected}} selected{{end}}" href="/cases/{{.ID | pathEscape}}"{{if eq .ID $.Selected}} aria-current="page"{{end}}>
   <div class="meta">
-    <span class="badge">{{.Urgency}}</span>
+    <span class="badge urgency">{{.Urgency}}</span>
     <span>{{.Kind}}</span>
     {{if eq .State "parked"}}<span class="badge parked">parked</span>{{end}}
     {{with .Worker}}<span>{{.}}</span>{{end}}
-    <span>{{.Age}}</span>
+    <span class="age">{{.Age}}</span>
   </div>
   <h2>{{.Title}}</h2>
   {{range .Excerpt}}<p class="excerpt">{{.}}</p>{{end}}
 </a>
 {{else}}
-<p class="empty">Nothing waiting.</p>
+<p class="empty">nothing waiting.</p>
 {{end}}
 </div>
 {{end}}

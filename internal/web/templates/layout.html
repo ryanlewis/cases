@@ -9,8 +9,11 @@
 <script src="/static/htmx.min.js"></script>
 </head>
 <body>
-<header>
-<nav><a href="/">Inbox</a> <a href="/done">Done</a></nav>
+<header class="top">
+<a class="brand" href="/">cases</a>
+<span class="rule"></span>
+{{template "tally" .}}
+<nav class="chips"><a href="/"{{if eq .Nav "inbox"}} class="on" aria-current="page"{{end}}>inbox</a><a href="/done"{{if eq .Nav "done"}} class="on" aria-current="page"{{end}}>done</a></nav>
 </header>
 <main>
 {{template "content" .}}
@@ -20,3 +23,6 @@
 {{end}}
 
 {{define "title"}}{{if .Blocking}}({{.Blocking}}) {{end}}{{.Title}} · cases{{end}}
+
+{{define "tally-body"}}<strong>{{.Blocking}}</strong> blocking{{end}}
+{{define "tally"}}<span id="tally" class="label tally{{if .Blocking}} hot{{end}}">{{template "tally-body" .}}</span>{{end}}

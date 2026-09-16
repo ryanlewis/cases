@@ -80,6 +80,7 @@ func init() {
 type page struct {
 	Title    string
 	Blocking int
+	Nav      string // the header link to mark as current
 }
 
 // countBlocking counts open blocking cases: the ones a worker is idle on.
@@ -123,7 +124,7 @@ func inboxCases(cases []*store.Case) []*store.Case {
 }
 
 func newInbox(cases []*store.Case, selected string) inboxData {
-	d := inboxData{page: page{Title: "Inbox", Blocking: countBlocking(cases)}, Selected: selected}
+	d := inboxData{page: page{Title: "inbox", Blocking: countBlocking(cases), Nav: "inbox"}, Selected: selected}
 	for _, c := range cases {
 		if c.ID == selected {
 			d.Title = c.Title
@@ -214,7 +215,7 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 	d := struct {
 		page
 		Cards []doneCard
-	}{page: page{Title: "Done", Blocking: countBlocking(cases)}}
+	}{page: page{Title: "done", Blocking: countBlocking(cases), Nav: "done"}}
 	var shown []*store.Case
 	for _, c := range cases {
 		switch c.State {

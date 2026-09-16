@@ -1,17 +1,17 @@
 {{define "content"}}
-<h1>Done</h1>
+<h1 class="section">done</h1>
 {{range .Cards}}
 <article class="card">
   <div class="meta">
     <span class="badge">{{.State}}</span>
     <span>{{.Kind}}</span>
     {{with .Worker}}<span>{{.}}</span>{{end}}
-    <span>{{.Age}}</span>
+    <span class="age">{{.Age}}</span>
   </div>
   <h2><a href="/cases/{{.ID | pathEscape}}">{{.Title}}</a></h2>
-  {{with .Close}}<div class="outcome">{{markdown .Outcome}}</div>{{end}}
+  {{with .Close}}<div class="outcome body">{{markdown .Outcome}}</div>{{end}}
 </article>
 {{else}}
-<p class="empty">Nothing done yet.</p>
+<p class="empty">nothing done yet.</p>
 {{end}}
 {{end}}
