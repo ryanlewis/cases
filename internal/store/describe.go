@@ -26,6 +26,8 @@ func (c *Case) Describe(ev Event) []string {
 			add("chose other")
 		case a.Signoff != "":
 			add("signoff: %s", a.Signoff)
+		case a.Text != "" && c.Kind == KindQuestion:
+			add("reply: %s", a.Text)
 		case a.Text != "":
 			add("guidance: %s", a.Text)
 		case a.Drop:

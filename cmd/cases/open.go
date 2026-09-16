@@ -9,7 +9,7 @@ import (
 )
 
 type OpenCmd struct {
-	Kind     string   `help:"decision, approval, signoff, stuck or fyi." required:"" enum:"decision,approval,signoff,stuck,fyi" placeholder:"KIND"`
+	Kind     string   `help:"decision, approval, signoff, stuck, question or fyi." required:"" enum:"decision,approval,signoff,stuck,question,fyi" placeholder:"KIND"`
 	Urgency  string   `help:"blocking, today or whenever." required:"" enum:"blocking,today,whenever" placeholder:"URGENCY"`
 	Title    string   `help:"One-line title; also names the case directory." required:""`
 	BodyFile string   `help:"Markdown body. - reads stdin." name:"body-file" placeholder:"FILE"`

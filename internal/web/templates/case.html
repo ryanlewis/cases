@@ -68,6 +68,8 @@
     <label>guidance <textarea name="text" rows="4">{{formValue $form "text"}}</textarea></label>
     <label class="choice"><input type="radio" name="stuck" value="drop"{{if checked $form "stuck" "drop"}} checked{{end}}> drop it</label>
   </fieldset>
+  {{else if eq $c.Kind "question"}}
+  <label>reply <textarea name="text" rows="4" required>{{formValue $form "text"}}</textarea></label>
   {{else if eq $c.Kind "fyi"}}
   <input type="hidden" name="ack" value="1">
   {{end}}

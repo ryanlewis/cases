@@ -116,6 +116,7 @@ written.
 | `approval` | `rows`, each with `id`, `label`, `script` (the text itself) and `link` | a verdict per row: `approve`, `hold` or `reject`, each with an optional note |
 | `signoff` | | `accept`, or `changes` with a note |
 | `stuck` | | guidance `text`, or `drop`; parking is a separate `park` event |
+| `question` | | reply `text` |
 | `fyi` | | `ack` |
 
 Every answer may carry a `note`.

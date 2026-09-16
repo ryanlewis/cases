@@ -19,11 +19,12 @@ const (
 	KindApproval Kind = "approval"
 	KindSignoff  Kind = "signoff"
 	KindStuck    Kind = "stuck"
+	KindQuestion Kind = "question"
 	KindFYI      Kind = "fyi"
 )
 
 // Kinds lists every kind in the order the docs present them.
-var Kinds = []Kind{KindDecision, KindApproval, KindSignoff, KindStuck, KindFYI}
+var Kinds = []Kind{KindDecision, KindApproval, KindSignoff, KindStuck, KindQuestion, KindFYI}
 
 // Urgency orders the inbox.
 type Urgency string
@@ -139,6 +140,7 @@ type RowAnswer struct {
 //   - approval: Rows, one verdict per row of the case
 //   - signoff: Signoff "accept", or "changes" with a Note
 //   - stuck: Text (guidance) or Drop; parking is a separate park event
+//   - question: Text (the reply)
 //   - fyi: Ack
 //
 // Note is allowed on every kind.
