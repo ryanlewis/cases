@@ -152,6 +152,36 @@ func TestConfigFlagAndEnv(t *testing.T) {
 	}
 }
 
+func TestConfigFlagLastWins(t *testing.T) {
+	storeFile := func(name string) (path, root string) {
+		root = t.TempDir()
+		path = filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, []byte("store = \""+root+"\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path, root
+	}
+	first, _ := storeFile("first.toml")
+	second, secondRoot := storeFile("second.toml")
+	env, envRoot := storeFile("env.toml")
+	t.Setenv("CASES_CONFIG", env)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"two flags", []string{"--config", first, "list", "--config", second}, secondRoot},
+		{"two flags, = spelling", []string{"--config=" + first, "--config=" + second, "list"}, secondRoot},
+		{"empty last flag falls through to env", []string{"--config", first, "--config=", "list"}, envRoot},
+		{"nothing after --", []string{"--config", second, "show", "--", "--config=" + first}, secondRoot},
+	} {
+		if cli := parseCases(t, tc.args...); cli.Store != tc.want {
+			t.Errorf("%s: store = %s, want %s", tc.name, cli.Store, tc.want)
+		}
+	}
+}
+
 func TestBrokenConfigStopsCommandsButNotDiagnosis(t *testing.T) {
 	path := writeConfig(t, "stor = \"x\"\n")
 	r := runCases(t, "", "--store", t.TempDir(), "list")

@@ -26,23 +26,27 @@ func loadConfig(args []string) (*config.File, error) {
 	return f, loadErr
 }
 
-// configPathFromArgs returns the value of a --config flag in args, or "".
-// It reads the flag as kong would: both spellings, and nothing after --.
+// configPathFromArgs returns the value of the last --config flag in args,
+// or "". It reads the flag as kong would: both spellings, the last
+// occurrence wins, and nothing after --.
 func configPathFromArgs(args []string) string {
-	for i, a := range args {
+	path := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--":
-			return ""
+			return path
 		case a == "--config":
-			if i+1 < len(args) {
-				return args[i+1]
+			if i+1 >= len(args) {
+				return ""
 			}
-			return ""
+			i++
+			path = args[i]
 		case strings.HasPrefix(a, "--config="):
-			return strings.TrimPrefix(a, "--config=")
+			path = strings.TrimPrefix(a, "--config=")
 		}
 	}
-	return ""
+	return path
 }
 
 // diagnosesConfig reports whether the selected command is one that exists
