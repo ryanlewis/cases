@@ -268,6 +268,11 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
 .event.author-human .who { color: var(--fg); font-weight: 700; }
 .event p { margin: 4px 0 0; }
 .event .body { margin-top: 4px; }
+/* The body or context an amend replaced, ruled off from the lines after it. */
+.event summary { cursor: pointer; }
+.event details > .body, .event details > .context { padding-left: 12px; border-left: 1px solid var(--rule-strong); }
+/* A replaced context keeps its line breaks, as the thread lines for the new one do. */
+.event details > .context { white-space: pre-line; }
 .outcome { margin-top: 8px; font-size: 13px; }
 
 /* Phone: the header drops the rule, and controls get a real border and 16px

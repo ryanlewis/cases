@@ -23,6 +23,10 @@ type Event struct {
 	// Data is the file exactly as written, so fields this version does not
 	// know about survive a read.
 	Data json.RawMessage `json:"data"`
+
+	// replacedBody and replacedContext are the body and context an amend
+	// replaced, as the fold found them, for Describe.
+	replacedBody, replacedContext string
 }
 
 // Case is the fold of a case directory.
@@ -247,9 +251,11 @@ func (c *Case) apply(ev Event) error {
 		c.Links = append(c.Links, r.Links...)
 		c.Labels = append(c.Labels, r.Labels...)
 		if r.Body != "" {
+			ev.replacedBody = c.Body
 			c.Body = r.Body
 		}
 		if r.Context != "" {
+			ev.replacedContext = c.Context
 			c.Context = r.Context
 		}
 

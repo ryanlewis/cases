@@ -79,9 +79,7 @@ func printCase(w io.Writer, c *store.Case) {
 				fmt.Fprintf(w, "      note: %s\n", r.Note)
 			}
 			fmt.Fprintf(w, "      %s\n", r.Link)
-			for line := range strings.SplitSeq(strings.TrimRight(r.Script, "\n"), "\n") {
-				fmt.Fprintf(w, "      | %s\n", line)
-			}
+			quote(w, "      ", strings.TrimRight(r.Script, "\n"))
 		}
 	}
 	if len(c.Links) > 0 {
@@ -95,11 +93,30 @@ func printCase(w io.Writer, c *store.Case) {
 	for _, ev := range c.Events {
 		fmt.Fprintf(w, "  %04d %-5s %-8s %s\n", ev.Seq, ev.Author, ev.Type, stamp(ev.At))
 		for _, line := range c.Describe(ev) {
-			fmt.Fprintf(w, "       %s\n", line)
+			fmt.Fprintf(w, "       %s\n", line.Text)
+			printPrevious(w, "body", line.PreviousBody)
+			printPrevious(w, "context", line.PreviousContext)
 		}
 	}
 	for _, p := range c.Problems {
 		fmt.Fprintf(w, "  problem: %s\n", p)
+	}
+}
+
+// printPrevious prints, in full, the body or context an amend replaced, under
+// the thread line that says so.
+func printPrevious(w io.Writer, field, text string) {
+	if text == "" {
+		return
+	}
+	fmt.Fprintf(w, "         previous %s:\n", field)
+	quote(w, "         ", strings.TrimSpace(text))
+}
+
+// quote prints each line of text after indent and "| ".
+func quote(w io.Writer, indent, text string) {
+	for line := range strings.SplitSeq(text, "\n") {
+		fmt.Fprintf(w, "%s| %s\n", indent, line)
 	}
 }
 

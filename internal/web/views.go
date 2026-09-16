@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,6 +103,14 @@ func renderMarkdown(src string) template.HTML {
 	return template.HTML(buf.String()) //nolint:gosec // goldmark output with raw HTML disabled
 }
 
+// textID returns a short hex hash of s, for an element id that must change
+// when the text in the element does. Hex keeps the id a CSS selector that
+// needs no escaping, which is how htmx looks up a preserved element.
+func textID(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
+}
+
 // isWebLink reports whether a case or row link is an http or https URL. Other
 // links, such as a filesystem path, are shown as text: they would not open.
 func isWebLink(s string) bool {
@@ -111,6 +121,7 @@ func isWebLink(s string) bool {
 var funcs = template.FuncMap{
 	"markdown":   renderMarkdown,
 	"pathEscape": url.PathEscape,
+	"textID":     textID,
 	"webLink":    isWebLink,
 	"stamp": func(t time.Time) string {
 		if t.IsZero() {
@@ -295,7 +306,7 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 
 type threadEntry struct {
 	store.Event
-	Lines    []string
+	Lines    []store.Line
 	Markdown template.HTML
 }
 
@@ -326,7 +337,9 @@ func thread(c *store.Case) []threadEntry {
 			var cl store.CloseRecord
 			_ = json.Unmarshal(ev.Data, &cl)
 			e.Markdown = renderMarkdown(cl.Outcome)
-			e.Lines = cl.Links
+			for _, l := range cl.Links {
+				e.Lines = append(e.Lines, store.Line{Text: l})
+			}
 		default:
 			e.Lines = c.Describe(ev)
 		}
