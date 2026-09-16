@@ -79,6 +79,16 @@ var Keys = []Key{
 		},
 		Example: `listen = "127.0.0.1:8765"`,
 	},
+	{
+		Name:     "no-open",
+		Default:  func() string { return "false" },
+		Commands: []string{"serve"},
+		Comment: []string{
+			"Set to \"true\" to stop cases serve opening the inbox in the browser.",
+			"Same as --no-open.",
+		},
+		Example: `no-open = "true"`,
+	},
 }
 
 // KeyNames lists the key names in declaration order.
