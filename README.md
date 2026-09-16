@@ -11,9 +11,10 @@ folder such as an Obsidian vault. No server is needed.
 
 ## Store format
 
-The store is a directory you choose with `--store` or `CASES_STORE`. There is
-no default. Each case is a directory named after the time it was opened (UTC)
-and a slug of its title. Each write adds a new file:
+The store is a directory. By default it is `$XDG_DATA_HOME/cases`, which is
+usually `~/.local/share/cases`; name another with `--store`, `CASES_STORE` or
+the [config file](#configuration). Each case is a directory named after the
+time it was opened (UTC) and a slug of its title. Each write adds a new file:
 
 ```
 cases/
@@ -75,6 +76,40 @@ kept: `cases show --json` prints every event file as written.
 make install    # go install ./cmd/cases
 ```
 
+## Configuration
+
+A TOML file supplies defaults for `--store` and `--listen`, so a store kept
+somewhere other than the default, such as an Obsidian vault, needs naming
+only once. Precedence is flag > environment variable > config file >
+built-in default.
+
+The file is read from `$XDG_CONFIG_HOME/cases/config.toml`, falling back to
+`~/.config/cases/config.toml`. Override the location with `--config PATH` or
+the `CASES_CONFIG` environment variable. The file is optional.
+
+```sh
+cases config init    # write a commented template (refuses to overwrite; --force to replace)
+cases config path    # print the file in use and whether it exists
+cases config show    # print the defaults the environment and the file establish
+```
+
+| Key | Sets | Beaten by | Default |
+| --- | --- | --- | --- |
+| `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
+| `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
+
+```toml
+store = "~/notes/work/assistant/cases"
+```
+
+A leading `~` in `store` is expanded. `CASES_STORE` set to an empty string
+counts as unset.
+
+An unknown key, a value that is not a string, or malformed TOML is an error
+that names the file. It stops every command except `cases config path`,
+`cases config show` and `cases config init`, which are how you find out which
+file is at fault.
+
 ## CLI
 
 Every command reads and writes the store directly.
@@ -131,11 +166,12 @@ starts if the store directory does not exist yet.
 `cases serve` runs a small web inbox over the same store:
 
 ```sh
-cases serve --store ~/notes/work/assistant/cases
-# Serving … at http://127.0.0.1:8765/
+cases serve
+# Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/
 ```
 
-The default address is `127.0.0.1:8765`; change it with `--listen`. Only
+The default address is `127.0.0.1:8765`; change it with `--listen` or the
+`listen` key in the [config file](#configuration). Only
 loopback addresses (`127.0.0.1`, `::1`, `localhost`) are accepted for now.
 Each request is logged to stderr, except the page refreshes that run every two
 seconds. Stop it with Ctrl-C.
@@ -159,7 +195,9 @@ dropped. htmx is included in the binary; nothing is fetched from the network.
 ## Example
 
 ```sh
-export CASES_STORE=~/notes/work/assistant/cases
+# Once: keep the store in the vault rather than ~/.local/share/cases.
+cases config init
+echo 'store = "~/notes/work/assistant/cases"' >> ~/.config/cases/config.toml
 
 # Agent: raise a decision and wait for it in the background.
 id=$(cases open --kind decision --urgency blocking --worker bun-pins \

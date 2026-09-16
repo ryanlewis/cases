@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"text/tabwriter"
 	"time"
@@ -26,6 +28,10 @@ func (c *ListCmd) Run(d *Deps) error {
 		want = append(want, st)
 	}
 	cases, bad, err := store.List(d.Store)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A store nobody has written to yet reads as empty.
+		cases, bad, err = nil, nil, nil
+	}
 	if err != nil {
 		return err
 	}

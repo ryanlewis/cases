@@ -11,6 +11,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/ryanlewis/cases/internal/config"
 	"github.com/ryanlewis/cases/internal/store"
 )
 
@@ -25,7 +26,8 @@ var (
 const exitTimeout = 2
 
 type CLI struct {
-	Store   string           `help:"Case store directory. Required; there is no default." env:"CASES_STORE" required:"" placeholder:"DIR"`
+	Store   string           `help:"Case store directory (default ${default})." env:"CASES_STORE" default:"${store}" placeholder:"DIR"`
+	Config  string           `help:"TOML config file that supplies flag defaults (default ${config})." placeholder:"PATH"`
 	Version kong.VersionFlag `help:"Print version and exit." short:"v"`
 
 	Open     OpenCmd     `cmd:"" help:"Open a case (agent)."`
@@ -39,14 +41,21 @@ type CLI struct {
 	Answer   AnswerCmd   `cmd:"" help:"Answer an open case (human)."`
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
+	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
 }
 
-// Validate refuses an empty store, which kong's required check lets through
-// when CASES_STORE is set but empty.
-func (c *CLI) Validate() error {
-	if strings.TrimSpace(c.Store) == "" {
+// AfterApply settles the store path: an empty value (CASES_STORE set but
+// empty) falls back to the default, and a leading ~ is expanded so the path
+// can be written that way in the config file.
+func (c *CLI) AfterApply(vars kong.Vars) error {
+	c.Store = strings.TrimSpace(c.Store)
+	if c.Store == "" {
+		c.Store = vars["store"]
+	}
+	if c.Store == "" {
 		return errors.New("--store or CASES_STORE must name the case store directory")
 	}
+	c.Store = config.ExpandHome(c.Store)
 	return nil
 }
 
@@ -58,6 +67,9 @@ type Deps struct {
 	Stderr io.Writer
 	// Poll is how often `wait` checks the store.
 	Poll time.Duration
+	// Config is the config file that seeded the flag defaults, for the
+	// config commands.
+	Config *config.File
 	// Context ends serve. When nil, serve stops on SIGINT or SIGTERM. Signals
 	// are caught only inside serve, so every other command keeps the default
 	// behaviour of exiting on them.
@@ -72,25 +84,41 @@ type exitError struct {
 
 func (e *exitError) Error() string { return e.msg }
 
-func newParser(cli *CLI, opts ...kong.Option) (*kong.Kong, error) {
+// newParser builds the kong parser. cfg seeds flag defaults; main and the
+// test harness both build from here so they cannot drift.
+func newParser(cli *CLI, cfg *config.File, opts ...kong.Option) (*kong.Kong, error) {
+	configPath, _ := config.DefaultPath()
 	return kong.New(cli, append([]kong.Option{
 		kong.Name("cases"),
 		kong.Description("Raise, answer, pick up and close cases in a file-per-event store."),
 		kong.UsageOnError(),
-		kong.Vars{"version": fmt.Sprintf("cases %s (commit %s, built %s)", version, commit, date)},
+		kong.Vars{
+			"version": fmt.Sprintf("cases %s (commit %s, built %s)", version, commit, date),
+			"store":   config.DefaultStore(),
+			"config":  configPath,
+		},
+		kong.Resolvers(cfg.Resolver()),
 	}, opts...)...)
 }
 
 func main() {
 	var cli CLI
-	parser, err := newParser(&cli)
+	// A file that could not be read supplies no defaults; the failure is
+	// reported once the command is known, because `cases config` is how
+	// you find out what is wrong with it.
+	cfg, cfgErr := loadConfig(os.Args[1:])
+	parser, err := newParser(&cli, cfg)
 	if err != nil {
 		panic(err)
 	}
 	ctx, err := parser.Parse(os.Args[1:])
 	parser.FatalIfErrorf(err)
+	if cfgErr != nil && !diagnosesConfig(ctx) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", cfgErr)
+		os.Exit(1)
+	}
 
-	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second}
+	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg}
 	if err := ctx.Run(deps); err != nil {
 		var ee *exitError
 		if errors.As(err, &ee) {

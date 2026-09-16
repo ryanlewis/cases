@@ -1,6 +1,6 @@
 # cases
 
-CLI and local web inbox for a store of cases raised by an agent and answered by a human. The store is a directory with one directory per case and one JSON file per event (`NNNN-<author>-<event>.json`). State is the fold of those files in name order. The runtime is the Go standard library plus kong and goldmark.
+CLI and local web inbox for a store of cases raised by an agent and answered by a human. The store is a directory with one directory per case and one JSON file per event (`NNNN-<author>-<event>.json`). State is the fold of those files in name order. The runtime is the Go standard library plus kong, goldmark and go-toml.
 
 ## Workflow
 
@@ -32,7 +32,8 @@ make fmt     # gofmt -w . && goimports -w .
   - `lock_unix.go` — `flock` on the case directory. It stops two local writers taking the same sequence number; it does nothing across machines.
   - `describe.go` — `(*Case).Describe(ev)`, plain-text lines for an event, shared by `show` and the web thread.
 - `internal/web/` — `cases serve`. `web.go` holds the `Server`, routes, the request guard (Host must be the loopback listen address; POSTs with a foreign `Sec-Fetch-Site` or `Origin` get 403; CSP `default-src 'self'`) and the request log. `views.go` holds the handlers, view data and form parsing. Templates in `templates/` and `static/` are embedded. Reads go through one mutex-guarded `store.Poller`; POSTs load the case from disk and write through `store.Answer`, `store.Park` or `store.Resume`, then redirect.
-- `cmd/cases/` — kong CLI. One file per subcommand, each with a `_test.go` sibling. `Deps` carries the store path and the streams.
+- `internal/config/` — the TOML config file (`$XDG_CONFIG_HOME/cases/config.toml`). `Keys` is the allow-list of settings, each naming the flag it seeds. `Load` returns a `File` that is never nil, so `cases config` can report a broken file. `(*File).Resolver()` is a kong resolver; it yields nothing for a flag whose env var is set, so precedence is flag > env > file > default.
+- `cmd/cases/` — kong CLI. One file per subcommand, each with a `_test.go` sibling. `Deps` carries the store path, the streams and the loaded config. `main` and `runCases` both load the config off the argv before building the parser, and a config error stops every command except the `config` subcommands (marked by `diagnosesConfig`).
 
 ## Conventions
 
@@ -50,6 +51,6 @@ make fmt     # gofmt -w . && goimports -w .
 
 - Fold tests build events in memory with `fold(t, steps...)` in `internal/store/fold_test.go`. `TestTransitionMatrix` tries every event from every state against the lifecycle diagram. Add to it when the lifecycle changes.
 - Store tests use `t.TempDir()`. `fixClock` pins the event clock; `rename` can be swapped to fail a write.
-- CLI tests call `runCases(t, stdin, args...)` in `cmd/cases/main_test.go`. It parses with the real kong grammar and captures stdout and stderr. `Deps.Poll` is 10ms in tests.
+- CLI tests call `runCases(t, stdin, args...)` in `cmd/cases/main_test.go`. It parses with the real kong grammar and captures stdout and stderr. `Deps.Poll` is 10ms in tests. `TestMain` points `HOME` and the XDG directories at a scratch directory, so tests never see the developer's config file or default store; `writeConfig(t, body)` in `config_test.go` puts a file at the default location for one test.
 - Web tests (`internal/web`) use `newApp(t)` and `a.do(method, path, form, headers)` with `httptest`. Requests carry `Host: 127.0.0.1:8765` unless the test sets another.
 - `e2e_test.go` runs a decision case through open, answer, wait, pickup and close.
