@@ -178,7 +178,7 @@ cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
 cases pickup   ID [--by NAME]
 cases note     ID --body-file FILE|-
 cases close    ID --outcome-file FILE|- [--link URL]...
-cases withdraw ID
+cases withdraw ID [--reason TEXT]
 ```
 
 Human side:
@@ -217,7 +217,8 @@ Add `"note":"…"` to show a line under the row's label.
 
 `--worker`, `--brief` and `--context` on `open` set the fields described in
 [store format](#store-format). `--by` on `pickup` records who picked the case
-up, such as the agent session name.
+up, such as the agent session name. `--reason` on `withdraw` records why the
+case no longer needs an answer; `show` and the web thread print it.
 
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then

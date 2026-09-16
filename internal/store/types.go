@@ -179,6 +179,7 @@ type CloseRecord struct {
 
 // WithdrawRecord is the body of NNNN-agent-withdraw.json.
 type WithdrawRecord struct {
+	Reason      string    `json:"reason,omitempty"`
 	WithdrawnAt time.Time `json:"withdrawn_at"`
 }
 
