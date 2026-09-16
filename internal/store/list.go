@@ -73,7 +73,7 @@ func caseDirs(root string) ([]string, error) {
 const settle = 2 * time.Second
 
 // Poller lists a store repeatedly, reloading only the case directories whose
-// mtime has changed since the last poll. Adding an event file renames it into
+// mtime has changed since the last poll. Adding an event file adds an entry to
 // the case directory, which changes the directory's mtime.
 type Poller struct {
 	root    string

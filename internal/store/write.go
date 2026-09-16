@@ -21,8 +21,13 @@ const maxSlug = 48
 // now is the clock for event timestamps. Tests replace it.
 var now = func() time.Time { return time.Now().UTC() }
 
-// rename is os.Rename, replaceable so tests can fail the last step of a write.
-var rename = os.Rename
+// link, rename and remove are os.Link, os.Rename and os.Remove, replaceable so
+// tests can fail or race the last step of a write.
+var (
+	link   = os.Link
+	rename = os.Rename
+	remove = os.Remove
+)
 
 // CaseDir returns the directory for case id in the store root. It refuses an
 // id that would name anything other than a direct child of root.
@@ -142,12 +147,14 @@ func appendEvent(dir string, author Author, typ EventType, rec record) (*Case, e
 	return c, nil
 }
 
-// writeFileAtomic writes data to a temporary file in dir and renames it into
-// place, so a reader sees either no file or the whole file. The temporary name
-// starts with a dot, which the fold ignores. It refuses to replace a file that
-// already exists.
+// writeFileAtomic writes data to a temporary file in dir and then publishes it
+// under name, so a reader sees either no file or the whole file. The temporary
+// name starts with a dot, which the fold ignores. It refuses to replace a file
+// that already exists.
 func writeFileAtomic(dir, name string, data []byte) (err error) {
 	final := filepath.Join(dir, name)
+	// A cheap early refusal. It cannot see a file added after it runs;
+	// publish refuses that one.
 	if _, err := os.Lstat(final); err == nil {
 		return fmt.Errorf("%s already exists", final)
 	}
@@ -175,7 +182,7 @@ func writeFileAtomic(dir, name string, data []byte) (err error) {
 	if err = os.Chmod(tmp, 0o644); err != nil {
 		return err
 	}
-	if err = rename(tmp, final); err != nil {
+	if err = publish(tmp, final); err != nil {
 		return err
 	}
 	// Persist the new directory entry. A failure here does not undo the
@@ -185,6 +192,51 @@ func writeFileAtomic(dir, name string, data []byte) (err error) {
 		_ = d.Close()
 	}
 	return nil
+}
+
+// publish gives the complete temporary file tmp the name final. It refuses to
+// replace a file that already has the name, such as one a sync client added
+// after writeFileAtomic checked for it.
+//
+// It links rather than renames, because a link fails when the name is taken
+// and a rename would replace the file. Where hard links do not work (FAT,
+// exFAT, some network mounts, a sandbox that denies them) the link fails with
+// another error, and publish renames once it has checked that the name is
+// still free. A file added between that check and the rename is replaced.
+func publish(tmp, final string) error {
+	err := link(tmp, final)
+	if err == nil {
+		// The fold skips the temporary name if removing it fails.
+		_ = remove(tmp)
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		_, serr := os.Lstat(final)
+		if errors.Is(serr, fs.ErrNotExist) {
+			return rename(tmp, final)
+		}
+		if serr != nil {
+			return serr
+		}
+	}
+	// The name is taken, possibly by this link: on a network mount a link can
+	// go through and still report an error, as when a retried request finds
+	// the link the first one made.
+	if sameFile(tmp, final) {
+		_ = remove(tmp)
+		return nil
+	}
+	return fmt.Errorf("%s already exists", final)
+}
+
+// sameFile reports whether the names a and b are links to one file.
+func sameFile(a, b string) bool {
+	ai, err := os.Lstat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Lstat(b)
+	return err == nil && os.SameFile(ai, bi)
 }
 
 // Slug turns a title into the lowercase ASCII words-and-dashes part of a case
