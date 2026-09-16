@@ -39,6 +39,35 @@ func TestListOrderFilterAndJSON(t *testing.T) {
 	}
 }
 
+func TestListShowsLabels(t *testing.T) {
+	root := t.TempDir()
+	labelled := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "blocking", "--title", "Labelled", "--label", "round-1", "--label", "docs"))
+	plain := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Plain"))
+
+	lines := strings.Split(strings.TrimRight(mustRun(t, "--store", root, "list"), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("list has %d lines, want 3:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	// Every row starts its labels and title where the header does.
+	labelsAt, titleAt := strings.Index(lines[0], "LABELS"), strings.Index(lines[0], "TITLE")
+	for _, tt := range []struct {
+		line, id, labels, title string
+	}{
+		{lines[1], labelled, "round-1,docs", "Labelled"},
+		{lines[2], plain, "", "Plain"},
+	} {
+		if !strings.HasPrefix(tt.line, tt.id) {
+			t.Errorf("row %q is not case %s", tt.line, tt.id)
+		}
+		if got := strings.TrimSpace(tt.line[labelsAt:titleAt]); got != tt.labels {
+			t.Errorf("labels = %q, want %q in %q", got, tt.labels, tt.line)
+		}
+		if got := tt.line[titleAt:]; got != tt.title {
+			t.Errorf("title = %q, want %q in %q", got, tt.title, tt.line)
+		}
+	}
+}
+
 func TestListByLabelAndWorker(t *testing.T) {
 	root := t.TempDir()
 	open := func(title string, args ...string) string {

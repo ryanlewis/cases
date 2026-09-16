@@ -276,6 +276,19 @@ func TestLabelsAreShownAsText(t *testing.T) {
 			}
 		}
 	}
+
+	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	body := a.get(t, "/done")
+	if !strings.Contains(body, c.ID) || strings.Contains(body, "<i>round</i>") {
+		t.Errorf("/done does not list the case, or has the label unescaped:\n%s", body)
+	}
+	for _, w := range want {
+		if n := strings.Count(body, w); n != 1 {
+			t.Errorf("/done has %q %d times", w, n)
+		}
+	}
 }
 
 func TestRequestsAreLogged(t *testing.T) {
