@@ -16,12 +16,12 @@ type AnswerCmd struct {
 	Row     []string `help:"approval: a verdict per row as id=approve|hold|reject, optionally id=verdict:note. Repeat for every row." xor:"response" sep:"none" placeholder:"ID=VERDICT"`
 	Accept  bool     `help:"signoff: accept." xor:"response"`
 	Changes bool     `help:"signoff: request changes (needs --note)." xor:"response"`
-	Text    string   `help:"stuck: guidance for the worker." xor:"response"`
+	Text    string   `help:"stuck: guidance for the agent." xor:"response"`
 	Park    bool     `help:"stuck: park the case until someone resumes it." xor:"response"`
 	Drop    bool     `help:"stuck: drop the work." xor:"response"`
 	Ack     bool     `help:"fyi: acknowledge." xor:"response"`
 
-	Note string `help:"A note to the manager. Allowed with every response."`
+	Note string `help:"A note to the agent. Allowed with every response."`
 }
 
 func (c *AnswerCmd) Run(d *Deps) error {

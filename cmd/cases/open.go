@@ -16,9 +16,9 @@ type OpenCmd struct {
 	Option   []string `help:"An option for a decision case. Repeat per option; \"Other, see note\" is always offered." sep:"none" placeholder:"TEXT"`
 	Row      []string `help:"A row for an approval case, as a JSON object with id, label, script and link, e.g. '{\"id\":\"deps\",\"label\":\"Install deps\",\"script\":\"npm ci\",\"link\":\"https://…\"}'. Repeat per row." sep:"none" placeholder:"JSON"`
 	Link     []string `help:"A link to show with the case. Repeatable." sep:"none" placeholder:"URL"`
-	Worker   string   `help:"The worker waiting on this case."`
-	Brief    string   `help:"Path to the worker's brief, for re-briefing after parking."`
-	Context  string   `help:"Free-text context for the manager."`
+	Worker   string   `help:"The agent session waiting on this case."`
+	Brief    string   `help:"Path to the instructions that session started from, so the work can be restarted after parking."`
+	Context  string   `help:"Free-text context for the human, shown with the case."`
 }
 
 func (c *OpenCmd) Run(d *Deps) error {

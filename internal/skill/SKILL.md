@@ -16,7 +16,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 
 Every command reads and writes one store directory. Leave it alone unless told otherwise: the default comes from `CASES_STORE`, the config file (`cases config show` prints what is in use) or `~/.local/share/cases`. If you were told to use a store, pass `--store DIR` to every command, because the human and you must be looking at the same one.
 
-A case id is the name of its directory, such as `2026-09-15T09-12-03Z-pin-bun`. `cases open` prints it on stdout. Keep it; every other command takes it.
+A case id is the name of its directory, such as `2026-09-15T09-12-03Z-pin-bun-or-float`. `cases open` prints it on stdout. Keep it; every other command takes it.
 
 ## Lifecycle
 
@@ -72,7 +72,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--body-file` is markdown; `-` reads stdin. Write it for someone reading on a phone with no other context: what you are doing, what the question is, what each option costs, and what you recommend and why.
 - `--option` is for `decision` only and `--row` for `approval` only; they are refused on any other kind.
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
-- `--worker NAME` names the session or worker waiting on the case. `--brief PATH` is the path to that worker's brief, so it can be re-briefed if the case is parked. `--context TEXT` is free text for the manager.
+- `--worker NAME` names your session, the one waiting on the case. `--brief PATH` is the path to the instructions your session started from, so the work can be restarted if the case is parked. `--context TEXT` is free text shown to the human with the case.
 - Prints the new case id.
 
 ### `cases wait`
@@ -127,7 +127,7 @@ cases withdraw ID
 
 ```sh
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-id=$(cases open --kind decision --urgency today --worker "$WORKER" \
+id=$(cases open --kind decision --urgency today --worker bun-pins \
   --title "Pin bun or float?" --body-file question.md \
   --option "Pin to 1.2.3" --option "Float and fix the lockfile")
 
@@ -135,7 +135,7 @@ id=$(cases open --kind decision --urgency today --worker "$WORKER" \
 cases wait --id "$id" --since "$since" --timeout 2h
 
 cases show "$id" --json            # read .state and .answer
-cases pickup "$id" --by "$WORKER"
+cases pickup "$id" --by bun-pins
 # ... act on the answer ...
 echo "Pinned bun to 1.2.3 in abc123." | cases close "$id" --outcome-file - --link https://github.com/o/r/pull/12
 ```
@@ -149,6 +149,6 @@ When `wait` returns, read the case's `state` and act on it:
   - `stuck`: follow the `text`, or on `drop` stop that work. Close with what you did.
   - `fyi`: close with a short outcome, for example "Acknowledged".
 - `parked` — the human has set the work aside. Stop the work, do not pick up, and wait again with `--since` set to the case's `updated_at` from the line `wait` printed, not the old time: the park is later than the old time, so `wait` would return at once, again and again, and with no `--since` a resume that lands before `wait` starts is missed. The next event will be a `resume`.
-- `open` after a resume — re-read the brief and the thread, then wait for the answer, again with `--since` set to the case's new `updated_at`. If you are no longer stuck, withdraw the case.
+- `open` after a resume — re-read your instructions and the thread, then wait for the answer, again with `--since` set to the case's new `updated_at`. If you are no longer stuck, withdraw the case.
 
 If the answer is unclear, `pickup` and then `note` with the question, rather than guessing. Close every case you pick up: an unclosed case looks to the human like work still in progress.

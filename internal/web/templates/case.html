@@ -70,7 +70,7 @@
   {{else if eq $c.Kind "fyi"}}
   <input type="hidden" name="ack" value="1">
   {{end}}
-  <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the manager{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
+  <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the agent{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
   <div class="actions">
     <button type="submit" class="primary">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
     {{if eq $c.Kind "stuck"}}<button type="submit" name="park" value="1" formnovalidate>park</button>{{end}}

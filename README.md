@@ -1,30 +1,72 @@
 # cases
 
-`cases` is a small Go CLI for passing questions between an agent and a
-human. An agent opens a case: a decision to make, scripts to approve, work to
-sign off, a blocker, or something to know about. The human answers it. The
-agent picks the answer up and closes the case with what happened. Each case is
-a directory of JSON files, one file per event, so the store can sit in a synced
-folder such as an Obsidian vault. No server is needed.
+`cases` is a Go CLI for passing questions from a coding agent to a human and
+getting the answer back. The question is called a case.
 
-**Working with agents.** The binary carries a skill that teaches Claude Code,
-Codex and Pi when to open a case, how to wait for the answer and how to act on
-it. Install it once per agent; see [skill](#skill).
+1. The agent opens a case: a decision to make, scripts to approve, work to
+   sign off, a blocker, or something the human should know.
+2. The agent waits in the background.
+3. The human answers from the terminal or from a local web inbox
+   (`cases serve`).
+4. The agent picks up the answer, acts on it, and closes the case with what
+   happened.
+
+Each case is a directory of JSON files, one file per event, so the store can
+live in a synced folder. No server is needed.
+
+## Install
+
+The repository is private, so install from a checkout with Go on the path:
+
+```sh
+git clone git@github.com:ryanlewis/cases.git
+cd cases
+make install    # go install ./cmd/cases
+```
+
+Then install the agent skill. It teaches the agent when to open a case, how to
+wait for the answer and how to act on it. It supports Claude Code, Codex and
+Pi; see [skill](#skill).
 
 ```sh
 cases skill install claude    # also: codex, pi
 ```
 
+## A first case
+
+This runs one case end to end in the default store,
+`~/.local/share/cases`. In real use an agent runs the agent's commands; to try
+it, run both sides in one shell.
+
+```sh
+# Agent: raise a decision and wait for the answer in the background.
+# --since stops wait missing an answer that lands before it starts.
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "Pin bun to 1.2.3, or float it and fix the lockfile when it breaks?" > question.md
+id=$(cases open --kind decision --urgency blocking --title "Pin bun or float?" \
+  --body-file question.md --option "Pin to 1.2.3" --option "Float and fix the lockfile")
+cases wait --id "$id" --since "$since" --timeout 2h > answered.jsonl &
+
+# Human: answer it, from here or from the inbox that cases serve opens.
+cases answer "$id" --option 1 --note "Revisit after 1.3"
+
+# Agent: record that the answer was read, act on it, and close with the outcome.
+cases pickup "$id" --by bun-pins
+echo "Pinned in #12." | cases close "$id" --outcome-file -
+cases show "$id"
+```
+
 ## Store format
 
 The store is a directory. By default it is `$XDG_DATA_HOME/cases`, which is
-usually `~/.local/share/cases`; name another with `--store`, `CASES_STORE` or
+usually `~/.local/share/cases`. Name another with `--store`, `CASES_STORE` or
 the [config file](#configuration). Each case is a directory named after the
-time it was opened (UTC) and a slug of its title. Each write adds a new file:
+time it was opened (UTC) and a slug of its title. That name is the case id.
+Each write adds a new file:
 
 ```
 cases/
-  2026-09-15T09-12-03Z-kristi-chair/
+  2026-09-15T09-12-03Z-pin-bun-or-float/
     0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], worker, brief, context
     0002-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
     0003-agent-pickup.json     # picked_up_at, by
@@ -36,6 +78,11 @@ cases/
 File names are `NNNN-<author>-<event>.json`. The author is `agent` or `human`.
 The events are `open`, `answer`, `pickup`, `note`, `close`, `withdraw`, `park`
 and `resume`. Timestamps are RFC 3339 in UTC.
+
+The `worker`, `brief` and `context` fields on `open` are optional and help the
+human act on a case. `worker` names the agent session waiting on it. `brief`
+is the path to the instructions that session started from, so the work can be
+restarted after the case is parked. `context` is free text shown with the case.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
@@ -76,22 +123,11 @@ it as a warning on stderr). A case directory whose open event is damaged is
 reported and the other cases are still listed. Fields the CLI does not know are
 kept: `cases show --json` prints every event file as written.
 
-## Install
-
-The repository is private, so install from a checkout with Go on the path:
-
-```sh
-git clone git@github.com:ryanlewis/cases.git
-cd cases
-make install    # go install ./cmd/cases
-```
-
 ## Configuration
 
-A TOML file supplies defaults for `--store`, `--listen` and `--no-open`, so a store kept
-somewhere other than the default, such as an Obsidian vault, needs naming
-only once. Precedence is flag > environment variable > config file >
-built-in default.
+A TOML file supplies defaults for `--store`, `--listen` and `--no-open`, so a
+store kept outside the default location needs naming only once. Precedence is
+flag > environment variable > config file > built-in default.
 
 The file is read from `$XDG_CONFIG_HOME/cases/config.toml`, falling back to
 `~/.config/cases/config.toml`. Override the location with `--config PATH` or
@@ -110,7 +146,7 @@ cases config show    # print the defaults the environment and the file establish
 | `no-open` | `--no-open` on `serve` | nothing | `false` |
 
 ```toml
-store = "~/notes/work/assistant/cases"
+store = "~/Sync/cases"
 ```
 
 A leading `~` in `store` is expanded. `CASES_STORE` set to an empty string
@@ -150,9 +186,9 @@ cases resume ID [--agent]
 Both:
 
 ```
-cases list  [--state STATE,...] [--json]
-cases show  ID [--json]
-cases serve [--listen 127.0.0.1:8765] [--no-open]
+cases list   [--state STATE,...] [--json]
+cases show   ID [--json]
+cases serve  [--listen 127.0.0.1:8765] [--no-open]
 cases status [--json]
 ```
 
@@ -171,6 +207,10 @@ new state.
 `--row` on `open` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 
+`--worker`, `--brief` and `--context` on `open` set the fields described in
+[store format](#store-format). `--by` on `pickup` records who picked the case
+up, such as the agent session name.
+
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
 prints every case still waiting on the agent, one JSON object per line, and
@@ -184,13 +224,13 @@ starts if the store directory does not exist yet.
 
 ## serve
 
-`cases serve` runs a small web inbox over the same store and opens it in the
-browser (`open` on macOS, `xdg-open` elsewhere). Pass `--no-open`, or set
+`cases serve` runs a web inbox over the store and opens it in the browser
+(`open` on macOS, `xdg-open` elsewhere). Pass `--no-open`, or set
 `no-open = "true"` in the [config file](#configuration), to skip that.
 
 The default address is `127.0.0.1:8765`; change it with `--listen` or the
 `listen` key in the config file. Only loopback addresses (`127.0.0.1`, `::1`,
-`localhost`) are accepted for now.
+`localhost`) are accepted.
 
 On a terminal, serve shows a status screen that refreshes every second:
 
@@ -215,6 +255,8 @@ cases serve > serve.log
 
 Page refreshes that run every two seconds are not logged or counted.
 
+### Finding a running serve
+
 While it runs, serve records itself in a JSON file (`pid`, `url`, `addr`,
 `store`, `started_at`, `version`) in this machine's state directory:
 `$XDG_STATE_HOME/cases`, or `~/.local/state/cases`. The file is named
@@ -233,10 +275,13 @@ It exits 1 and prints `not running` when there is no live serve. A file left
 by a crash or `kill -9` counts as not running when its process is gone or
 nothing accepts connections on its address, and the next serve replaces it.
 Serve refuses to start while a live serve holds the file for the same store,
-and names that serve's URL and pid. The check cannot tell a hung serve from a
-healthy one, a store reached by two different paths (a symlink) gets two
-files, and two serves started at the same moment on one store can both pass
-the check.
+and names that serve's URL and pid.
+
+The check has three limits. It cannot tell a hung serve from a healthy one. A
+store reached by two different paths (a symlink) gets two files. Two serves
+started at the same moment on one store can both pass the check.
+
+### The inbox
 
 The inbox is laid out like a mail client. The left column lists open and
 parked cases, blocking first, then oldest first. The right side shows the
@@ -266,7 +311,7 @@ The tab title is the selected case's title, with the number of open blocking
 cases in front; the header shows the same count beside the `inbox` and `done`
 links. The list, the count and the thread refresh every two seconds. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
-`/`, which selects whichever case is now first.
+`/`, which selects whichever case is first.
 
 The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends
@@ -299,28 +344,6 @@ cases skill list             # each agent, where the skill goes, and whether it 
 overwrites an installed skill only after asking, or with `-y`; `uninstall`
 lists the files and asks, or needs `-y`. When stdin is not a terminal
 neither command asks: without `-y` they refuse.
-
-## Example
-
-```sh
-# Once: keep the store in the vault rather than ~/.local/share/cases.
-cases config init
-echo 'store = "~/notes/work/assistant/cases"' >> ~/.config/cases/config.toml
-
-# Agent: raise a decision and wait for it in the background.
-id=$(cases open --kind decision --urgency blocking --worker bun-pins \
-  --brief ~/briefs/bun-pins.md --title "Pin bun or float?" \
-  --body-file question.md --option "Pin to 1.2.3" --option "Float and fix the lockfile")
-cases wait --timeout 2h > answered.jsonl &
-
-# Human: answer it.
-cases answer "$id" --option 1 --note "Revisit after 1.3"
-
-# Agent: read the answer, act, and record the outcome.
-cases pickup "$id" --by manager
-echo "Pinned in #12." | cases close "$id" --outcome-file -
-cases show "$id"
-```
 
 ## Development
 

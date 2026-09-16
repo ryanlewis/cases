@@ -68,7 +68,7 @@ var Keys = []Key{
 			"Case store directory. Same as --store or $CASES_STORE. A leading ~",
 			"is expanded. Default: $XDG_DATA_HOME/cases, or ~/.local/share/cases.",
 		},
-		Example: `store = "~/notes/work/assistant/cases"`,
+		Example: `store = "~/Sync/cases"`,
 	},
 	{
 		Name:     "listen",
