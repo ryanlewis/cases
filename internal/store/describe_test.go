@@ -188,3 +188,119 @@ func TestAmendFilesFromAnEarlierBuild(t *testing.T) {
 		}
 	}
 }
+
+// TestDescribe pins the lines for every event type and answer shape, so the
+// thread in show and the web reads the same after a change to Describe.
+func TestDescribe(t *testing.T) {
+	open := func(kind Kind) step {
+		rec := openOf(kind)
+		rec.Context = "Release 1.4"
+		return agent(EventOpen, rec)
+	}
+	blank := func(kind Kind) step {
+		rec := openOf(kind)
+		rec.Body = " \n"
+		return agent(EventOpen, rec)
+	}
+	answer := func(rec AnswerRecord) step { return human(EventAnswer, rec) }
+	answered := []step{open(KindStuck), answer(answerOf(KindStuck)), pickupStep}
+
+	for _, tc := range []struct {
+		name  string
+		steps []step
+		want  []Line
+	}{
+		{"open", []step{open(KindFYI)}, nil},
+
+		{"amend option", []step{open(KindDecision), agent(EventAmend, AmendRecord{Options: []string{"Vendor it", "Drop bun"}})},
+			[]Line{{Text: "added option: Vendor it"}, {Text: "added option: Drop bun"}}},
+		{"amend row", []step{open(KindApproval), agent(EventAmend, AmendRecord{Rows: []Row{{ID: "c", Label: "Deploy", Script: "make deploy", Link: "https://example.com/c"}}})},
+			[]Line{{Text: "added row [c] Deploy"}}},
+		{"amend link", []step{open(KindFYI), agent(EventAmend, AmendRecord{Links: []string{"https://example.com/log"}})},
+			[]Line{{Text: "added link: https://example.com/log"}}},
+		{"amend label", []step{open(KindFYI), agent(EventAmend, AmendRecord{Labels: []string{"review"}})},
+			[]Line{{Text: "added label: review"}}},
+		{"amend body", []step{open(KindFYI), agent(EventAmend, AmendRecord{Body: "New body."})},
+			[]Line{{Text: "replaced the body", PreviousBody: "Body."}}},
+		{"amend blank body", []step{blank(KindFYI), agent(EventAmend, AmendRecord{Body: "New body."})},
+			[]Line{{Text: "replaced the body"}}},
+		{"amend same body", []step{open(KindFYI), agent(EventAmend, AmendRecord{Body: "Body.", Labels: []string{"review"}})},
+			[]Line{{Text: "added label: review"}}},
+		{"amend context", []step{open(KindFYI), agent(EventAmend, AmendRecord{Context: "Release 1.4.1"})},
+			[]Line{{Text: "replaced the context: Release 1.4.1", PreviousContext: "Release 1.4"}}},
+		{"amend multiline context", []step{open(KindFYI), agent(EventAmend, AmendRecord{Context: "Release 1.4.1\nafter the freeze\n"})},
+			[]Line{{Text: "replaced the context: Release 1.4.1"}, {Text: "after the freeze", PreviousContext: "Release 1.4"}}},
+		{"amend first context", []step{agent(EventOpen, openOf(KindFYI)), agent(EventAmend, AmendRecord{Context: "Release 1.4"})},
+			[]Line{{Text: "replaced the context: Release 1.4"}}},
+		{"amend same context", []step{open(KindFYI), agent(EventAmend, AmendRecord{Context: "Release 1.4", Labels: []string{"review"}})},
+			[]Line{{Text: "added label: review"}}},
+		{
+			"amend everything",
+			[]step{open(KindApproval), agent(EventAmend, AmendRecord{
+				Body:    "Three scripts now.",
+				Rows:    []Row{{ID: "c", Label: "Deploy", Script: "make deploy", Link: "https://example.com/c"}},
+				Links:   []string{"https://example.com/log"},
+				Labels:  []string{"review"},
+				Context: "Release 1.4.1",
+			})},
+			[]Line{
+				{Text: "replaced the body", PreviousBody: "Body."},
+				{Text: "added row [c] Deploy"},
+				{Text: "added link: https://example.com/log"},
+				{Text: "added label: review"},
+				{Text: "replaced the context: Release 1.4.1", PreviousContext: "Release 1.4"},
+			},
+		},
+
+		{"answer choice", []step{open(KindDecision), answer(AnswerRecord{Choice: 2})},
+			[]Line{{Text: "chose 2. Float"}}},
+		{"answer choice with note", []step{open(KindDecision), answer(AnswerRecord{Choice: 1, Note: "for now"})},
+			[]Line{{Text: "chose 1. Pin"}, {Text: "note: for now"}}},
+		{"answer other", []step{open(KindDecision), answer(AnswerRecord{Other: true, Note: "vendor it"})},
+			[]Line{{Text: "chose other"}, {Text: "note: vendor it"}}},
+		{"answer signoff accept", []step{open(KindSignoff), answer(AnswerRecord{Signoff: SignoffAccept})},
+			[]Line{{Text: "signoff: accept"}}},
+		{"answer signoff changes", []step{open(KindSignoff), answer(AnswerRecord{Signoff: SignoffChanges, Note: "rename it"})},
+			[]Line{{Text: "signoff: changes"}, {Text: "note: rename it"}}},
+		{"answer question", []step{open(KindQuestion), answer(AnswerRecord{Text: "The staging one."})},
+			[]Line{{Text: "reply: The staging one."}}},
+		{"answer stuck", []step{open(KindStuck), answer(AnswerRecord{Text: "Try the other mirror.\nThen retry.\n"})},
+			[]Line{{Text: "guidance: Try the other mirror."}, {Text: "Then retry."}}},
+		{"answer drop", []step{open(KindStuck), answer(AnswerRecord{Drop: true})},
+			[]Line{{Text: "drop"}}},
+		{"answer ack", []step{open(KindFYI), answer(AnswerRecord{Ack: true})},
+			[]Line{{Text: "acknowledged"}}},
+		{"answer rows", []step{open(KindApproval), answer(AnswerRecord{
+			Rows: []RowAnswer{{ID: "a", Verdict: VerdictApprove}, {ID: "b", Verdict: VerdictReject, Note: "not today"}},
+			Note: "one at a time",
+		})},
+			[]Line{{Text: "[a] approve"}, {Text: "[b] reject: not today"}, {Text: "note: one at a time"}}},
+
+		{"pickup", []step{open(KindStuck), answer(answerOf(KindStuck)), agent(EventPickup, PickupRecord{By: "bun-pins"})},
+			[]Line{{Text: "by bun-pins"}}},
+		{"pickup by nobody", []step{open(KindStuck), answer(answerOf(KindStuck)), agent(EventPickup, PickupRecord{})}, nil},
+		{"note", append(slices.Clone(answered), agent(EventNote, NoteRecord{Body: "  One more thing?\nThe mirror is down too.\n"})),
+			[]Line{{Text: "One more thing?"}, {Text: "The mirror is down too."}}},
+		{"close", append(slices.Clone(answered), agent(EventClose, CloseRecord{Outcome: "Done."})),
+			[]Line{{Text: "Done."}}},
+		{"close with links", append(slices.Clone(answered), agent(EventClose, CloseRecord{Outcome: "Merged.", Links: []string{"https://example.com/pr", "https://example.com/log"}})),
+			[]Line{{Text: "Merged."}, {Text: "https://example.com/pr"}, {Text: "https://example.com/log"}}},
+		{"withdraw", []step{open(KindFYI), agent(EventWithdraw, WithdrawRecord{})}, nil},
+		{"withdraw with reason", []step{open(KindFYI), agent(EventWithdraw, WithdrawRecord{Reason: "found it"})},
+			[]Line{{Text: "reason: found it"}}},
+		{"park", []step{open(KindStuck), human(EventPark, ParkRecord{})}, nil},
+		{"park with note", []step{open(KindStuck), human(EventPark, ParkRecord{Note: "after the release"})},
+			[]Line{{Text: "note: after the release"}}},
+		{"resume", []step{open(KindStuck), parkStep, resumeHuman}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, i, err := fold(t, tc.steps...)
+			if err != nil {
+				t.Fatalf("step %d: %v", i, err)
+			}
+			if got := c.Describe(c.Events[len(c.Events)-1]); !slices.Equal(got, tc.want) {
+				t.Errorf("Describe = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
