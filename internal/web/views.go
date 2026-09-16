@@ -476,6 +476,10 @@ func answerFromForm(c *store.Case, f url.Values) (rec store.AnswerRecord, park b
 			return rec, false, errors.New("choose accept or request changes")
 		}
 	case store.KindStuck:
+		// Park is its own button, not an answer; stuck=park is still read.
+		if f.Get("park") != "" || f.Get("stuck") == "park" {
+			return rec, true, nil
+		}
 		choice := f.Get("stuck")
 		if choice == "" && strings.TrimSpace(f.Get("text")) != "" {
 			// Guidance typed without ticking its button still means guidance.
@@ -484,14 +488,12 @@ func answerFromForm(c *store.Case, f url.Values) (rec store.AnswerRecord, park b
 		switch choice {
 		case "text":
 			if rec.Text = strings.TrimSpace(f.Get("text")); rec.Text == "" {
-				return rec, false, errors.New("write the guidance, or choose park or drop")
+				return rec, false, errors.New("write the guidance, or choose drop")
 			}
-		case "park":
-			return rec, true, nil
 		case "drop":
 			rec.Drop = true
 		default:
-			return rec, false, errors.New("choose guidance, park or drop")
+			return rec, false, errors.New("choose guidance or drop, or park it")
 		}
 	case store.KindFYI:
 		rec.Ack = f.Get("ack") != ""

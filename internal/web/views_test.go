@@ -149,7 +149,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 		},
 		{
 			kind:      store.KindStuck,
-			formParts: []string{`name="stuck" value="text"`, `name="text"`, `name="stuck" value="park"`, `name="stuck" value="drop"`},
+			formParts: []string{`name="stuck" value="text"`, `name="text"`, `name="stuck" value="drop"`, `name="park" value="1" formnovalidate>park</button>`},
 			form:      url.Values{"stuck": {"text"}, "text": {"use the mirror"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
@@ -215,14 +215,16 @@ func TestStuckParkAndResume(t *testing.T) {
 	c := a.open(t, openRecords[store.KindStuck])
 	origin := map[string]string{"Origin": "http://" + testAddr}
 
-	if w := a.do("POST", "/cases/"+c.ID+"/answer", url.Values{"stuck": {"park"}, "note": {"after release"}}, origin); w.Code != http.StatusSeeOther {
+	// The park button parks even with guidance ticked: the browser sends both.
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", url.Values{"stuck": {"text"}, "park": {"1"}, "note": {"after release"}}, origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("park: %d %s", w.Code, w.Body.String())
 	}
 	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-human-park.json"}) {
 		t.Errorf("files = %v", files)
 	}
 	page := a.get(t, "/cases/"+c.ID)
-	if !strings.Contains(page, `action="/cases/`+c.ID+`/resume"`) || !strings.Contains(page, "note: after release") {
+	if !strings.Contains(page, `action="/cases/`+c.ID+`/resume"`) || !strings.Contains(page, "note: after release") ||
+		!strings.Contains(page, `<span class="badge state parked">parked</span>`) || !strings.Contains(page, `class="card urgency-blocking parked selected"`) {
 		t.Errorf("parked page:\n%s", page)
 	}
 	if w := a.do("POST", "/cases/"+c.ID+"/resume", url.Values{}, origin); w.Code != http.StatusSeeOther {
@@ -482,5 +484,44 @@ func TestExternalLinksOpenInANewTab(t *testing.T) {
 	done := a.get(t, "/done")
 	if !strings.Contains(done, `<a href="https://example.com/pr/12" `+newTab+`>#12</a>`) || strings.Count(done, `target="_blank"`) != 1 {
 		t.Errorf("done page links:\n%s", done)
+	}
+}
+
+func TestEmptyAnswersAreRefused(t *testing.T) {
+	blank := "   "
+	forms := map[string]url.Values{
+		"nothing sent": {},
+		"blank fields": {"choice": {""}, "signoff": {""}, "stuck": {""}, "verdict.deps": {""}, "verdict.mig": {""}, "text": {""}, "note": {""}},
+		"whitespace":   {"text": {blank}, "note": {blank}, "note.deps": {blank}, "note.mig": {blank}},
+		"note only":    {"note": {"just a note"}},
+	}
+	for _, kind := range store.Kinds {
+		for name, form := range forms {
+			t.Run(string(kind)+"/"+name, func(t *testing.T) {
+				a := newApp(t)
+				c := a.open(t, openRecords[kind])
+				w := a.do("POST", "/cases/"+c.ID+"/answer", form, nil)
+				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `class="error"`) {
+					t.Errorf("status %d, want 422 with an error:\n%s", w.Code, w.Body.String())
+				}
+				if files := eventFiles(t, c.Dir); len(files) != 1 {
+					t.Errorf("files = %v", files)
+				}
+			})
+		}
+	}
+}
+
+func TestChoicesAreRequiredInTheBrowser(t *testing.T) {
+	a := newApp(t)
+	for kind, radios := range map[store.Kind]int{store.KindDecision: 3, store.KindApproval: 6, store.KindSignoff: 2, store.KindStuck: 0, store.KindFYI: 0} {
+		c := a.open(t, openRecords[kind])
+		page := a.get(t, "/cases/"+c.ID)
+		// Stuck is left to the server: guidance typed without ticking its
+		// button still counts, which a required radio group would block.
+		// fyi has nothing to choose.
+		if got := strings.Count(page, `type="radio" required`); got != radios {
+			t.Errorf("%s: %d required radios, want %d", kind, got, radios)
+		}
 	}
 }

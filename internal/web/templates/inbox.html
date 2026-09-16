@@ -5,7 +5,7 @@
 {{define "inbox-list"}}
 <div id="inbox" hx-get="/fragments/inbox{{with .Selected}}?selected={{.}}{{else}}{{if $.Empty}}?empty=1{{end}}{{end}}" hx-trigger="every 2s" hx-swap="outerHTML">
 {{range .Cards}}
-<a class="card urgency-{{.Urgency}}{{if eq .ID $.Selected}} selected{{end}}" href="/cases/{{.ID | pathEscape}}"{{if eq .ID $.Selected}} aria-current="page"{{end}}>
+<a class="card urgency-{{.Urgency}}{{if eq .State "parked"}} parked{{end}}{{if eq .ID $.Selected}} selected{{end}}" href="/cases/{{.ID | pathEscape}}"{{if eq .ID $.Selected}} aria-current="page"{{end}}>
   <div class="meta">
     <span class="badge urgency">{{.Urgency}}</span>
     <span>{{.Kind}}</span>

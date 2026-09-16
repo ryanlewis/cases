@@ -222,8 +222,9 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
   reloads when one arrives.
 - `/cases/ID` selects that case: the body rendered as markdown (GFM tables
   included), its links, a response form that fits the kind, and the thread.
-  Sending the form writes one answer (or, for a stuck case, a park). A parked
-  case has a Resume button.
+  Sending the form writes one answer. A stuck case has a separate `park`
+  button, which parks it instead, with the note if one is written. A parked
+  case has a `resume` button, and shows in the list with an ochre edge.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.
 

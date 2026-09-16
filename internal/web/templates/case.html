@@ -15,7 +15,7 @@
   <div class="meta urgency-{{$c.Urgency}}">
     <span class="badge urgency">{{$c.Urgency}}</span>
     <span>{{$c.Kind}}</span>
-    <span class="badge state">{{$c.State}}</span>
+    <span class="badge state{{if eq $c.State "parked"}} parked{{end}}">{{$c.State}}</span>
     {{with $c.Worker}}<span>{{.}}</span>{{end}}
     <span class="age">opened {{stamp $c.OpenedAt}}</span>
   </div>
@@ -36,9 +36,9 @@
   <fieldset>
     <legend>choose one</legend>
     {{range $i, $o := $c.Options}}{{$v := inc $i | print}}
-    <label class="choice"><input type="radio" name="choice" value="{{$v}}"{{if checked $form "choice" $v}} checked{{end}}> {{$o}}</label>
+    <label class="choice"><input type="radio" required name="choice" value="{{$v}}"{{if checked $form "choice" $v}} checked{{end}}> {{$o}}</label>
     {{end}}
-    <label class="choice"><input type="radio" name="choice" value="other"{{if checked $form "choice" "other"}} checked{{end}}> other, see note</label>
+    <label class="choice"><input type="radio" required name="choice" value="other"{{if checked $form "choice" "other"}} checked{{end}}> other, see note</label>
   </fieldset>
   {{else if eq $c.Kind "approval"}}
   {{range $c.Rows}}{{$verdict := print "verdict." .ID}}{{$note := print "note." .ID}}
@@ -47,9 +47,9 @@
     <p><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a></p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">
-      <label class="choice"><input type="radio" name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve</label>
-      <label class="choice"><input type="radio" name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> hold</label>
-      <label class="choice"><input type="radio" name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> reject</label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve</label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> hold</label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> reject</label>
     </div>
     <label>note on this row <input type="text" name="{{$note}}" value="{{formValue $form $note}}"></label>
   </fieldset>
@@ -57,26 +57,28 @@
   {{else if eq $c.Kind "signoff"}}
   <fieldset>
     <legend>sign off</legend>
-    <label class="choice"><input type="radio" name="signoff" value="accept"{{if checked $form "signoff" "accept"}} checked{{end}}> accept</label>
-    <label class="choice"><input type="radio" name="signoff" value="changes"{{if checked $form "signoff" "changes"}} checked{{end}}> request changes (comment required)</label>
+    <label class="choice"><input type="radio" required name="signoff" value="accept"{{if checked $form "signoff" "accept"}} checked{{end}}> accept</label>
+    <label class="choice"><input type="radio" required name="signoff" value="changes"{{if checked $form "signoff" "changes"}} checked{{end}}> request changes (comment required)</label>
   </fieldset>
   {{else if eq $c.Kind "stuck"}}
   <fieldset>
     <legend>unblock</legend>
     <label class="choice"><input type="radio" name="stuck" value="text"{{if checked $form "stuck" "text"}} checked{{end}}> give guidance</label>
     <label>guidance <textarea name="text" rows="4">{{formValue $form "text"}}</textarea></label>
-    <label class="choice"><input type="radio" name="stuck" value="park"{{if checked $form "stuck" "park"}} checked{{end}}> park it</label>
     <label class="choice"><input type="radio" name="stuck" value="drop"{{if checked $form "stuck" "drop"}} checked{{end}}> drop it</label>
   </fieldset>
   {{else if eq $c.Kind "fyi"}}
   <input type="hidden" name="ack" value="1">
   {{end}}
   <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the manager{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
-  <button type="submit" class="primary">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
+  <div class="actions">
+    <button type="submit" class="primary">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
+    {{if eq $c.Kind "stuck"}}<button type="submit" name="park" value="1" formnovalidate>park</button>{{end}}
+  </div>
 </form>
 {{else if eq $c.State "parked"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/resume" class="respond">
-  <button type="submit" class="primary">resume</button>
+  <div class="actions"><button type="submit">resume</button></div>
 </form>
 {{end}}
 

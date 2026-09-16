@@ -9,10 +9,11 @@
  * Broken: shout's black ground. The inbox is light-first warm paper like
  * relwatch, because it is visited when a case arrives, read and answered, and
  * left, often on a phone; it is skimmed, not sat in.
- * Broken: shout's rule that state is spelled and never coloured. Blocking
- * urgency is the one thing that must not be misread, so it alone has a hue:
- * the rail, the filled badge and the header tally. Everything else is
- * intensity, inversion and characters.
+ * Broken: shout's rule that state is spelled and never coloured. Two things
+ * must not be misread, so they alone have a hue: blocking urgency (red: the
+ * rail, the filled badge and the header tally) and parked (ochre, for on hold:
+ * the rail and a dashed badge). Everything else is intensity, inversion and
+ * characters.
  *
  * The face is the system mono stack, not shout's Google-hosted one: the page is
  * served from one local binary and CSP allows nothing from elsewhere.
@@ -22,7 +23,7 @@
   --bg: #fbfbfa; --bg-1: #f2f1ec; --bg-2: #e8e7e0;
   --fg: #1a1a18; --fg-1: #45453d; --fg-2: #6b6b64; --fg-3: #9c9c92;
   --rule: #d9d9d0; --rule-strong: #b0b0a5;
-  --blocking: #a11b2b;
+  --blocking: #a11b2b; --parked: #8a5a00;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   color-scheme: light dark;
 }
@@ -31,7 +32,7 @@
     --bg: #131312; --bg-1: #1f1f1c; --bg-2: #2a2a26;
     --fg: #ebebe3; --fg-1: #c2c2b8; --fg-2: #8e8e85; --fg-3: #62625b;
     --rule: #302f2b; --rule-strong: #55554d;
-    --blocking: #f2929c;
+    --blocking: #f2929c; --parked: #d8a657;
   }
 }
 
@@ -121,6 +122,8 @@ main:has(> .split) { max-width: none; padding: 0; }
   content: ">"; content: ">" / ""; position: absolute; left: 12px; font-weight: 700; color: var(--fg);
 }
 .card.urgency-blocking { border-left-color: var(--blocking); }
+/* Parked outranks urgency: nobody is waiting on it until it is resumed. */
+.card.parked { border-left-color: var(--parked); }
 .card h2 { margin: 4px 0; }
 .excerpt { margin: 0; font-size: 13px; line-height: 20px; color: var(--fg-2); }
 main > .card { padding: 12px 16px; margin: 0 0 8px; border: 1px solid var(--rule); border-left-width: 2px; }
@@ -132,7 +135,9 @@ main > .card h2 a { text-decoration: none; }
   border: 1px solid currentColor; white-space: nowrap;
 }
 .urgency-blocking .badge.urgency { color: var(--bg); background: var(--blocking); border-color: var(--blocking); font-weight: 700; }
-.badge.parked { color: var(--fg-3); border-style: dashed; }
+/* A parked card's urgency steps back to an outline, so parked is the loud thing. */
+.card.parked.urgency-blocking .badge.urgency, .meta.urgency-blocking:has(.badge.parked) .badge.urgency { color: var(--blocking); background: none; }
+.badge.parked, .badge.state.parked { color: var(--parked); border-style: dashed; font-weight: 700; }
 .badge.state { color: var(--fg); }
 
 .empty {
@@ -174,8 +179,13 @@ label { display: block; margin: 8px 0; }
 label.choice { display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 0; padding: 0 8px; cursor: pointer; }
 label.choice:hover { background: var(--bg-1); }
 label.choice:has(:checked) { background: var(--fg); color: var(--bg); }
-input[type=radio] { width: 16px; height: 16px; margin: 0; accent-color: var(--fg); flex: none; }
-label.choice:has(:checked) input { accent-color: var(--bg); }
+/* Drawn rather than native: a native radio in dark mode is a filled grey disc
+   that reads as chosen. Empty is a ring, chosen is a solid dot (○ / ●). */
+input[type=radio] {
+  appearance: none; flex: none; width: 16px; height: 16px; margin: 0; color: inherit;
+  border: 1px solid var(--fg-2); border-radius: 50%; background: transparent;
+}
+input[type=radio]:checked { background: currentColor; border-color: currentColor; }
 textarea, input[type=text] {
   display: block; width: 100%; margin-top: 4px; padding: 8px;
   font: inherit; font-size: 13px; line-height: 20px; color: var(--fg);
@@ -198,8 +208,10 @@ button:focus-visible { outline-offset: -1px; }
 
 /* The form's action is primary: a filled block, since emphasis here is
    inversion. Brackets stay for secondary actions. Hover swaps to an outline. */
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 24px 0 12px; }
+.actions button { margin: 0; }
 button.primary {
-  display: block; min-height: 44px; margin: 24px 0 12px; padding: 12px 24px;
+  display: block; min-height: 44px; margin: 0; padding: 12px 24px;
   font-size: 12px; font-weight: 700; letter-spacing: .06em;
   background: var(--fg); color: var(--bg); border: 1px solid var(--fg);
 }
@@ -229,5 +241,6 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
   .chips a { padding: 8px 12px; }
   textarea, input[type=text] { font-size: 16px; }
   button { display: block; width: 100%; min-height: 44px; border: 1px solid var(--rule-strong); }
+  .actions { flex-direction: column; align-items: stretch; gap: 8px; }
   button::before, button::after, button:active::before { content: none; }
 }
