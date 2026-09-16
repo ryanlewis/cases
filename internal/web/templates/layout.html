@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
 <title>{{template "title" .}}</title>
+<script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js"></script>
 </head>
@@ -13,7 +14,7 @@
 <a class="brand" href="/">cases</a>
 <span class="rule"></span>
 {{template "tally" .}}
-<nav class="chips"><a href="/"{{if eq .Nav "inbox"}} class="on" aria-current="page"{{end}}>inbox</a><a href="/done"{{if eq .Nav "done"}} class="on" aria-current="page"{{end}}>done</a></nav>
+<nav class="chips"><a href="/"{{if eq .Nav "inbox"}} class="on" aria-current="page"{{end}}>inbox</a><a href="/done"{{if eq .Nav "done"}} class="on" aria-current="page"{{end}}>done</a><a href="/options"{{if eq .Nav "options"}} class="on" aria-current="page"{{end}}>options</a></nav>
 </header>
 <main>
 {{template "content" .}}

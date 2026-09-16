@@ -255,3 +255,37 @@ func TestMissingStoreShowsAnEmptyInbox(t *testing.T) {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestOptionsPageAndPrefsScript(t *testing.T) {
+	a := newApp(t)
+	w := a.do("GET", "/static/prefs.js", nil, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Header().Get("Content-Type"), "javascript") {
+		t.Fatalf("prefs.js: status %d, type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+
+	page := a.get(t, "/options")
+	for _, want := range []string{
+		`<form id="options"`,
+		`name="theme" value="system" checked`, `name="theme" value="light"`, `name="theme" value="dark"`,
+		`name="face" value="mono" checked`, `name="face" value="sans"`, `name="face" value="serif"`,
+		`name="links" value="new" checked`, `name="links" value="same"`,
+		`<button type="button" id="options-reset">reset</button>`,
+		`<a href="/options" class="on" aria-current="page">options</a>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("options page missing %s", want)
+		}
+	}
+	// The script is a file loaded before the stylesheet, so stored choices
+	// apply before paint, and the page still has no inline script.
+	for _, target := range []string{"/", "/done", "/options"} {
+		body := a.get(t, target)
+		script := strings.Index(body, `<script src="/static/prefs.js"></script>`)
+		if script < 0 || script > strings.Index(body, `<link rel="stylesheet"`) || strings.Contains(body, "<script>") {
+			t.Errorf("%s: prefs.js not loaded before the stylesheet, or an inline script", target)
+		}
+	}
+	if csp := a.do("GET", "/options", nil, nil).Header().Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'self'") || strings.Contains(csp, "unsafe") {
+		t.Errorf("CSP = %q", csp)
+	}
+}

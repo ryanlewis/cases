@@ -19,22 +19,44 @@
  * served from one local binary and CSP allows nothing from elsewhere.
  */
 
+/* Themes follow ayn-thor-tracker: the system scheme unless /options stored
+   one, which prefs.js sets as data-theme before paint. The dark tokens appear
+   twice because a media query cannot share a block with a plain selector. */
 :root {
+  color-scheme: light;
   --bg: #fbfbfa; --bg-1: #f2f1ec; --bg-2: #e8e7e0;
   --fg: #1a1a18; --fg-1: #45453d; --fg-2: #6b6b64; --fg-3: #9c9c92;
   --rule: #d9d9d0; --rule-strong: #b0b0a5;
   --blocking: #a11b2b; --parked: #8a5a00;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-  color-scheme: light dark;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: ui-serif, Georgia, "Times New Roman", serif;
+  --prose: var(--mono);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #131312; --bg-1: #1f1f1c; --bg-2: #2a2a26;
     --fg: #ebebe3; --fg-1: #c2c2b8; --fg-2: #8e8e85; --fg-3: #62625b;
     --rule: #302f2b; --rule-strong: #55554d;
     --blocking: #f2929c; --parked: #d8a657;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #131312; --bg-1: #1f1f1c; --bg-2: #2a2a26;
+  --fg: #ebebe3; --fg-1: #c2c2b8; --fg-2: #8e8e85; --fg-3: #62625b;
+  --rule: #302f2b; --rule-strong: #55554d;
+  --blocking: #f2929c; --parked: #d8a657;
+}
+/* The prose face is for what someone wrote to be read: bodies, notes,
+   outcomes and excerpts. Labels, badges, buttons and code stay mono. */
+:root[data-face="sans"] { --prose: var(--sans); }
+:root[data-face="serif"] { --prose: var(--serif); }
+.body, .excerpt, .context { font-family: var(--prose); }
+.body pre, .body code, .body th { font-family: var(--mono); }
+.face-sans { font-family: var(--sans); }
+.face-serif { font-family: var(--serif); }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }

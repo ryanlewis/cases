@@ -103,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.inbox)
 	mux.HandleFunc("GET /fragments/inbox", s.inboxFragment)
 	mux.HandleFunc("GET /done", s.done)
+	mux.HandleFunc("GET /options", s.options)
 	mux.HandleFunc("GET /cases/{id}", s.casePage)
 	mux.HandleFunc("GET /cases/{id}/thread", s.threadFragment)
 	mux.HandleFunc("POST /cases/{id}/answer", s.answer)

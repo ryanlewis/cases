@@ -227,6 +227,10 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
   case has a `resume` button, and shows in the list with an ochre edge.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.
+- `/options` sets the theme (system, light or dark), the face for case bodies,
+  notes and outcomes (mono, sans or serif), and whether links to other sites
+  open in a new tab. The choices are kept in this browser's local storage, not
+  on the server, and apply at once; `reset` goes back to the defaults.
 
 After a successful answer, park or resume, the page moves to the case after it
 in the inbox, or to `/` if it was the last one. A parked case stays in the
