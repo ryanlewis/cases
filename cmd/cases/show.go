@@ -24,7 +24,7 @@ func (c *ShowCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	d.warn(cs)
+	d.warn(cs, nil)
 	if c.JSON {
 		enc := json.NewEncoder(d.Stdout)
 		enc.SetIndent("", "  ")

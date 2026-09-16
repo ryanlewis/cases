@@ -152,9 +152,18 @@ func (d *Deps) readText(path string) (string, error) {
 }
 
 // warn prints problems found while loading, without failing the command.
-func (d *Deps) warn(c *store.Case) {
+// When seen is not nil, a warning already in it is skipped and each one
+// printed is added, so a command that reloads the store says each only once.
+func (d *Deps) warn(c *store.Case, seen map[string]bool) {
 	for _, p := range c.Problems {
-		fmt.Fprintf(d.Stderr, "warning: %s: %s\n", c.ID, p)
+		msg := c.ID + ": " + p
+		if seen != nil {
+			if seen[msg] {
+				continue
+			}
+			seen[msg] = true
+		}
+		fmt.Fprintf(d.Stderr, "warning: %s\n", msg)
 	}
 }
 

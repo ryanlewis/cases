@@ -182,3 +182,24 @@ func TestWaitReportsAnAnswerWithoutTimestamp(t *testing.T) {
 		t.Errorf("wait printed %+v", got)
 	}
 }
+
+func TestWaitWarnsOnceAboutAMalformedAnswer(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	ch := startWait(t, root, "--timeout", "300ms")
+	// The answer is skipped when the case loads, so the case never needs the
+	// agent; the warning is the only sign that anything arrived.
+	if err := os.WriteFile(filepath.Join(root, id, "0002-human-answer.json"), []byte(`{"choice": `), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := <-ch
+	assertTimedOut(t, r)
+	// Wait polls every 10ms in tests, so the problem is seen on many polls.
+	want := "warning: " + id + ": 0002-human-answer.json: "
+	if n := strings.Count(r.stderr, want); n != 1 {
+		t.Errorf("stderr has %d warnings starting %q, want 1:\n%s", n, want, r.stderr)
+	}
+	if n := strings.Count(r.stderr, "warning: "); n != 1 {
+		t.Errorf("stderr has %d warnings, want 1:\n%s", n, r.stderr)
+	}
+}
