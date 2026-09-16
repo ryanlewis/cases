@@ -109,9 +109,10 @@ on every machine that uses the store before an agent amends a case.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
-decision log. Writes go to a temporary file (its name starts with a dot),
-which is then hard-linked to the event's file name and removed, so a reader
-never sees half a file. If a file already has that name, such as one a sync
+decision log until `cases prune` moves them to the [archive](#archive).
+Writes go to a temporary file (its name starts with a dot), which is then
+hard-linked to the event's file name and removed, so a reader never sees half
+a file. If a file already has that name, such as one a sync
 client added during the write, the write fails and that file is kept. Where
 hard links do not work (FAT, exFAT, some network mounts, or a sandbox that
 blocks them), the temporary file is renamed into place instead, once a check
@@ -145,6 +146,26 @@ closing a case that has not been picked up, is refused and nothing is written.
 
 Every answer may carry a `note`.
 
+### Archive
+
+`cases prune` moves whole case directories into `.archive` inside the store:
+
+```
+cases/
+  .archive/
+    2026-08-01T10-00-00Z-old-question/
+  2026-09-15T09-12-03Z-pin-bun-or-float/
+```
+
+`list`, `wait` and `serve` skip any directory whose name starts with a dot,
+and `show` looks for a case only at the top of the store, so an archived case
+is out of sight. Its files are as they were. To restore one, move its
+directory back:
+
+```sh
+mv ~/.local/share/cases/.archive/2026-08-01T10-00-00Z-old-question ~/.local/share/cases/
+```
+
 ### Damaged files
 
 A file that is not valid JSON, has an unexpected name, or records an event the
@@ -156,8 +177,9 @@ kept: `cases show --json` prints every event file as written.
 
 ## Configuration
 
-A TOML file supplies defaults for `--store`, `--listen` and `--no-open`, so a
-store kept outside the default location needs naming only once. Precedence is
+A TOML file supplies defaults for `--store`, `--listen`, `--no-open` and
+`prune --age`, so a store kept outside the default location needs naming only
+once, and a scheduled `cases prune --yes` needs no arguments. Precedence is
 flag > environment variable > config file > built-in default.
 
 The file is read from `$XDG_CONFIG_HOME/cases/config.toml`, falling back to
@@ -175,6 +197,7 @@ cases config show    # print the defaults the environment and the file establish
 | `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
 | `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
 | `no-open` | `--no-open` on `serve` | nothing | `false` |
+| `prune-age` | `--age` on `prune` | nothing | `720h` |
 
 ```toml
 store = "~/Sync/cases"
@@ -218,6 +241,7 @@ cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
 cases resume ID [--agent] [--revision N]
 cases sweep  [--reason TEXT] [--older-than DURATION] [--label TEXT]...
              [--worker NAME]... [--yes]
+cases prune  [--age DURATION] [--state closed,withdrawn] [--delete] [--yes]
 ```
 
 Both:
@@ -281,20 +305,33 @@ timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
 
-### Clearing the inbox
+### Clearing the inbox and pruning
 
-`sweep` changes many cases at once, so it only prints what it would do unless
-given `--yes` (`-y`).
+`sweep` and `prune` change many cases at once, so both only print what they
+would do unless given `--yes` (`-y`).
 
 `sweep` withdraws every open case that matches, with `--reason` recorded on
 each withdraw (default `swept`). `--label` and `--worker` filter as on `list`,
 and `--older-than DURATION` takes only cases opened longer ago than that.
 Withdraw is only allowed on an open case, so a matching case that is answered
 or parked is listed as left and not changed. Each withdraw is the same `agent`
-withdraw event `cases withdraw` writes, and goes through the same check. If one
-is refused, for example because the case changed state in the meantime, sweep
-carries on with the rest, then names the cases it could not withdraw and exits
-1.
+withdraw event `cases withdraw` writes, and goes through the same check. If one is refused, for example because the case
+changed state in the meantime, sweep carries on with the rest, then names the
+cases it could not withdraw and exits 1.
+
+`prune` takes closed and withdrawn cases whose last event is older than
+`--age` (a Go duration; default `720h`, or the `prune-age` config key; `0`
+means any age). `--state closed` or `--state withdrawn` narrows it to one of
+them; no other state is accepted. With `--yes` it moves each case directory to
+`.archive/<id>` in the store, see [Archive](#archive). If a directory of that
+name is already in the archive the case is left where it is, the others are
+still moved, and prune exits 1. `--delete` removes the case directories
+instead, and cannot be undone. A case directory that cannot be loaded is
+reported on stderr and left.
+
+`list` reads every case in the store on each run, so pruning keeps it fast as
+the history grows. To prune daily, run `cases prune --yes` from cron or a
+launchd job.
 
 ## serve
 

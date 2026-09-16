@@ -48,7 +48,8 @@ func configErr(path string, format string, args ...any) *Error {
 // environment variable that beats it, and the value that applies when
 // nothing sets it. Every key is a string.
 type Key struct {
-	Name     string        // TOML key, which is also the flag name
+	Name     string        // TOML key
+	Flag     string        // flag it seeds, when not the same as Name
 	Env      string        // environment variable that wins over the file, if any
 	Default  func() string // built-in default
 	Commands []string      // commands whose flags this key may seed; empty means all
@@ -89,6 +90,25 @@ var Keys = []Key{
 		},
 		Example: `no-open = "true"`,
 	},
+	{
+		Name:     "prune-age",
+		Flag:     "age",
+		Default:  func() string { return "720h" },
+		Commands: []string{"prune"},
+		Comment: []string{
+			"How long after its last event a closed or withdrawn case is pruned,",
+			"as a Go duration (h, m, s). Same as --age on cases prune.",
+		},
+		Example: `prune-age = "2160h"`,
+	},
+}
+
+// FlagName is the flag the key seeds.
+func (k Key) FlagName() string {
+	if k.Flag != "" {
+		return k.Flag
+	}
+	return k.Name
 }
 
 // KeyNames lists the key names in declaration order.
@@ -268,12 +288,14 @@ func (f *File) Resolver() kong.Resolver {
 		}
 	}
 	return kong.ResolverFunc(func(_ *kong.Context, parent *kong.Path, flag *kong.Flag) (any, error) {
-		v, ok := values[flag.Name]
-		if !ok {
+		i := slices.IndexFunc(Keys, func(k Key) bool {
+			return k.FlagName() == flag.Name && (len(k.Commands) == 0 || slices.Contains(k.Commands, parent.Node().Path()))
+		})
+		if i < 0 {
 			return nil, nil
 		}
-		key, _ := lookup(flag.Name)
-		if len(key.Commands) > 0 && !slices.Contains(key.Commands, parent.Node().Path()) {
+		v, ok := values[Keys[i].Name]
+		if !ok {
 			return nil, nil
 		}
 		// kong applies environment variables before resolvers run, and a
