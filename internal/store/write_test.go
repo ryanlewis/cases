@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -180,11 +181,14 @@ func TestAppendToMissingCase(t *testing.T) {
 	}
 }
 
+// Without hard links the last step is a rename. When it fails, the write fails
+// and leaves nothing behind.
 func TestAtomicWriteLeavesNothingOnFailure(t *testing.T) {
 	dir := t.TempDir()
-	orig := rename
+	origLink, origRename := link, rename
+	link = linkFails(syscall.EPERM)
 	rename = func(string, string) error { return errors.New("disk on fire") }
-	t.Cleanup(func() { rename = orig })
+	t.Cleanup(func() { link, rename = origLink, origRename })
 
 	if err := writeFileAtomic(dir, "0001-agent-open.json", []byte("{}")); err == nil {
 		t.Fatal("want an error")
@@ -194,29 +198,140 @@ func TestAtomicWriteLeavesNothingOnFailure(t *testing.T) {
 	}
 }
 
-func TestAtomicWrite(t *testing.T) {
+// linkFails returns a link that makes no link and fails with err.
+func linkFails(err error) func(string, string) error {
+	return func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: err}
+	}
+}
+
+// A sync client can add the event file after writeFileAtomic has checked that
+// the name is free. The last step must refuse it, not replace it: when the
+// link reports the name exists, and when the link is refused before the name
+// is looked up, as a macOS sandbox that denies hard links does.
+func TestAtomicWriteRefusesAFileAddedDuringTheWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		link func(string, string) error
+	}{
+		{"link finds the file", os.Link},
+		{"link denied", linkFails(syscall.EPERM)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			const synced = `{"choice":1}` + "\n"
+			orig := link
+			link = func(oldname, newname string) error {
+				writeFile(t, dir, "0002-human-answer.json", synced)
+				return tc.link(oldname, newname)
+			}
+			t.Cleanup(func() { link = orig })
+
+			checkErr(t, writeFileAtomic(dir, "0002-human-answer.json", []byte(`{"choice":2}`+"\n")), "already exists")
+			if got, _ := os.ReadFile(filepath.Join(dir, "0002-human-answer.json")); string(got) != synced {
+				t.Errorf("synced file changed to %q", got)
+			}
+			if names := fileNames(t, dir); !slices.Equal(names, []string{"0002-human-answer.json"}) {
+				t.Errorf("files = %v, want only the synced file (no temp left behind)", names)
+			}
+		})
+	}
+}
+
+// On a network mount a link can go through and still report an error, as when
+// a retried request finds the link the first one made. The event is written,
+// so the write must not fail: a retry would write the event twice.
+func TestAtomicWriteAcceptsItsOwnLink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"EEXIST", syscall.EEXIST},
+		{"EIO", syscall.EIO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := link
+			link = func(oldname, newname string) error {
+				if err := os.Link(oldname, newname); err != nil {
+					return err
+				}
+				return linkFails(tc.err)(oldname, newname)
+			}
+			t.Cleanup(func() { link = orig })
+
+			dir := t.TempDir()
+			data := []byte(`{"body":"all of it"}` + "\n")
+			if err := writeFileAtomic(dir, "0001-agent-note.json", data); err != nil {
+				t.Fatal(err)
+			}
+			if names := fileNames(t, dir); !slices.Equal(names, []string{"0001-agent-note.json"}) {
+				t.Errorf("files = %v, want only the final file (no temp left behind)", names)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "0001-agent-note.json")); err != nil || string(got) != string(data) {
+				t.Errorf("content = %q, err = %v", got, err)
+			}
+		})
+	}
+}
+
+// Removing the temporary name after the link only tidies up. If it fails, the
+// event is written all the same, and the write must say so.
+func TestAtomicWriteSucceedsWhenTheTemporaryNameStays(t *testing.T) {
+	orig := remove
+	remove = func(string) error { return errors.New("disk on fire") }
+	t.Cleanup(func() { remove = orig })
+
 	dir := t.TempDir()
 	data := []byte(`{"body":"all of it"}` + "\n")
 	if err := writeFileAtomic(dir, "0001-agent-note.json", data); err != nil {
 		t.Fatal(err)
 	}
-	if names := fileNames(t, dir); !slices.Equal(names, []string{"0001-agent-note.json"}) {
-		t.Errorf("files = %v, want only the final file (no temp left behind)", names)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "0001-agent-note.json"))
-	if err != nil || string(got) != string(data) {
+	if got, err := os.ReadFile(filepath.Join(dir, "0001-agent-note.json")); err != nil || string(got) != string(data) {
 		t.Errorf("content = %q, err = %v", got, err)
 	}
-	info, _ := os.Stat(filepath.Join(dir, "0001-agent-note.json"))
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("mode = %v", info.Mode().Perm())
-	}
-	if err := writeFileAtomic(dir, "0001-agent-note.json", []byte("{}")); err == nil {
-		t.Error("overwrote an existing event file")
-	}
-	got, _ = os.ReadFile(filepath.Join(dir, "0001-agent-note.json"))
-	if string(got) != string(data) {
-		t.Errorf("existing file changed to %q", got)
+}
+
+// TestAtomicWrite runs with hard links and without them, where publish renames
+// instead. Without hard links Linux fails the link with EPERM, macOS with
+// ENOTSUP, which is errors.ErrUnsupported.
+func TestAtomicWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		link func(string, string) error
+	}{
+		{"hard links", os.Link},
+		{"no hard links EPERM", linkFails(syscall.EPERM)},
+		{"no hard links ENOTSUP", linkFails(errors.ErrUnsupported)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := link
+			link = tc.link
+			t.Cleanup(func() { link = orig })
+
+			dir := t.TempDir()
+			data := []byte(`{"body":"all of it"}` + "\n")
+			if err := writeFileAtomic(dir, "0001-agent-note.json", data); err != nil {
+				t.Fatal(err)
+			}
+			if names := fileNames(t, dir); !slices.Equal(names, []string{"0001-agent-note.json"}) {
+				t.Errorf("files = %v, want only the final file (no temp left behind)", names)
+			}
+			got, err := os.ReadFile(filepath.Join(dir, "0001-agent-note.json"))
+			if err != nil || string(got) != string(data) {
+				t.Errorf("content = %q, err = %v", got, err)
+			}
+			info, _ := os.Stat(filepath.Join(dir, "0001-agent-note.json"))
+			if info.Mode().Perm() != 0o644 {
+				t.Errorf("mode = %v", info.Mode().Perm())
+			}
+			if err := writeFileAtomic(dir, "0001-agent-note.json", []byte("{}")); err == nil {
+				t.Error("overwrote an existing event file")
+			}
+			got, _ = os.ReadFile(filepath.Join(dir, "0001-agent-note.json"))
+			if string(got) != string(data) {
+				t.Errorf("existing file changed to %q", got)
+			}
+		})
 	}
 }
 

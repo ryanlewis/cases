@@ -86,8 +86,14 @@ restarted after the case is parked. `context` is free text shown with the case.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
-decision log. Writes go to a temporary file (its name starts with a dot) and
-are renamed into place, so a reader never sees half a file.
+decision log. Writes go to a temporary file (its name starts with a dot),
+which is then hard-linked to the event's file name and removed, so a reader
+never sees half a file. If a file already has that name, such as one a sync
+client added during the write, the write fails and that file is kept. Where
+hard links do not work (FAT, exFAT, some network mounts, or a sandbox that
+blocks them), the temporary file is renamed into place instead, once a check
+shows the name is still free. A file that arrives between that check and the
+rename is replaced.
 
 ### States
 
