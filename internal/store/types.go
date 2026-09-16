@@ -76,6 +76,7 @@ type EventType string
 
 const (
 	EventOpen     EventType = "open"
+	EventAmend    EventType = "amend"
 	EventAnswer   EventType = "answer"
 	EventPickup   EventType = "pickup"
 	EventNote     EventType = "note"
@@ -126,6 +127,18 @@ type OpenRecord struct {
 	Brief    string    `json:"brief,omitempty"`
 	Context  string    `json:"context,omitempty"`
 	OpenedAt time.Time `json:"opened_at"`
+}
+
+// AmendRecord is the body of NNNN-agent-amend.json: a change to an open case.
+// Options, rows and links are added after the case's own; a body or context
+// replaces the case's. A field left empty leaves the case's as it was.
+type AmendRecord struct {
+	Body      string    `json:"body,omitempty"`
+	Options   []string  `json:"options,omitempty"`
+	Rows      []Row     `json:"rows,omitempty"`
+	Links     []string  `json:"links,omitempty"`
+	Context   string    `json:"context,omitempty"`
+	AmendedAt time.Time `json:"amended_at"`
 }
 
 // RowAnswer is the verdict on one approval row.
@@ -202,6 +215,7 @@ type record interface {
 }
 
 func (r *OpenRecord) at() time.Time     { return r.OpenedAt }
+func (r *AmendRecord) at() time.Time    { return r.AmendedAt }
 func (r *AnswerRecord) at() time.Time   { return r.AnsweredAt }
 func (r *PickupRecord) at() time.Time   { return r.PickedUpAt }
 func (r *NoteRecord) at() time.Time     { return r.NotedAt }
@@ -211,6 +225,7 @@ func (r *ParkRecord) at() time.Time     { return r.ParkedAt }
 func (r *ResumeRecord) at() time.Time   { return r.ResumedAt }
 
 func (r *OpenRecord) stamp(t time.Time)     { r.OpenedAt = stampTime(r.OpenedAt, t) }
+func (r *AmendRecord) stamp(t time.Time)    { r.AmendedAt = stampTime(r.AmendedAt, t) }
 func (r *AnswerRecord) stamp(t time.Time)   { r.AnsweredAt = stampTime(r.AnsweredAt, t) }
 func (r *PickupRecord) stamp(t time.Time)   { r.PickedUpAt = stampTime(r.PickedUpAt, t) }
 func (r *NoteRecord) stamp(t time.Time)     { r.NotedAt = stampTime(r.NotedAt, t) }

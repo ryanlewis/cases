@@ -31,6 +31,7 @@ type CLI struct {
 	Version kong.VersionFlag `help:"Print version and exit." short:"v"`
 
 	Open     OpenCmd     `cmd:"" help:"Open a case (agent)."`
+	Amend    AmendCmd    `cmd:"" help:"Add options, rows or links to an open case, or replace its body or context (agent)."`
 	List     ListCmd     `cmd:"" help:"List cases."`
 	Show     ShowCmd     `cmd:"" help:"Show one case and its thread."`
 	Wait     WaitCmd     `cmd:"" help:"Block until a human answers, parks or resumes a case, then print the cases waiting on the agent as JSON lines (agent)."`

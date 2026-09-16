@@ -207,6 +207,58 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 	}
 }
 
+// A case amended after its page was loaded: the page shows the case as
+// amended, a form from the older page is refused, and an answer needs a
+// verdict on the added row.
+func TestAmendedCase(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	c := a.open(t, openRecords[store.KindApproval])
+	before := a.get(t, "/cases/"+c.ID)
+	if _, err := store.Amend(c.Dir, store.AmendRecord{
+		Body:  "Now with a **deploy**.",
+		Rows:  []store.Row{{ID: "deploy", Label: "Deploy", Script: "make deploy", Link: "https://example.com/deploy"}},
+		Links: []string{"https://example.com/log"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page := a.get(t, "/cases/"+c.ID)
+	for _, want := range []string{
+		"Now with a <strong>deploy</strong>.",
+		`name="verdict.deploy" value="approve"`,
+		"<pre>make deploy</pre>",
+		`<a href="https://example.com/log"`,
+		"<span>amend</span>",
+		"<p>replaced the body</p>",
+		"<p>added row [deploy] Deploy</p>",
+		"<p>added link: https://example.com/log</p>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page missing %q:\n%s", want, page)
+		}
+	}
+
+	// The page loaded before the amend has no added row. Its form is refused
+	// as stale, and the case is shown again as amended.
+	form := url.Values{"verdict.deps": {"approve"}, "verdict.mig": {"approve"}}
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, pageRevision(t, before)), origin)
+	if body := w.Body.String(); w.Code != http.StatusConflict || !strings.Contains(body, staleForm) || !strings.Contains(body, `name="verdict.deploy"`) {
+		t.Errorf("answer from before the amend: %d %s", w.Code, body)
+	}
+	rev := pageRevision(t, page)
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, rev), origin); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "reject for &#34;Deploy&#34;") {
+		t.Errorf("answer without the added row: %d %s", w.Code, w.Body.String())
+	}
+	form.Set("verdict.deploy", "hold")
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, rev), origin); w.Code != http.StatusSeeOther {
+		t.Errorf("answer with every row: %d %s", w.Code, w.Body.String())
+	}
+	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-agent-amend.json", "0003-human-answer.json"}) {
+		t.Errorf("files = %v", files)
+	}
+}
+
 func TestBodyRendersGFMTable(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{

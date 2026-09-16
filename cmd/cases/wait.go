@@ -20,7 +20,8 @@ type WaitCmd struct {
 
 // needsAgent reports whether the case is waiting on the agent, and the event
 // that put it there: its last event is a human answer, park or resume. Once
-// the agent picks up, notes, closes or withdraws, the case no longer counts.
+// the agent picks up, notes, amends, closes or withdraws, the case no longer
+// counts.
 func needsAgent(c *store.Case) (store.Event, bool) {
 	if len(c.Events) == 0 {
 		return store.Event{}, false
