@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +36,7 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 
 type testApp struct {
 	root    string
+	server  *Server
 	handler http.Handler
 	log     *lockedBuffer
 }
@@ -45,7 +49,7 @@ func newApp(t *testing.T) *testApp {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testApp{root: root, handler: s.Handler(), log: log}
+	return &testApp{root: root, server: s, handler: s.Handler(), log: log}
 }
 
 // do sends a request addressed to the server's own host unless headers say
@@ -88,6 +92,32 @@ func (a *testApp) open(t *testing.T, rec store.OpenRecord) *store.Case {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// withRevision returns a copy of form carrying rev, as the form on a page
+// rendered from the case at that revision does. form may be nil.
+func withRevision(form url.Values, rev int) url.Values {
+	out := url.Values{}
+	maps.Copy(out, form)
+	out.Set("revision", strconv.Itoa(rev))
+	return out
+}
+
+// revisionField is the hidden field a page's form carries the revision in.
+var revisionField = regexp.MustCompile(`<input type="hidden" name="revision" value="(\d+)">`)
+
+// pageRevision returns the revision the form on a page carries.
+func pageRevision(t *testing.T, page string) int {
+	t.Helper()
+	m := revisionField.FindStringSubmatch(page)
+	if m == nil {
+		t.Fatalf("page has no revision field:\n%s", page)
+	}
+	rev, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rev
 }
 
 func eventFiles(t *testing.T, dir string) []string {
@@ -167,7 +197,7 @@ func TestHostMustBeTheServer(t *testing.T) {
 func TestCrossSitePostsAreRejected(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up"})
-	form := url.Values{"ack": {"1"}}
+	form := withRevision(url.Values{"ack": {"1"}}, 1)
 	target := "/cases/" + c.ID + "/answer"
 
 	for name, headers := range map[string]map[string]string{

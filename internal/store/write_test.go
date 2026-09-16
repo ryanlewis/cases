@@ -364,6 +364,138 @@ func TestConcurrentAppendsTakeDistinctSequenceNumbers(t *testing.T) {
 	}
 }
 
+func TestAtRevision(t *testing.T) {
+	c, err := Create(t.TempDir(), openOf(KindStuck))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := c.Revision()
+	// Answered and reopened by a follow-up since it was read: the case is open
+	// again, as it was then.
+	if _, err := Answer(c.Dir, answerOf(KindStuck)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Note(c.Dir, NoteRecord{Body: "Which mirror?"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func() (*Case, error){
+		"answer at the revision read": func() (*Case, error) { return Answer(c.Dir, AnswerRecord{Drop: true}, AtRevision(read)) },
+		"park at the revision read":   func() (*Case, error) { return Park(c.Dir, ParkRecord{}, AtRevision(read)) },
+		"park ahead of the case":      func() (*Case, error) { return Park(c.Dir, ParkRecord{}, AtRevision(4)) },
+		"answer at revision 0":        func() (*Case, error) { return Answer(c.Dir, AnswerRecord{Drop: true}, AtRevision(0)) },
+	} {
+		if _, err := call(); !errors.Is(err, ErrStale) {
+			t.Errorf("%s: err = %v, want ErrStale", name, err)
+		}
+	}
+	if got := fileNames(t, c.Dir); len(got) != 3 {
+		t.Fatalf("files after refused writes = %v", got)
+	}
+
+	// At the current revision the write goes through and raises it.
+	parked, err := Park(c.Dir, ParkRecord{}, AtRevision(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parked.Revision() != 4 {
+		t.Errorf("revision after park = %d, want 4", parked.Revision())
+	}
+	// Without a precondition a write is unconditional, as the CLI makes it.
+	if _, err := Resume(c.Dir, AuthorAgent, ResumeRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	// Resumed since revision 4, the case is open: a resume at 4 is refused as
+	// stale rather than as a resume of an open case.
+	if _, err := Resume(c.Dir, AuthorHuman, ResumeRecord{}, AtRevision(4)); !errors.Is(err, ErrStale) {
+		t.Errorf("resume at revision 4: err = %v, want ErrStale", err)
+	}
+	if _, err := Park(c.Dir, ParkRecord{}, AtRevision(5)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resume(c.Dir, AuthorHuman, ResumeRecord{}, AtRevision(6)); err != nil {
+		t.Fatal(err)
+	}
+	answered, err := Answer(c.Dir, AnswerRecord{Drop: true}, AtRevision(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answered.State != StateAnswered || answered.Revision() != 8 || len(fileNames(t, c.Dir)) != 8 {
+		t.Errorf("after answer: state %s, revision %d, files %v", answered.State, answered.Revision(), fileNames(t, c.Dir))
+	}
+}
+
+// The flock does nothing across machines, so a sync can bring in an event with
+// a sequence number the case already has, or one below its latest. Either one
+// changes the case, and a write at the revision read before it is refused.
+func TestAtRevisionSeesSyncedEvents(t *testing.T) {
+	c, err := Create(t.TempDir(), openOf(KindDecision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := Note(c.Dir, NoteRecord{Body: "More detail."}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read, err := Load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Answered on another machine that had only seen the open event. The last
+	// note reopens the case, so it is open again, as it was when read.
+	writeFile(t, c.Dir, "0002-human-answer.json", `{"choice":1}`)
+	if _, err := Answer(c.Dir, AnswerRecord{Choice: 1}, AtRevision(read.Revision())); !errors.Is(err, ErrStale) {
+		t.Errorf("same sequence number: err = %v, want ErrStale", err)
+	}
+
+	// Synced out of order: a later event arrives before the ones below it.
+	d, err := Create(t.TempDir(), openOf(KindDecision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, d.Dir, "0004-agent-note.json", `{"body":"Still waiting."}`)
+	read, err = Load(d.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, d.Dir, "0002-human-answer.json", `{"choice":1}`)
+	writeFile(t, d.Dir, "0003-agent-pickup.json", `{}`)
+	if _, err := Answer(d.Dir, AnswerRecord{Choice: 1}, AtRevision(read.Revision())); !errors.Is(err, ErrStale) {
+		t.Errorf("out of order: err = %v, want ErrStale", err)
+	}
+	if got := fileNames(t, d.Dir); len(got) != 4 {
+		t.Errorf("files after refused write = %v", got)
+	}
+}
+
+func TestAtRevisionIsCheckedUnderTheLock(t *testing.T) {
+	c, err := Create(t.TempDir(), openOf(KindFYI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockDir(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := Answer(c.Dir, AnswerRecord{Ack: true}, AtRevision(c.Revision()))
+		errc <- err
+	}()
+	// Another writer holds the lock and adds a note while the answer waits for
+	// it. The pause does not decide the result; it gives a check made before
+	// taking the lock time to run and pass, so the test would catch one.
+	time.Sleep(50 * time.Millisecond)
+	writeFile(t, c.Dir, "0002-agent-note.json", `{"body":"One more thing."}`)
+	unlock()
+	if err := <-errc; !errors.Is(err, ErrStale) {
+		t.Fatalf("err = %v, want ErrStale", err)
+	}
+	if got := fileNames(t, c.Dir); len(got) != 2 {
+		t.Errorf("files = %v", got)
+	}
+}
+
 func TestWrittenRecordShape(t *testing.T) {
 	fixClock(t, time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC))
 	c, err := Create(t.TempDir(), openOf(KindDecision))

@@ -32,6 +32,7 @@
 {{if eq $c.State "open"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/answer" class="respond">
   {{$form := .Form}}
+  <input type="hidden" name="revision" value="{{$c.Revision}}">
   {{if eq $c.Kind "decision"}}
   <fieldset>
     <legend>choose one</legend>
@@ -78,6 +79,7 @@
 </form>
 {{else if eq $c.State "parked"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/resume" class="respond">
+  <input type="hidden" name="revision" value="{{$c.Revision}}">
   <div class="actions"><button type="submit">resume</button></div>
 </form>
 {{end}}

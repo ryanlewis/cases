@@ -317,11 +317,21 @@ After a successful answer, park or resume, the page moves to the case after it
 in the inbox, or to `/` if it was the last one. A parked case stays in the
 inbox. If the form is refused, the same case is shown again with the error.
 
+Each form carries the case's revision from when the page was loaded: the
+number of event files the case had. If an event has been added to the case
+since, including one a sync brought in from another machine, the form is
+refused and nothing is written. The case is shown again as it is now, so the
+thread can be read before sending again; if the case is still open, the form
+keeps what was typed. This stops a tab left open from answering a case that was
+answered somewhere else and then reopened by a note.
+
 The tab title is the selected case's title, with the number of open blocking
 cases in front; the header shows the same count beside the `inbox` and `done`
 links. The list, the count and the thread refresh every two seconds. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
-`/`, which selects whichever case is first.
+`/`, which selects whichever case is first. A change that leaves the state as
+it was, such as a note on an open case, only updates the thread, so what has
+been typed is kept; sending the form is then refused as described above.
 
 The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends

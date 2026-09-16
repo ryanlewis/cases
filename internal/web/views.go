@@ -359,7 +359,10 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 // stale, so it sends htmx to the case page with a fresh GET. A reload would
 // be wrong: the page may be the re-rendered result of a failed POST, and
 // reloading it would post the form again. On / (home=1) it sends htmx to /,
-// which shows whichever case is now first.
+// which shows whichever case is now first. A change that leaves the state as
+// it was, such as an answer and then a note that reopens the case, only
+// updates the thread, so what the human has typed is kept: the form's
+// revision is out of date by then, and sending it gets a 409.
 func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 	c, _, err := s.find(r.PathValue("id"))
 	if err != nil {
@@ -414,16 +417,25 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	}
 	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
+	// A form from a page older than the case is refused before its answer is
+	// read, so a mistake in the form cannot show the page again at the new
+	// revision without saying the case has changed. The store checks the
+	// revision again while the case is locked.
+	rev := revisionParam(r.PostForm)
+	if rev != c.Revision() {
+		s.refuse(w, c, cases, store.ErrStale, r.PostForm)
+		return
+	}
 	rec, park, err := answerFromForm(c, r.PostForm)
 	if err == nil {
 		if park {
-			_, err = store.Park(dir, store.ParkRecord{Note: rec.Note})
+			_, err = store.Park(dir, store.ParkRecord{Note: rec.Note}, store.AtRevision(rev))
 		} else {
-			_, err = store.Answer(dir, rec)
+			_, err = store.Answer(dir, rec, store.AtRevision(rev))
 		}
 	}
 	if err != nil {
-		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), r.PostForm)
+		s.refuse(w, c, cases, err, r.PostForm)
 		return
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
@@ -436,11 +448,42 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
-	if _, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{}); err != nil {
-		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), nil)
+	if _, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
+		s.refuse(w, c, cases, err, nil)
 		return
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// revisionParam is the revision of the case a page was rendered from, as the
+// page's forms send it back. A form from a page served before forms carried
+// one sends none and gets -1, which no case is at.
+func revisionParam(v url.Values) int {
+	rev, err := strconv.Atoi(v.Get("revision"))
+	if err != nil {
+		return -1
+	}
+	return rev
+}
+
+// staleForm is the error for a form sent from a page rendered before the case
+// last changed. The change may be the same form sent a moment earlier, so it
+// does not say that nothing was recorded.
+const staleForm = "this case changed after the page was loaded, so this was not recorded. check the thread before trying again"
+
+// refuse shows the case again with the reason a post wrote nothing. A stale
+// post is shown the case as it is on disk now, not as the handler loaded it:
+// the event that made the post stale can land after that load. The page then
+// carries the case's current revision, so the form can be sent again.
+func (s *Server) refuse(w http.ResponseWriter, c *store.Case, cases []*store.Case, err error, form url.Values) {
+	if !errors.Is(err, store.ErrStale) {
+		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), form)
+		return
+	}
+	if now, lerr := store.Load(c.Dir); lerr == nil {
+		c = now
+	}
+	s.renderCase(w, http.StatusConflict, c, cases, false, staleForm, form)
 }
 
 // answerFromForm turns the posted response form into an answer. park is true
