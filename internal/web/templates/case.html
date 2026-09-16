@@ -72,11 +72,11 @@
   <input type="hidden" name="ack" value="1">
   {{end}}
   <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the manager{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
-  <button type="submit">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
+  <button type="submit" class="primary">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
 </form>
 {{else if eq $c.State "parked"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/resume" class="respond">
-  <button type="submit">resume</button>
+  <button type="submit" class="primary">resume</button>
 </form>
 {{end}}
 

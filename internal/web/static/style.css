@@ -196,6 +196,20 @@ button:hover, button:hover::before, button:hover::after { background: var(--fg);
 button:active::before { content: "*"; }
 button:focus-visible { outline-offset: -1px; }
 
+/* The form's action is primary: a filled block, since emphasis here is
+   inversion. Brackets stay for secondary actions. Hover swaps to an outline. */
+button.primary {
+  display: block; min-height: 44px; margin: 24px 0 12px; padding: 12px 24px;
+  font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  background: var(--fg); color: var(--bg); border: 1px solid var(--fg);
+}
+button.primary::before, button.primary::after { content: none; }
+button.primary:hover { background: var(--bg); color: var(--fg); }
+button.primary:active { transform: translateY(1px); }
+/* A dashed --fg ring would vanish into the fill, so it is --bg and inset. */
+button.primary:focus-visible { outline: 1px dashed var(--bg); outline-offset: -5px; }
+button.primary:hover:focus-visible { outline-color: var(--fg); }
+
 /* The thread: a stream with [author] prefixes and dashed separators. */
 .thread { list-style: none; padding: 0; margin: 0; }
 .event { padding: 12px 0; border-top: 1px dashed var(--rule); }
