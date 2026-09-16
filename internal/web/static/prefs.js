@@ -3,7 +3,8 @@
 // Loaded blocking from <head>, so the stored choices are set as data
 // attributes on <html> before the stylesheet paints. The first value of each
 // option is its default and leaves the attribute off. To add an option, add a
-// row here, CSS keyed on its attribute, and a radio group on /options.
+// row here, CSS keyed on its attribute, and a radio group in the options
+// dialog in layout.html.
 (function () {
   "use strict";
 
@@ -33,7 +34,7 @@
   OPTIONS.forEach(apply);
 
   // Pages already open in other tabs, or restored from the back-forward cache
-  // after a change on /options, pick up the stored choices without a reload.
+  // after a change in the options dialog, pick up the stored choices without a reload.
   function applyAll() { OPTIONS.forEach(apply); }
   window.addEventListener("storage", applyAll);
   window.addEventListener("pageshow", function (e) { if (e.persisted) applyAll(); });
@@ -63,6 +64,26 @@
         }
       });
     });
+    // The dialog closes itself on Escape and on its close button (a
+    // method=dialog form); a click that lands on the dialog element and not
+    // its form is a click on the backdrop. The press must start there too, so
+    // a drag that begins inside the form and ends outside does not close it.
+    var dialog = document.getElementById("options-dialog");
+    var open = document.getElementById("options-open");
+    if (dialog && open && dialog.showModal) {
+      open.addEventListener("click", function () {
+        show();
+        dialog.showModal();
+      });
+      var downOnBackdrop = false;
+      dialog.addEventListener("pointerdown", function (e) {
+        downOnBackdrop = e.target === dialog;
+      });
+      dialog.addEventListener("click", function (e) {
+        if (e.target === dialog && downOnBackdrop) dialog.close();
+        downOnBackdrop = false;
+      });
+    }
     var reset = document.getElementById("options-reset");
     if (reset) {
       reset.addEventListener("click", function () {

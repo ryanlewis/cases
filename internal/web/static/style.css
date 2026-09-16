@@ -19,7 +19,7 @@
  * served from one local binary and CSP allows nothing from elsewhere.
  */
 
-/* Themes follow ayn-thor-tracker: the system scheme unless /options stored
+/* Themes follow ayn-thor-tracker: the system scheme unless the options dialog stored
    one, which prefs.js sets as data-theme before paint. The dark tokens appear
    twice because a media query cannot share a block with a plain selector. */
 :root {
@@ -105,9 +105,25 @@ header.top {
   text-transform: uppercase; color: var(--fg-2); text-decoration: none;
   border-right: 1px solid var(--rule-strong);
 }
-.chips a:last-child { border-right: 0; }
-.chips a:hover { background: var(--bg-1); color: var(--fg); }
+.chips button {
+  margin: 0; padding: 4px 12px; font-size: 11px; line-height: 16px; letter-spacing: .08em;
+  color: var(--fg-2); border: 0;
+}
+.chips button::before, .chips button::after { content: none; }
+.chips a:last-child, .chips button:last-child { border-right: 0; }
+.chips a:hover, .chips button:hover { background: var(--bg-1); color: var(--fg); }
 .chips a.on { background: var(--fg); color: var(--bg); }
+
+/* The options overlay: a square ruled panel over a dimmed page. The form
+   fills the dialog, so a click on the dialog itself is on the backdrop. */
+dialog.options {
+  width: min(28rem, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+  padding: 0; border: 1px solid var(--rule-strong); border-radius: 0;
+  background: var(--bg); color: var(--fg);
+}
+dialog.options form { padding: 16px; }
+dialog.options h2.section { margin-top: 0; }
+dialog.options::backdrop { background: rgba(0, 0, 0, .4); background: color-mix(in srgb, var(--fg) 25%, transparent); }
 
 main { max-width: 960px; padding: 8px 16px 48px; }
 main:has(> .split) { max-width: none; padding: 0; }
@@ -260,7 +276,8 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
   header.top { gap: 8px; padding: 0 12px; }
   header.top .rule { display: none; }
   .tally { margin-left: auto; }
-  .chips a { padding: 8px 12px; }
+  .chips a, .chips button { padding: 8px 12px; }
+  .chips button { display: inline-block; width: auto; min-height: 0; border: 0; }
   textarea, input[type=text] { font-size: 16px; }
   button { display: block; width: 100%; min-height: 44px; border: 1px solid var(--rule-strong); }
   .actions { flex-direction: column; align-items: stretch; gap: 8px; }

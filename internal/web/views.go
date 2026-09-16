@@ -128,7 +128,6 @@ var pages = map[string]*template.Template{}
 func init() {
 	pages["case"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/inbox.html", "templates/case.html"))
 	pages["done"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/done.html"))
-	pages["options"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/options.html"))
 }
 
 // page is what every full page carries for the layout.
@@ -259,17 +258,6 @@ func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
 type doneCard struct {
 	*store.Case
 	Age string
-}
-
-// options is the preferences page. The choices live in the browser and
-// prefs.js applies them; the server only renders the radios.
-func (s *Server) options(w http.ResponseWriter, r *http.Request) {
-	cases, err := s.cases()
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, http.StatusOK, "options", "layout.html", page{Title: "options", Blocking: countBlocking(cases), Nav: "options"})
 }
 
 func (s *Server) done(w http.ResponseWriter, r *http.Request) {

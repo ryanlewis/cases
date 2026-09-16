@@ -14,11 +14,35 @@
 <a class="brand" href="/">cases</a>
 <span class="rule"></span>
 {{template "tally" .}}
-<nav class="chips"><a href="/"{{if eq .Nav "inbox"}} class="on" aria-current="page"{{end}}>inbox</a><a href="/done"{{if eq .Nav "done"}} class="on" aria-current="page"{{end}}>done</a><a href="/options"{{if eq .Nav "options"}} class="on" aria-current="page"{{end}}>options</a></nav>
+<nav class="chips"><a href="/"{{if eq .Nav "inbox"}} class="on" aria-current="page"{{end}}>inbox</a><a href="/done"{{if eq .Nav "done"}} class="on" aria-current="page"{{end}}>done</a><button type="button" id="options-open" aria-haspopup="dialog" aria-controls="options-dialog">options</button></nav>
 </header>
 <main>
 {{template "content" .}}
 </main>
+<dialog id="options-dialog" class="options" aria-labelledby="options-title">
+<form id="options" method="dialog">
+  <h2 class="section" id="options-title">options</h2>
+  <p class="label">kept in this browser. changes apply at once.</p>
+  <fieldset>
+    <legend>theme</legend>
+    <label class="choice"><input type="radio" name="theme" value="system" checked> system</label>
+    <label class="choice"><input type="radio" name="theme" value="light"> light</label>
+    <label class="choice"><input type="radio" name="theme" value="dark"> dark</label>
+  </fieldset>
+  <fieldset>
+    <legend>prose face</legend>
+    <label class="choice"><input type="radio" name="face" value="mono" checked> mono</label>
+    <label class="choice"><input type="radio" name="face" value="sans"> <span class="face-sans">sans</span></label>
+    <label class="choice"><input type="radio" name="face" value="serif"> <span class="face-serif">serif</span></label>
+  </fieldset>
+  <fieldset>
+    <legend>links to other sites</legend>
+    <label class="choice"><input type="radio" name="links" value="new" checked> open in a new tab</label>
+    <label class="choice"><input type="radio" name="links" value="same"> open in this tab</label>
+  </fieldset>
+  <div class="actions"><button type="button" id="options-reset">reset</button><button type="submit">close</button></div>
+</form>
+</dialog>
 </body>
 </html>
 {{end}}
