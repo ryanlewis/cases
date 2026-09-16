@@ -184,9 +184,10 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
 
 - `/` selects the first case in the inbox, or says there are no open cases and
   reloads when one arrives.
-- `/cases/ID` selects that case: the body rendered as markdown, its links, a
-  response form that fits the kind, and the thread. Sending the form writes one
-  answer (or, for a stuck case, a park). A parked case has a Resume button.
+- `/cases/ID` selects that case: the body rendered as markdown (GFM tables
+  included), its links, a response form that fits the kind, and the thread.
+  Sending the form writes one answer (or, for a stuck case, a park). A parked
+  case has a Resume button.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.
 

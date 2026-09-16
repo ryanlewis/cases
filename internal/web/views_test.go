@@ -188,6 +188,21 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 	}
 }
 
+func TestBodyRendersGFMTable(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{
+		Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Table",
+		Body: "| Package | Version |\n| --- | --- |\n| bun | 1.2.3 |\n",
+	})
+
+	page := a.get(t, "/cases/"+c.ID)
+	for _, part := range []string{"<table>", "<th>Package</th>", "<th>Version</th>", "<td>bun</td>", "<td>1.2.3</td>"} {
+		if !strings.Contains(page, part) {
+			t.Errorf("page missing %q:\n%s", part, page)
+		}
+	}
+}
+
 func TestStuckParkAndResume(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindStuck])
