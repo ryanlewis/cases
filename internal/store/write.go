@@ -18,7 +18,8 @@ const idTimeLayout = "2006-01-02T15-04-05Z"
 // maxSlug caps the title part of a case id.
 const maxSlug = 48
 
-// now is the clock for event timestamps. Tests replace it.
+// now is the store's clock: event timestamps and when Poller reads start.
+// Tests replace it.
 var now = func() time.Time { return time.Now().UTC() }
 
 // link, rename and remove are os.Link, os.Rename and os.Remove, replaceable so

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// fixClock pins the event clock for one test.
+// fixClock pins the store clock for one test.
 func fixClock(t *testing.T, at time.Time) {
 	t.Helper()
 	orig := now
