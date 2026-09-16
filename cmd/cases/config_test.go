@@ -58,7 +58,7 @@ func TestConfigKeysMatchFlags(t *testing.T) {
 		return next(nil)
 	})
 	for _, k := range config.Keys {
-		if !flags[k.Name] {
+		if !flags[k.FlagName()] {
 			t.Errorf("config key %q names no flag", k.Name)
 		}
 	}
@@ -206,7 +206,7 @@ func TestConfigShow(t *testing.T) {
 	root := t.TempDir()
 	path := writeConfig(t, "store = \""+root+"\"\n")
 	out := mustRun(t, "config", "show")
-	for _, want := range []string{"config: " + path + " (exists)", "store    " + root + "  config", "listen   127.0.0.1:8765", "no-open  false", "  default"} {
+	for _, want := range []string{"config: " + path + " (exists)", "store      " + root + "  config", "listen     127.0.0.1:8765", "no-open    false", "prune-age  720h", "  default"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("config show lacks %q:\n%s", want, out)
 		}
