@@ -47,7 +47,16 @@ type Case struct {
 	Problems []string `json:"problems,omitempty"`
 
 	lastSeq int
+	files   int
 }
+
+// Revision is the number of event files in the case, counting any the fold
+// skipped. Every event added raises it: one written here, and one a sync
+// brings in with a sequence number the case already has or below its latest.
+// A caller that keeps the revision it read can have a later write refused if
+// the case has changed since; see AtRevision. For a case whose events were
+// all written on one machine it is also the sequence number of the latest.
+func (c *Case) Revision() int { return c.files }
 
 // ErrNoEvents is a case directory with no event files in it yet. Create makes
 // the directory a moment before it writes the open event, so a listing can
@@ -150,6 +159,7 @@ func Load(dir string) (*Case, error) {
 		}
 		return strings.Compare(a.name, b.name)
 	})
+	c.files = len(files)
 
 	for i, f := range files {
 		c.lastSeq = max(c.lastSeq, f.seq)

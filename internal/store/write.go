@@ -75,9 +75,27 @@ func Create(root string, rec OpenRecord) (*Case, error) {
 	return c, nil
 }
 
+// ErrStale refuses a write made with AtRevision: an event has been written to
+// the case since the caller read it.
+var ErrStale = errors.New("the case has changed since it was read")
+
+// Precondition is a check on the case as it is on disk, made while the case is
+// locked for the write and before the event is checked. Make one with
+// AtRevision.
+type Precondition struct {
+	revision int
+}
+
+// AtRevision is the precondition that the case is still at revision rev: the
+// Revision of the case as the caller read it. Otherwise the write fails with
+// ErrStale and nothing is written.
+func AtRevision(rev int) Precondition {
+	return Precondition{revision: rev}
+}
+
 // Answer records the human's answer.
-func Answer(dir string, rec AnswerRecord) (*Case, error) {
-	return appendEvent(dir, AuthorHuman, EventAnswer, &rec)
+func Answer(dir string, rec AnswerRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorHuman, EventAnswer, &rec, pre...)
 }
 
 // Pickup records that the agent has read the answer.
@@ -102,20 +120,21 @@ func Withdraw(dir string, rec WithdrawRecord) (*Case, error) {
 }
 
 // Park records the human parking an open stuck case.
-func Park(dir string, rec ParkRecord) (*Case, error) {
-	return appendEvent(dir, AuthorHuman, EventPark, &rec)
+func Park(dir string, rec ParkRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorHuman, EventPark, &rec, pre...)
 }
 
 // Resume reopens a parked case. Either side may resume.
-func Resume(dir string, author Author, rec ResumeRecord) (*Case, error) {
-	return appendEvent(dir, author, EventResume, &rec)
+func Resume(dir string, author Author, rec ResumeRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, author, EventResume, &rec, pre...)
 }
 
-// appendEvent folds the case, checks the new event against it with the same
-// code the fold uses, and only then writes the next event file. The case
-// directory is locked for the whole sequence so two local writers cannot take
-// the same sequence number.
-func appendEvent(dir string, author Author, typ EventType, rec record) (*Case, error) {
+// appendEvent folds the case, checks the preconditions and then the new event
+// against it with the same code the fold uses, and only then writes the next
+// event file. The case directory is locked for the whole sequence so two local
+// writers cannot take the same sequence number, and a precondition cannot pass
+// on a case that changes before the write.
+func appendEvent(dir string, author Author, typ EventType, rec record, pre ...Precondition) (*Case, error) {
 	rec.stamp(now())
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -135,6 +154,11 @@ func appendEvent(dir string, author Author, typ EventType, rec record) (*Case, e
 			return nil, err
 		}
 	}
+	for _, p := range pre {
+		if rev := c.Revision(); rev != p.revision {
+			return nil, fmt.Errorf("%w: read at revision %d, now at %d", ErrStale, p.revision, rev)
+		}
+	}
 	seq := c.lastSeq + 1
 	name := fmt.Sprintf("%04d-%s-%s.json", seq, author, typ)
 	if err := c.apply(Event{Seq: seq, Author: author, Type: typ, File: name, Data: data}); err != nil {
@@ -144,6 +168,7 @@ func appendEvent(dir string, author Author, typ EventType, rec record) (*Case, e
 		return nil, err
 	}
 	c.lastSeq = seq
+	c.files++
 	return c, nil
 }
 

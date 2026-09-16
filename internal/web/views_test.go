@@ -1,7 +1,9 @@
 package web
 
 import (
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"slices"
@@ -170,8 +172,11 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 					t.Errorf("form missing %q", part)
 				}
 			}
+			if rev := pageRevision(t, page); rev != 1 {
+				t.Errorf("form revision = %d, want 1", rev)
+			}
 
-			w := a.do("POST", "/cases/"+c.ID+"/answer", tt.form, map[string]string{"Origin": "http://" + testAddr})
+			w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(tt.form, 1), map[string]string{"Origin": "http://" + testAddr})
 			// The only case: there is no next one, so back to the inbox.
 			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 				t.Fatalf("post: %d %q %s", w.Code, w.Header().Get("Location"), w.Body.String())
@@ -216,18 +221,18 @@ func TestStuckParkAndResume(t *testing.T) {
 	origin := map[string]string{"Origin": "http://" + testAddr}
 
 	// The park button parks even with guidance ticked: the browser sends both.
-	if w := a.do("POST", "/cases/"+c.ID+"/answer", url.Values{"stuck": {"text"}, "park": {"1"}, "note": {"after release"}}, origin); w.Code != http.StatusSeeOther {
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"stuck": {"text"}, "park": {"1"}, "note": {"after release"}}, 1), origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("park: %d %s", w.Code, w.Body.String())
 	}
 	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-human-park.json"}) {
 		t.Errorf("files = %v", files)
 	}
 	page := a.get(t, "/cases/"+c.ID)
-	if !strings.Contains(page, `action="/cases/`+c.ID+`/resume"`) || !strings.Contains(page, "note: after release") ||
+	if !strings.Contains(page, `action="/cases/`+c.ID+`/resume"`) || pageRevision(t, page) != 2 || !strings.Contains(page, "note: after release") ||
 		!strings.Contains(page, `<span class="badge state parked">parked</span>`) || !strings.Contains(page, `class="card urgency-blocking parked selected"`) {
 		t.Errorf("parked page:\n%s", page)
 	}
-	if w := a.do("POST", "/cases/"+c.ID+"/resume", url.Values{}, origin); w.Code != http.StatusSeeOther {
+	if w := a.do("POST", "/cases/"+c.ID+"/resume", withRevision(nil, 2), origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("resume: %d", w.Code)
 	}
 	loaded, err := store.Load(c.Dir)
@@ -235,7 +240,7 @@ func TestStuckParkAndResume(t *testing.T) {
 		t.Errorf("after resume: %+v %v", loaded, err)
 	}
 	// Resuming an open case is refused and writes nothing.
-	if w := a.do("POST", "/cases/"+c.ID+"/resume", url.Values{}, origin); w.Code != http.StatusUnprocessableEntity {
+	if w := a.do("POST", "/cases/"+c.ID+"/resume", withRevision(nil, 3), origin); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("resume of open case: %d", w.Code)
 	}
 	if n := len(eventFiles(t, c.Dir)); n != 3 {
@@ -262,11 +267,11 @@ func TestPostsGoToTheNextCase(t *testing.T) {
 		want         string
 	}{
 		// A parked case stays in the inbox, and the page still moves on.
-		{"park", "/cases/" + blocked.ID + "/answer", url.Values{"stuck": {"park"}}, "/cases/" + decision.ID},
-		{"answer", "/cases/" + decision.ID + "/answer", url.Values{"choice": {"1"}}, "/cases/" + parked.ID},
-		{"resume", "/cases/" + parked.ID + "/resume", url.Values{}, "/cases/" + zed.ID},
-		{"answer the last", "/cases/" + zed.ID + "/answer", url.Values{"ack": {"1"}}, "/"},
-		{"resume the first", "/cases/" + blocked.ID + "/resume", url.Values{}, "/cases/" + parked.ID},
+		{"park", "/cases/" + blocked.ID + "/answer", withRevision(url.Values{"stuck": {"park"}}, 1), "/cases/" + decision.ID},
+		{"answer", "/cases/" + decision.ID + "/answer", withRevision(url.Values{"choice": {"1"}}, 1), "/cases/" + parked.ID},
+		{"resume", "/cases/" + parked.ID + "/resume", withRevision(nil, 2), "/cases/" + zed.ID},
+		{"answer the last", "/cases/" + zed.ID + "/answer", withRevision(url.Values{"ack": {"1"}}, 1), "/"},
+		{"resume the first", "/cases/" + blocked.ID + "/resume", withRevision(nil, 2), "/cases/" + parked.ID},
 	}
 	for _, st := range steps {
 		w := a.do("POST", st.target, st.form, origin)
@@ -296,7 +301,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 		t.Run(string(tt.kind)+"/"+tt.wantErr, func(t *testing.T) {
 			a := newApp(t)
 			c := a.open(t, openRecords[tt.kind])
-			w := a.do("POST", "/cases/"+c.ID+"/answer", tt.form, nil)
+			w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(tt.form, 1), nil)
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status %d", w.Code)
 			}
@@ -320,7 +325,7 @@ func TestAnswerOnAClosedCaseOrUnknownCase(t *testing.T) {
 	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	w := a.do("POST", "/cases/"+c.ID+"/answer", url.Values{"ack": {"1"}}, nil)
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, 2), nil)
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "cannot answer a case that is withdrawn") {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
@@ -333,6 +338,136 @@ func TestAnswerOnAClosedCaseOrUnknownCase(t *testing.T) {
 		if w := a.do("POST", target, url.Values{"ack": {"1"}}, nil); w.Code != http.StatusNotFound {
 			t.Errorf("POST %s: %d", target, w.Code)
 		}
+	}
+}
+
+func TestStaleTabCannotAnswerAReopenedCase(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	c := a.open(t, openRecords[store.KindDecision])
+	target := "/cases/" + c.ID + "/answer"
+
+	// Two tabs show the open case, and tab A answers it.
+	tabA, tabB := a.get(t, "/cases/"+c.ID), a.get(t, "/cases/"+c.ID)
+	if w := a.do("POST", target, withRevision(url.Values{"choice": {"1"}}, pageRevision(t, tabA)), origin); w.Code != http.StatusSeeOther {
+		t.Fatalf("tab A: %d %s", w.Code, w.Body.String())
+	}
+	// The agent picks the answer up and asks a follow-up, which reopens the case.
+	if _, err := store.Pickup(c.Dir, store.PickupRecord{By: "bun-pins"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
+		t.Fatal(err)
+	}
+	written := eventFiles(t, c.Dir)
+
+	// Tab B's form is from before the answer. The case is open again, but the
+	// form is refused and nothing is written.
+	w := a.do("POST", target, withRevision(url.Values{"choice": {"2"}, "note": {"float it"}}, pageRevision(t, tabB)), origin)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("tab B: %d, want 409\n%s", w.Code, w.Body.String())
+	}
+	if files := eventFiles(t, c.Dir); !slices.Equal(files, written) {
+		t.Errorf("files = %v, want %v", files, written)
+	}
+	// Tab B gets the case as it is now, with what it typed, and a form at the
+	// current revision.
+	body := w.Body.String()
+	for _, want := range []string{`<p class="error" role="alert">` + staleForm + `</p>`, "Pin to which <strong>patch</strong>?", "float it"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refused page missing %q:\n%s", want, body)
+		}
+	}
+	if got := pageRevision(t, body); got != 4 {
+		t.Errorf("refused page's revision = %d, want 4", got)
+	}
+	// Sent again from that page, the answer is recorded.
+	if w := a.do("POST", target, withRevision(url.Values{"choice": {"2"}, "note": {"float it"}}, pageRevision(t, body)), origin); w.Code != http.StatusSeeOther {
+		t.Fatalf("sent again: %d %s", w.Code, w.Body.String())
+	}
+	if files := eventFiles(t, c.Dir); len(files) != 5 || files[4] != "0005-human-answer.json" {
+		t.Errorf("files = %v", files)
+	}
+}
+
+func TestStaleParkAndResumeAreRefused(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	c := a.open(t, openRecords[store.KindStuck])
+	park := func() {
+		t.Helper()
+		if _, err := store.Park(c.Dir, store.ParkRecord{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resume := func() {
+		t.Helper()
+		if _, err := store.Resume(c.Dir, store.AuthorAgent, store.ResumeRecord{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := func(name, action string, form url.Values) {
+		t.Helper()
+		before := eventFiles(t, c.Dir)
+		w := a.do("POST", "/cases/"+c.ID+"/"+action, form, origin)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), staleForm) {
+			t.Errorf("%s: %d, want 409 with the stale form error\n%s", name, w.Code, w.Body.String())
+		}
+		if files := eventFiles(t, c.Dir); !slices.Equal(files, before) {
+			t.Errorf("%s: files = %v, want %v", name, files, before)
+		}
+	}
+
+	// Parked and resumed elsewhere after the page was loaded.
+	open := a.get(t, "/cases/"+c.ID)
+	park()
+	resume()
+	refused("park", "answer", withRevision(url.Values{"park": {"1"}}, pageRevision(t, open)))
+	// A stale form with a mistake in it is refused as stale, not for the
+	// mistake: that page would carry the new revision without saying why.
+	refused("guidance left empty", "answer", withRevision(url.Values{"stuck": {"text"}}, pageRevision(t, open)))
+
+	// Resumed and parked again elsewhere after the page was loaded.
+	park()
+	parked := a.get(t, "/cases/"+c.ID)
+	resume()
+	park()
+	refused("resume", "resume", withRevision(nil, pageRevision(t, parked)))
+	// A form from a page served before forms carried a revision.
+	refused("resume without a revision", "resume", url.Values{})
+}
+
+// The event that makes a post stale can land after the handler has loaded the
+// case and before the store locks it, as when a form is sent twice in quick
+// succession. The refusal shows the case as it is after that event.
+func TestStaleRefusalShowsTheCaseAsItIsNow(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindDecision])
+	loaded, err := store.Load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Answer(c.Dir, store.AnswerRecord{Choice: 1}, store.AtRevision(loaded.Revision()))
+	if !errors.Is(err, store.ErrStale) {
+		t.Fatalf("err = %v, want ErrStale", err)
+	}
+
+	w := httptest.NewRecorder()
+	a.server.refuse(w, loaded, nil, err, url.Values{"choice": {"1"}, "note": {"float it"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{staleForm, "Pin to which <strong>patch</strong>?", "float it"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refused page missing %q:\n%s", want, body)
+		}
+	}
+	if got := pageRevision(t, body); got != 2 {
+		t.Errorf("refused page's revision = %d, want 2", got)
 	}
 }
 
@@ -353,6 +488,10 @@ func TestThreadFragment(t *testing.T) {
 	if !strings.Contains(page, `hx-get="/cases/`+c.ID+`/thread?state=open"`) {
 		t.Error("case page does not poll its thread")
 	}
+	// A page rendered while the case was first open polls the same way: the
+	// answer and the note that reopened the case leave the state as the page
+	// shows it, so the thread updates in place and the form keeps what was
+	// typed. Sending that form is refused (TestStaleTabCannotAnswerAReopenedCase).
 	frag := a.get(t, "/cases/"+c.ID+"/thread?state=open")
 	for _, want := range []string{"chose 1. Pin", "note: ship it", "by bun-pins", "Which <strong>patch</strong>?", "human", "agent"} {
 		if !strings.Contains(frag, want) {
@@ -500,7 +639,7 @@ func TestEmptyAnswersAreRefused(t *testing.T) {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				a := newApp(t)
 				c := a.open(t, openRecords[kind])
-				w := a.do("POST", "/cases/"+c.ID+"/answer", form, nil)
+				w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, 1), nil)
 				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `class="error"`) {
 					t.Errorf("status %d, want 422 with an error:\n%s", w.Code, w.Body.String())
 				}
