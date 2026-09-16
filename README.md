@@ -1,7 +1,5 @@
 # cases
 
-(Formerly agent-inbox.)
-
 `cases` is a small Go CLI for passing questions between an agent and a
 human. An agent opens a case: a decision to make, scripts to approve, work to
 sign off, a blocker, or something to know about. The human answers it. The
