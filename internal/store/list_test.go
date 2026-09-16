@@ -210,3 +210,63 @@ func TestPollerSeesNewEventsAndCases(t *testing.T) {
 		t.Errorf("after removal: %d cases, err %v", len(cases), err)
 	}
 }
+
+// A filesystem with 2s mtimes (FAT) can add a file to a directory without
+// changing the directory's mtime. A poll that read the directory before the
+// file arrived must not go on serving that read once settle has passed.
+func TestPollerSeesEntriesAddedWithinOneMtimeStep(t *testing.T) {
+	root := t.TempDir()
+	first, err := Create(root, openOf(KindFYI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The filesystem floors every mtime to the start of one step. The clock is
+	// pinned, so nothing here depends on how long the test takes.
+	step := time.Date(2020, 1, 2, 3, 4, 6, 0, time.UTC)
+	coarse := func(dirs ...string) {
+		t.Helper()
+		for _, dir := range dirs {
+			if err := os.Chtimes(dir, step, step); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	coarse(root, first.Dir)
+	fixClock(t, step.Add(500*time.Millisecond))
+	p := NewPoller(root)
+	if _, _, err := p.Poll(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both writes land inside the same step, after the poll read the store.
+	if _, err := Answer(first.Dir, AnswerRecord{Ack: true}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Create(root, openOf(KindStuck))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coarse(root, first.Dir, second.Dir)
+	fixClock(t, step.Add(settle))
+
+	cases, _, err := p.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]State{}
+	for _, c := range cases {
+		states[c.ID] = c.State
+	}
+	if states[first.ID] != StateAnswered || states[second.ID] != StateOpen {
+		t.Errorf("states = %v, want the answer and the new case", states)
+	}
+
+	// A read that started at least settle after the mtime is kept.
+	cached := p.cache[first.Dir].c
+	if _, _, err := p.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if p.cache[first.Dir].c != cached {
+		t.Error("settled case was reloaded")
+	}
+}

@@ -67,25 +67,28 @@ func caseDirs(root string) ([]string, error) {
 	return dirs, nil
 }
 
-// settle is how long after a directory's mtime the poller keeps reloading it
-// regardless. A filesystem with coarse mtimes can record two writes a moment
-// apart under one mtime, and the second would otherwise go unseen.
+// settle is how long after a directory's mtime a read must start before the
+// poller trusts it. A filesystem with coarse mtimes (FAT keeps 2s) can record
+// two writes a moment apart under one mtime, and a read taken between them
+// would otherwise be kept. settle must be at least the mtime step.
 const settle = 2 * time.Second
 
 // Poller lists a store repeatedly, reloading only the case directories whose
 // mtime has changed since the last poll. Adding an event file adds an entry to
 // the case directory, which changes the directory's mtime.
 type Poller struct {
-	root    string
-	rootMod time.Time
-	dirs    []string
-	cache   map[string]polled
+	root       string
+	rootMod    time.Time
+	rootListed time.Time // when the listing of dirs started
+	dirs       []string
+	cache      map[string]polled
 }
 
 type polled struct {
-	mod time.Time
-	c   *Case
-	err error
+	mod  time.Time
+	read time.Time // when the load of c and err started
+	c    *Case
+	err  error
 }
 
 // NewPoller returns a Poller for root.
@@ -99,12 +102,13 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if p.dirs == nil || changed(p.rootMod, info.ModTime()) {
+	if p.dirs == nil || changed(p.rootMod, info.ModTime(), p.rootListed) {
+		listed := now()
 		dirs, err := caseDirs(p.root)
 		if err != nil {
 			return nil, nil, err
 		}
-		p.dirs, p.rootMod = dirs, info.ModTime()
+		p.dirs, p.rootMod, p.rootListed = dirs, info.ModTime(), listed
 		for dir := range p.cache {
 			if !slices.Contains(dirs, dir) {
 				delete(p.cache, dir)
@@ -119,9 +123,10 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 			continue
 		}
 		entry, ok := p.cache[dir]
-		if !ok || changed(entry.mod, info.ModTime()) {
+		if !ok || changed(entry.mod, info.ModTime(), entry.read) {
+			read := now()
 			c, err := Load(dir)
-			entry = polled{mod: info.ModTime(), c: c, err: err}
+			entry = polled{mod: info.ModTime(), read: read, c: c, err: err}
 			p.cache[dir] = entry
 		}
 		if errors.Is(entry.err, ErrNoEvents) {
@@ -136,6 +141,9 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 	return cases, bad, nil
 }
 
-func changed(cached, current time.Time) bool {
-	return !cached.Equal(current) || time.Since(current) < settle
+// changed reports whether a directory must be read again: its mtime is not the
+// cached one, or the cached read started less than settle after that mtime, so
+// an entry added later under the same mtime may be missing from it.
+func changed(cached, current, read time.Time) bool {
+	return !cached.Equal(current) || read.Before(current.Add(settle))
 }
