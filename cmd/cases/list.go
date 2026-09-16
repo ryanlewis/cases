@@ -41,7 +41,7 @@ func (c *ListCmd) Run(d *Deps) error {
 
 	shown := []*store.Case{}
 	for _, cs := range cases {
-		d.warn(cs)
+		d.warn(cs, nil)
 		if len(want) == 0 || slices.Contains(want, cs.State) {
 			shown = append(shown, cs)
 		}

@@ -86,6 +86,9 @@ func (c *WaitCmd) Run(d *Deps) error {
 				fmt.Fprintf(d.Stderr, "warning: %s\n", msg)
 			}
 		}
+		for _, cs := range cases {
+			d.warn(cs, warned)
+		}
 
 		type ready struct {
 			c  *store.Case
