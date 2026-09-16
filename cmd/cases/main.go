@@ -41,6 +41,7 @@ type CLI struct {
 	Answer   AnswerCmd   `cmd:"" help:"Answer an open case (human)."`
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
+	Status   StatusCmd   `cmd:"" help:"Print where cases serve is running for the store; exits 1 when it is not."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
 	Skill    SkillCmd    `cmd:"" help:"Install, show and list the bundled agent skill."`
 }

@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"syscall"
+	"time"
 
+	"github.com/ryanlewis/cases/internal/instance"
 	"github.com/ryanlewis/cases/internal/web"
 )
 
@@ -23,6 +26,14 @@ type ServeCmd struct {
 func (c *ServeCmd) Run(d *Deps) error {
 	if err := web.CheckLoopback(c.Listen); err != nil {
 		return err
+	}
+	storeDir, err := filepath.Abs(d.Store)
+	if err != nil {
+		return err
+	}
+	// A file that cannot be read is treated as stale and replaced below.
+	if running, _ := instance.Running(storeDir); running != nil {
+		return fmt.Errorf("cases serve is already running for %s at %s (pid %d)", running.Store, running.URL, running.PID)
 	}
 	ln, err := net.Listen("tcp", c.Listen)
 	if err != nil {
@@ -43,6 +54,14 @@ func (c *ServeCmd) Run(d *Deps) error {
 	if term {
 		screen = newStatusScreen(d.Store, url, d.Stdout, os.Getenv("NO_COLOR") == "")
 		logw = screen.logWriter(d.Stderr, !isTerminal(d.Stderr))
+	}
+
+	// Record the instance for `cases status`. Serving goes ahead without it.
+	pid := os.Getpid()
+	if err := instance.Write(instance.Info{PID: pid, URL: url, Addr: addr, Store: storeDir, StartedAt: time.Now().UTC().Truncate(time.Second), Version: version}); err != nil {
+		fmt.Fprintf(logw, "could not record the instance for cases status: %v\n", err)
+	} else {
+		defer func() { _ = instance.Remove(storeDir, pid) }()
 	}
 
 	srv, err := web.New(d.Store, addr, logw)

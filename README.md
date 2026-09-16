@@ -151,6 +151,7 @@ Both:
 cases list  [--state STATE,...] [--json]
 cases show  ID [--json]
 cases serve [--listen 127.0.0.1:8765] [--no-open]
+cases status [--json]
 ```
 
 Setup:
@@ -211,6 +212,29 @@ cases serve > serve.log
 ```
 
 Page refreshes that run every two seconds are not logged or counted.
+
+While it runs, serve records itself in a JSON file (`pid`, `url`, `addr`,
+`store`, `started_at`, `version`) in this machine's state directory:
+`$XDG_STATE_HOME/cases`, or `~/.local/state/cases`. The file is named
+`serve-<slug>-<hash>.json` from the store's absolute path, so serves on
+different stores do not clash, and it is never put in the store, which may be
+synced. Serve removes the file when it stops on `q`, Ctrl-C or SIGTERM.
+`cases status` reads it for the current store:
+
+```sh
+cases status
+# Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/ (pid 4242, since 2026-09-16T09:12:03Z)
+cases status --json   # the file's fields
+```
+
+It exits 1 and prints `not running` when there is no live serve. A file left
+by a crash or `kill -9` counts as not running when its process is gone or
+nothing accepts connections on its address, and the next serve replaces it.
+Serve refuses to start while a live serve holds the file for the same store,
+and names that serve's URL and pid. The check cannot tell a hung serve from a
+healthy one, a store reached by two different paths (a symlink) gets two
+files, and two serves started at the same moment on one store can both pass
+the check.
 
 The inbox is laid out like a mail client. The left column lists open and
 parked cases, blocking first, then oldest first. The right side shows the

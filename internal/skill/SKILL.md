@@ -4,7 +4,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 
 ## Safety
 
-- **Safe to run freely**: `list`, `show`, `wait`, `config path`, `config show`, `skill list`, `skill show`. They only read the store.
+- **Safe to run freely**: `list`, `show`, `wait`, `status`, `config path`, `config show`, `skill list`, `skill show`. They only read.
 - **Agent writes**: `open`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>` and writes nothing.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never edit, rename or delete files in the store.** The state is worked out from the files, so a hand edit corrupts the record. Use the commands.
@@ -97,6 +97,16 @@ cases list [--state STATE,...] [--json]
 - `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, and `events`, which holds every event file as written. Read the answer from here, not from the plain-text output.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated.
 - A damaged event file is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not fix the file.
+
+### `cases status`
+
+```sh
+cases status [--json]
+```
+
+- Prints where the human's web inbox (`cases serve`) is running for the store: its URL and pid. `--json` prints `pid`, `url`, `addr`, `store`, `started_at` and `version`.
+- Exits 1 with `not running` when no inbox is running. Do not start one; tell the human they can answer from `cases serve` or the terminal.
+- Use it to give the human a link to the case: the URL followed by `cases/ID`.
 
 ### `cases pickup`, `cases note`, `cases close`, `cases withdraw`
 
