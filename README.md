@@ -275,7 +275,8 @@ It exits 1 and prints `not running` when there is no live serve. A file left
 by a crash or `kill -9` counts as not running when its process is gone or
 nothing accepts connections on its address, and the next serve replaces it.
 Serve refuses to start while a live serve holds the file for the same store,
-and names that serve's URL and pid.
+and names that serve's URL and pid. If the file cannot be read or parsed,
+`cases status` prints an `Error:` line naming it and exits 1.
 
 The check has three limits. It cannot tell a hung serve from a healthy one. A
 store reached by two different paths (a symlink) gets two files. Two serves

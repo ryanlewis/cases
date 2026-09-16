@@ -8,6 +8,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 - **Agent writes**: `open`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>` and writes nothing.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never edit, rename or delete files in the store.** The state is worked out from the files, so a hand edit corrupts the record. Use the commands.
+- **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is plain JSON on disk, may be synced, and is shown in a browser. Name the secret or say where it lives instead.
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, check `cases list --state open,answered,parked --json` for a case of yours on the same question.
 - `serve`, `config init` and `skill install` / `skill uninstall` are for the human. Do not run them unasked.
@@ -105,8 +106,12 @@ cases status [--json]
 ```
 
 - Prints where the human's web inbox (`cases serve`) is running for the store: its URL and pid. `--json` prints `pid`, `url`, `addr`, `store`, `started_at` and `version`.
-- Exits 1 with `not running` when no inbox is running. Do not start one; tell the human they can answer from `cases serve` or the terminal.
-- Use it to give the human a link to the case: the URL followed by `cases/ID`.
+- Read the result:
+  - Exit 0 with the URL: the inbox is running. Give the human a link to the case: the URL followed by `cases/ID`.
+  - Exit 1 with `not running` on stderr: no inbox is running, including one that crashed. Do not start one; tell the human they can answer from `cases serve` or the terminal.
+  - Exit 1 with an `Error:` line: the check failed, usually because the inbox's state file is damaged or unreadable (the message names it). Report it to the human; do not fix or delete the file.
+- Running means the process is alive and accepts connections. It cannot tell a hung inbox from a healthy one.
+- Only if the `cases` CLI cannot run at all: the state file is `$XDG_STATE_HOME/cases/serve-<slug>-<hash>.json` (default `~/.local/state/cases`), with the same fields as `--json`. A crash can leave it behind, so it may be stale; `cases status` is the authority.
 
 ### `cases pickup`, `cases note`, `cases close`, `cases withdraw`
 
@@ -139,6 +144,11 @@ cases pickup "$id" --by bun-pins
 # ... act on the answer ...
 echo "Pinned bun to 1.2.3 in abc123." | cases close "$id" --outcome-file - --link https://github.com/o/r/pull/12
 ```
+
+Check the inbox with `cases status` at two points:
+
+- Right after `cases open`: if it is running, give the human the link to the case; if not, tell them the case id and that they can answer from `cases serve` or the terminal.
+- When `wait` times out twice in a row: if the inbox is not running, tell the human, so they can start it or answer from the terminal, then wait again.
 
 When `wait` returns, read the case's `state` and act on it:
 
