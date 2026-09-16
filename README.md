@@ -340,7 +340,8 @@ The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends
 `Content-Security-Policy: default-src 'self'`. Raw HTML in a markdown body is
 dropped. Links to other sites open in a new tab, with
-`rel="noopener noreferrer"`. htmx is included in the binary; nothing is fetched
+`rel="noopener noreferrer"`. A case link or row link that does not start with
+`http://` or `https://`, such as a file path, is shown as text, not a link. htmx is included in the binary; nothing is fetched
 from the network.
 
 ## skill

@@ -250,7 +250,7 @@ func TestMarkdownCannotInjectMarkup(t *testing.T) {
 			t.Errorf("page contains %q", bad)
 		}
 	}
-	for _, good := range []string{"<h1>Heading</h1>", `<a href="https://example.com" target="_blank" rel="noopener noreferrer">ok</a>`, "&lt;b&gt;title&lt;/b&gt;", `href="#ZgotmplZ"`} {
+	for _, good := range []string{"<h1>Heading</h1>", `<a href="https://example.com" target="_blank" rel="noopener noreferrer">ok</a>`, "&lt;b&gt;title&lt;/b&gt;", "<li>javascript:alert(2)</li>"} {
 		if !strings.Contains(body, good) {
 			t.Errorf("page is missing %q", good)
 		}

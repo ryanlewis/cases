@@ -591,6 +591,37 @@ func TestThreadShowsWithdrawReason(t *testing.T) {
 	}
 }
 
+func TestOnlyWebLinksAreAnchors(t *testing.T) {
+	a := newApp(t)
+	rows := slices.Clone(approvalRows)
+	rows[0].Link = "/Users/me/dev/app/setup.sh"
+	c := a.open(t, store.OpenRecord{
+		Kind: store.KindApproval, Urgency: store.UrgencyToday, Title: "Scripts", Rows: rows,
+		Links: []string{"~/notes/plan.md", "javascript:alert(1)", "HTTPS://example.com/upper", "http://example.com/plain"},
+	})
+	page := a.get(t, "/cases/"+c.ID)
+	for _, want := range []string{
+		"<p>/Users/me/dev/app/setup.sh</p>",
+		"<li>~/notes/plan.md</li>",
+		"<li>javascript:alert(1)</li>",
+		`<a href="HTTPS://example.com/upper" target="_blank"`,
+		`<a href="http://example.com/plain" target="_blank"`,
+		`<a href="https://example.com/mig" target="_blank"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page missing %s", want)
+		}
+	}
+	for _, text := range []string{"setup.sh", "plan.md", "javascript:"} {
+		if regexp.MustCompile(`href="[^"]*` + regexp.QuoteMeta(text)).MatchString(page) {
+			t.Errorf("%s rendered as a link", text)
+		}
+	}
+	if got := strings.Count(page, `target="_blank"`); got != 3 {
+		t.Errorf("%d links with a target, want 3", got)
+	}
+}
+
 func TestApprovalRowNote(t *testing.T) {
 	a := newApp(t)
 	rows := slices.Clone(approvalRows)
