@@ -70,9 +70,8 @@ var funcs = template.FuncMap{
 var pages = map[string]*template.Template{}
 
 func init() {
-	for _, page := range []string{"inbox", "case", "done"} {
-		pages[page] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/"+page+".html"))
-	}
+	pages["case"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/inbox.html", "templates/case.html"))
+	pages["done"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/done.html"))
 }
 
 // page is what every full page carries for the layout.
@@ -98,16 +97,19 @@ type card struct {
 	Excerpt []string
 }
 
+// inboxData is the list column. Selected is the id of the case beside it,
+// and the title is that case's title, so the polled list keeps both.
 type inboxData struct {
 	page
-	Cards []card
+	Cards    []card
+	Selected string
+	// Empty is set on / when it was rendered with no case to show, so the
+	// polled list reloads / once a case arrives.
+	Empty bool
 }
 
-func (s *Server) inboxData() (inboxData, error) {
-	cases, err := s.cases()
-	if err != nil {
-		return inboxData{}, err
-	}
+// inboxCases returns the open and parked cases, in inbox order.
+func inboxCases(cases []*store.Case) []*store.Case {
 	var shown []*store.Case
 	for _, c := range cases {
 		if c.State == store.StateOpen || c.State == store.StateParked {
@@ -115,12 +117,35 @@ func (s *Server) inboxData() (inboxData, error) {
 		}
 	}
 	store.SortInbox(shown)
+	return shown
+}
+
+func newInbox(cases []*store.Case, selected string) inboxData {
+	d := inboxData{page: page{Title: "Inbox", Blocking: countBlocking(cases)}, Selected: selected}
+	for _, c := range cases {
+		if c.ID == selected {
+			d.Title = c.Title
+			break
+		}
+	}
 	now := time.Now()
-	d := inboxData{page: page{Title: "Inbox", Blocking: countBlocking(cases)}}
-	for _, c := range shown {
+	for _, c := range inboxCases(cases) {
 		d.Cards = append(d.Cards, card{Case: c, Age: Age(c.OpenedAt, now), Excerpt: excerpt(c.Body, 3)})
 	}
-	return d, nil
+	return d
+}
+
+// nextCase is where a successful answer, park or resume of the case with id
+// goes: the case after it in the inbox, or the inbox when it was the last.
+// cases must be read before the write, while the case still has its place.
+func nextCase(cases []*store.Case, id string) string {
+	shown := inboxCases(cases)
+	for i, c := range shown {
+		if c.ID == id && i+1 < len(shown) {
+			return "/cases/" + url.PathEscape(shown[i+1].ID)
+		}
+	}
+	return "/"
 }
 
 // excerpt returns the first n non-empty lines of a body, as plain text.
@@ -140,22 +165,37 @@ func excerpt(body string, n int) []string {
 	return lines
 }
 
+// inbox shows the first case in the inbox beside the list, in place rather
+// than by redirect, so / stays the top of the inbox when it is reloaded.
 func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
-	d, err := s.inboxData()
+	cases, err := s.cases()
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, http.StatusOK, "inbox", "layout.html", d)
+	var first *store.Case
+	if shown := inboxCases(cases); len(shown) > 0 {
+		first = shown[0]
+	}
+	s.renderCase(w, http.StatusOK, first, cases, true, "", nil)
 }
 
 func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
-	d, err := s.inboxData()
+	cases, err := s.cases()
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, http.StatusOK, "inbox", "inbox-fragment", d)
+	d := newInbox(cases, r.URL.Query().Get("selected"))
+	if r.URL.Query().Get("empty") == "1" {
+		if len(d.Cards) > 0 {
+			w.Header().Set("HX-Redirect", "/")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		d.Empty = true
+	}
+	s.render(w, http.StatusOK, "case", "inbox-fragment", d)
 }
 
 type doneCard struct {
@@ -194,8 +234,12 @@ type threadEntry struct {
 	Markdown template.HTML
 }
 
+// caseData is the list column and the working area. Case is nil when the
+// inbox is empty. Home is set on /, where a stale thread reloads / instead.
 type caseData struct {
 	page
+	Inbox  inboxData
+	Home   bool
 	Case   *store.Case
 	Thread []threadEntry
 	Error  string
@@ -236,17 +280,20 @@ func (s *Server) casePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderCase(w, http.StatusOK, c, cases, "", nil)
+	s.renderCase(w, http.StatusOK, c, cases, false, "", nil)
 }
 
-func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, msg string, form url.Values) {
-	d := caseData{
-		page:   page{Title: c.Title, Blocking: countBlocking(cases)},
-		Case:   c,
-		Thread: thread(c),
-		Error:  msg,
-		Form:   form,
+func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, msg string, form url.Values) {
+	d := caseData{Home: home, Error: msg, Form: form}
+	if c != nil {
+		d.Case, d.Thread = c, thread(c)
+		d.Inbox = newInbox(cases, c.ID)
+		d.Inbox.Title = c.Title
+	} else {
+		d.Inbox = newInbox(cases, "")
+		d.Inbox.Empty = home
 	}
+	d.page = d.Inbox.page
 	s.render(w, status, "case", "layout.html", d)
 }
 
@@ -254,7 +301,8 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 // state other than the one the page was rendered in, the form on the page is
 // stale, so it sends htmx to the case page with a fresh GET. A reload would
 // be wrong: the page may be the re-rendered result of a failed POST, and
-// reloading it would post the form again.
+// reloading it would post the form again. On / (home=1) it sends htmx to /,
+// which shows whichever case is now first.
 func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 	c, _, err := s.find(r.PathValue("id"))
 	if err != nil {
@@ -265,12 +313,17 @@ func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	home := r.URL.Query().Get("home") == "1"
 	if string(c.State) != r.URL.Query().Get("state") {
-		w.Header().Set("HX-Redirect", "/cases/"+url.PathEscape(c.ID))
+		target := "/cases/" + url.PathEscape(c.ID)
+		if home {
+			target = "/"
+		}
+		w.Header().Set("HX-Redirect", target)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.render(w, http.StatusOK, "case", "thread", caseData{Case: c, Thread: thread(c)})
+	s.render(w, http.StatusOK, "case", "thread", caseData{Home: home, Case: c, Thread: thread(c)})
 }
 
 // loadForPost resolves the case a form posts to, straight from disk.
@@ -302,6 +355,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	cases, _ := s.cases()
+	next := nextCase(cases, c.ID)
 	rec, park, err := answerFromForm(c, r.PostForm)
 	if err == nil {
 		if park {
@@ -311,11 +366,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		cases, _ := s.cases()
-		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, err.Error(), r.PostForm)
+		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), r.PostForm)
 		return
 	}
-	http.Redirect(w, r, "/cases/"+url.PathEscape(c.ID), http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
@@ -323,12 +377,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	cases, _ := s.cases()
+	next := nextCase(cases, c.ID)
 	if _, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{}); err != nil {
-		cases, _ := s.cases()
-		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, err.Error(), nil)
+		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), nil)
 		return
 	}
-	http.Redirect(w, r, "/cases/"+url.PathEscape(c.ID), http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 // answerFromForm turns the posted response form into an answer. park is true

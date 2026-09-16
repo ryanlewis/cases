@@ -176,16 +176,28 @@ loopback addresses (`127.0.0.1`, `::1`, `localhost`) are accepted for now.
 Each request is logged to stderr, except the page refreshes that run every two
 seconds. Stop it with Ctrl-C.
 
-- `/` is the inbox: open and parked cases, blocking first, then oldest first.
-  The tab title shows how many open cases are blocking.
-- `/cases/ID` shows one case: the body rendered as markdown, its links, a
+The inbox is laid out like a mail client. The left column lists open and
+parked cases, blocking first, then oldest first. The right side shows the
+selected case, and its card is highlighted in the list. The two columns scroll
+separately. On a window narrower than 56rem there is one column: `/` shows the
+list and `/cases/ID` shows the case, with Inbox in the header to go back.
+
+- `/` selects the first case in the inbox, or says there are no open cases and
+  reloads when one arrives.
+- `/cases/ID` selects that case: the body rendered as markdown, its links, a
   response form that fits the kind, and the thread. Sending the form writes one
   answer (or, for a stuck case, a park). A parked case has a Resume button.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.
 
-The inbox and the thread refresh every two seconds. The page reloads itself if
-the case changes state while it is open.
+After a successful answer, park or resume, the page moves to the case after it
+in the inbox, or to `/` if it was the last one. A parked case stays in the
+inbox. If the form is refused, the same case is shown again with the error.
+
+The tab title is the selected case's title, with the number of open blocking
+cases in front. The list and the thread refresh every two seconds. The page
+reloads itself if the case changes state while it is open; on `/` it reloads
+`/`, which selects whichever case is now first.
 
 The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends

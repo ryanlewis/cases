@@ -1,15 +1,10 @@
-{{define "content"}}
-<h1>Inbox</h1>
-{{template "inbox-list" .}}
-{{end}}
-
 {{define "inbox-fragment"}}<title>{{template "title" .}}</title>
 {{template "inbox-list" .}}{{end}}
 
 {{define "inbox-list"}}
-<div id="inbox" hx-get="/fragments/inbox" hx-trigger="every 2s" hx-swap="outerHTML">
+<div id="inbox" hx-get="/fragments/inbox{{with .Selected}}?selected={{.}}{{else}}{{if $.Empty}}?empty=1{{end}}{{end}}" hx-trigger="every 2s" hx-swap="outerHTML">
 {{range .Cards}}
-<a class="card urgency-{{.Urgency}}" href="/cases/{{.ID | pathEscape}}">
+<a class="card urgency-{{.Urgency}}{{if eq .ID $.Selected}} selected{{end}}" href="/cases/{{.ID | pathEscape}}"{{if eq .ID $.Selected}} aria-current="page"{{end}}>
   <div class="meta">
     <span class="badge">{{.Urgency}}</span>
     <span>{{.Kind}}</span>

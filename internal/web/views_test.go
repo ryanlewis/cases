@@ -58,28 +58,52 @@ func TestInboxOrderAndContent(t *testing.T) {
 	if got := idsInOrder(body); !slices.Equal(got, want) {
 		t.Errorf("inbox order = %v\nwant %v", got, want)
 	}
+	// / shows the first case beside the list, selected, and titled after it.
 	// One open blocking case: the parked one and the answered one do not count.
-	if !strings.Contains(body, "<title>(1) Inbox · cases</title>") {
-		t.Errorf("title missing blocking count:\n%s", body)
+	if !strings.Contains(body, "<title>(1) Old blocker · cases</title>") {
+		t.Errorf("title missing blocking count or case title:\n%s", body)
 	}
-	for _, s := range []string{"First line.", "Second line.", "Third.", "bun-pins", "stuck", "blocking", "parked", "Old blocker"} {
-		if !strings.Contains(body, s) {
-			t.Errorf("inbox missing %q", s)
-		}
+	if !strings.Contains(body, `<div class="split home">`) || !strings.Contains(body, `action="/cases/`+oldBlocking.ID+`/resume"`) ||
+		!strings.Contains(body, `hx-get="/cases/`+oldBlocking.ID+`/thread?state=parked&amp;home=1"`) {
+		t.Errorf("/ does not show the first case:\n%s", body)
 	}
-	if strings.Contains(body, "Fourth, not shown") {
-		t.Error("excerpt shows more than three lines")
+	if !strings.Contains(body, `selected" href="/cases/`+oldBlocking.ID+`" aria-current="page">`) {
+		t.Error("first case is not selected on /")
 	}
-	if !strings.Contains(body, `hx-get="/fragments/inbox"`) || !strings.Contains(body, `hx-trigger="every 2s"`) {
-		t.Error("inbox does not poll")
+	if !strings.Contains(body, `hx-get="/fragments/inbox?selected=`+oldBlocking.ID+`"`) || !strings.Contains(body, `hx-trigger="every 2s"`) {
+		t.Error("inbox does not poll with the selection")
 	}
 
 	frag := a.do("GET", "/fragments/inbox", nil, map[string]string{"HX-Request": "true"})
-	if frag.Code != http.StatusOK || !slices.Equal(idsInOrder(frag.Body.String()), want) {
-		t.Errorf("fragment %d, ids %v", frag.Code, idsInOrder(frag.Body.String()))
+	list := frag.Body.String()
+	if frag.Code != http.StatusOK || !slices.Equal(idsInOrder(list), want) {
+		t.Errorf("fragment %d, ids %v", frag.Code, idsInOrder(list))
 	}
-	if !strings.Contains(frag.Body.String(), "<title>(1) Inbox · cases</title>") || strings.Contains(frag.Body.String(), "<html") {
-		t.Errorf("fragment is not a bare list with a title:\n%s", frag.Body.String())
+	if !strings.Contains(list, "<title>(1) Inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
+		t.Errorf("fragment is not a bare list with a title and no selection:\n%s", list)
+	}
+	for _, s := range []string{"First line.", "Second line.", "Third.", "bun-pins", "stuck", "blocking", "parked", "Old blocker"} {
+		if !strings.Contains(list, s) {
+			t.Errorf("inbox missing %q", s)
+		}
+	}
+	if strings.Contains(list, "Fourth, not shown") {
+		t.Error("excerpt shows more than three lines")
+	}
+
+	// The polled list keeps the selection and the selected case's title.
+	sel := a.get(t, "/fragments/inbox?selected="+today.ID)
+	if !strings.Contains(sel, `class="card urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) ||
+		strings.Count(sel, "selected") != 2 || !strings.Contains(sel, `hx-get="/fragments/inbox?selected=`+today.ID+`"`) ||
+		!strings.Contains(sel, "<title>(1) Today · cases</title>") {
+		t.Errorf("fragment lost the selection:\n%s", sel)
+	}
+
+	// A case page shows the list beside it, with that case selected.
+	page := a.get(t, "/cases/"+today.ID)
+	if !strings.Contains(page, `<div class="split">`) || !slices.Equal(idsInOrder(page), want) ||
+		!strings.Contains(page, `urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) || strings.Count(page, `aria-current`) != 1 {
+		t.Errorf("case page lacks the list with the case selected:\n%s", page)
 	}
 
 	// A case opened after the page loaded shows up on the next poll.
@@ -141,7 +165,8 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 			}
 
 			w := a.do("POST", "/cases/"+c.ID+"/answer", tt.form, map[string]string{"Origin": "http://" + testAddr})
-			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/cases/"+c.ID {
+			// The only case: there is no next one, so back to the inbox.
+			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 				t.Fatalf("post: %d %q %s", w.Code, w.Header().Get("Location"), w.Body.String())
 			}
 			if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", tt.wantFile}) {
@@ -191,6 +216,39 @@ func TestStuckParkAndResume(t *testing.T) {
 	}
 	if n := len(eventFiles(t, c.Dir)); n != 3 {
 		t.Errorf("%d files", n)
+	}
+}
+
+func TestPostsGoToTheNextCase(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	// Inbox order: blocked, decision, parked, zed. The two whenever cases sort
+	// by id: open time, then title.
+	blocked := a.open(t, openRecords[store.KindStuck])
+	decision := a.open(t, openRecords[store.KindDecision])
+	parked := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyWhenever, Title: "Parked"})
+	if _, err := store.Park(parked.Dir, store.ParkRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	zed := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Zed"})
+
+	steps := []struct {
+		name, target string
+		form         url.Values
+		want         string
+	}{
+		// A parked case stays in the inbox, and the page still moves on.
+		{"park", "/cases/" + blocked.ID + "/answer", url.Values{"stuck": {"park"}}, "/cases/" + decision.ID},
+		{"answer", "/cases/" + decision.ID + "/answer", url.Values{"choice": {"1"}}, "/cases/" + parked.ID},
+		{"resume", "/cases/" + parked.ID + "/resume", url.Values{}, "/cases/" + zed.ID},
+		{"answer the last", "/cases/" + zed.ID + "/answer", url.Values{"ack": {"1"}}, "/"},
+		{"resume the first", "/cases/" + blocked.ID + "/resume", url.Values{}, "/cases/" + parked.ID},
+	}
+	for _, st := range steps {
+		w := a.do("POST", st.target, st.form, origin)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != st.want {
+			t.Errorf("%s: %d %q, want %q %s", st.name, w.Code, w.Header().Get("Location"), st.want, w.Body.String())
+		}
 	}
 }
 
@@ -287,6 +345,11 @@ func TestThreadFragment(t *testing.T) {
 	if w.Header().Get("HX-Redirect") != "/cases/"+c.ID || w.Header().Get("HX-Refresh") != "" {
 		t.Errorf("stale state: %d, headers %v", w.Code, w.Header())
 	}
+	// On / it sends the browser to /, which shows whichever case is first now.
+	w = a.do("GET", "/cases/"+c.ID+"/thread?state=answered&home=1", nil, map[string]string{"HX-Request": "true"})
+	if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/" {
+		t.Errorf("stale state on /: %d, headers %v", w.Code, w.Header())
+	}
 }
 
 func TestDoneView(t *testing.T) {
@@ -323,5 +386,25 @@ func TestDoneView(t *testing.T) {
 	}
 	if !strings.Contains(body, "Pinned in <strong>#12</strong>.") {
 		t.Errorf("closed outcome missing:\n%s", body)
+	}
+}
+
+func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
+	a := newApp(t)
+	body := a.get(t, "/")
+	if !strings.Contains(body, "No open cases.") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
+		t.Fatalf("empty / does not poll for a first case:\n%s", body)
+	}
+	hx := map[string]string{"HX-Request": "true"}
+	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `hx-get="/fragments/inbox?empty=1"`) {
+		t.Errorf("still empty: %d %s", w.Code, w.Body.String())
+	}
+	a.open(t, openRecords[store.KindDecision])
+	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/" {
+		t.Errorf("case arrived: %d, headers %v", w.Code, w.Header())
+	}
+	// A case page never polls with empty=1.
+	if w := a.do("GET", "/fragments/inbox", nil, hx); w.Code != http.StatusOK {
+		t.Errorf("plain fragment: %d", w.Code)
 	}
 }

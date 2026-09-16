@@ -1,4 +1,15 @@
 {{define "content"}}
+<div class="split{{if .Home}} home{{end}}">
+<aside class="list" aria-label="Inbox">
+{{template "inbox-list" .Inbox}}
+</aside>
+<div class="work">
+{{if .Case}}{{template "case" .}}{{else}}<p class="empty">No open cases.</p>{{end}}
+</div>
+</div>
+{{end}}
+
+{{define "case"}}
 {{$c := .Case}}
 <article class="case">
   <div class="meta">
@@ -73,7 +84,7 @@
 {{end}}
 
 {{define "thread"}}
-<section id="thread" hx-get="/cases/{{.Case.ID | pathEscape}}/thread?state={{.Case.State}}" hx-trigger="every 2s" hx-swap="outerHTML">
+<section id="thread" hx-get="/cases/{{.Case.ID | pathEscape}}/thread?state={{.Case.State}}{{if .Home}}&amp;home=1{{end}}" hx-trigger="every 2s" hx-swap="outerHTML">
   <h2>Thread</h2>
   <ol class="thread">
   {{range .Thread}}
