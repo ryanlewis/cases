@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -12,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryanlewis/cases/internal/instance"
 	"github.com/ryanlewis/cases/internal/store"
 )
 
@@ -183,4 +188,70 @@ func TestServeScreenStats(t *testing.T) {
 	if colored := strings.Join(render(screenView{Stats: countCases(cases, start, now), Color: true, Now: now}), "\n"); !strings.Contains(colored, "\x1b[1;31m2 blocking\x1b[0m") {
 		t.Errorf("blocking count not highlighted:\n%q", colored)
 	}
+}
+
+func TestServeFailsWhenAddressIsTaken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	root := t.TempDir()
+	r := runCases(t, "", "--store", root, "serve", "--listen", ln.Addr().String())
+	if r.err == nil || !strings.Contains(r.err.Error(), "address already in use") {
+		t.Errorf("err = %v, want address already in use", r.err)
+	}
+	if r.stdout != "" {
+		t.Errorf("stdout = %q, want nothing", r.stdout)
+	}
+	// Nothing was recorded for cases status.
+	path, _ := instance.Path(root)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("state file after a failed listen: %v", err)
+	}
+}
+
+func TestServeWithoutStateDirectoryStillServes(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", file)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
+	done := make(chan error, 1)
+	go func() {
+		cmd := &ServeCmd{Listen: "127.0.0.1:0"}
+		done <- cmd.Run(&Deps{Store: t.TempDir(), Stdout: stdout, Stderr: stderr, Context: ctx})
+	}()
+	base := waitForURL(t, stdout)
+	resp, err := http.Get(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve returned %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET / = %d", resp.StatusCode)
+	}
+	if !strings.Contains(stderr.String(), "could not record the instance for cases status: ") {
+		t.Errorf("stderr = %q, want the failed record logged", stderr.String())
+	}
+}
+
+// waitForURL waits for serve to print its URL and returns it.
+func waitForURL(t *testing.T, stdout *syncBuffer) string {
+	t.Helper()
+	urlPattern := regexp.MustCompile(`http://127\.0\.0\.1:\d+/`)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if url := urlPattern.FindString(stdout.String()); url != "" {
+			return url
+		}
+	}
+	t.Fatalf("serve printed no URL: %q", stdout.String())
+	return ""
 }
