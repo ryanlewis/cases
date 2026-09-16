@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -75,9 +76,10 @@ func (c *ListCmd) Run(d *Deps) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(d.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tURGENCY\tKIND\tAGE\tTITLE")
+	// Labels come before the title so a long title does not push them off the line.
+	fmt.Fprintln(tw, "ID\tSTATE\tURGENCY\tKIND\tAGE\tLABELS\tTITLE")
 	for _, cs := range shown {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, web.Age(cs.OpenedAt, time.Now()), cs.Title)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, web.Age(cs.OpenedAt, time.Now()), strings.Join(cs.Labels, ","), cs.Title)
 	}
 	return tw.Flush()
 }

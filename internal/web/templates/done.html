@@ -6,6 +6,7 @@
     <span class="badge">{{.State}}</span>
     <span>{{.Kind}}</span>
     {{with .Worker}}<span>{{.}}</span>{{end}}
+    {{range .Labels}}<span class="tag">{{.}}</span>{{end}}
     <span class="age">{{.Age}}</span>
   </div>
   <h2><a href="/cases/{{.ID | pathEscape}}">{{.Title}}</a></h2>
