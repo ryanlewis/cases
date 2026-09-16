@@ -114,6 +114,19 @@ func TestConfigSetsListen(t *testing.T) {
 	}
 }
 
+func TestConfigSetsNoOpen(t *testing.T) {
+	if cli := parseCases(t, "serve"); cli.Serve.NoOpen {
+		t.Error("no-open is set without the file")
+	}
+	writeConfig(t, "no-open = \"true\"\n")
+	if cli := parseCases(t, "serve"); !cli.Serve.NoOpen {
+		t.Error("no-open = false, want the file's true")
+	}
+	if cli := parseCases(t, "serve", "--no-open=false"); cli.Serve.NoOpen {
+		t.Error("no-open = true, want the flag's false")
+	}
+}
+
 func TestConfigFlagAndEnv(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(t.TempDir(), "mine.toml")
@@ -163,7 +176,7 @@ func TestConfigShow(t *testing.T) {
 	root := t.TempDir()
 	path := writeConfig(t, "store = \""+root+"\"\n")
 	out := mustRun(t, "config", "show")
-	for _, want := range []string{"config: " + path + " (exists)", "store   " + root + "  config", "listen  127.0.0.1:8765", "  default"} {
+	for _, want := range []string{"config: " + path + " (exists)", "store    " + root + "  config", "listen   127.0.0.1:8765", "no-open  false", "  default"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("config show lacks %q:\n%s", want, out)
 		}

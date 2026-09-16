@@ -74,6 +74,8 @@ type Deps struct {
 	// are caught only inside serve, so every other command keeps the default
 	// behaviour of exiting on them.
 	Context context.Context
+	// OpenURL opens the inbox in a browser. When nil, serve opens nothing.
+	OpenURL func(url string) error
 }
 
 // exitError ends the process with a specific status and no "Error:" line.
@@ -118,7 +120,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg}
+	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
 	if err := ctx.Run(deps); err != nil {
 		var ee *exitError
 		if errors.As(err, &ee) {

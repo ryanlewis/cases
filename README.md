@@ -78,7 +78,7 @@ make install    # go install ./cmd/cases
 
 ## Configuration
 
-A TOML file supplies defaults for `--store` and `--listen`, so a store kept
+A TOML file supplies defaults for `--store`, `--listen` and `--no-open`, so a store kept
 somewhere other than the default, such as an Obsidian vault, needs naming
 only once. Precedence is flag > environment variable > config file >
 built-in default.
@@ -97,6 +97,7 @@ cases config show    # print the defaults the environment and the file establish
 | --- | --- | --- | --- |
 | `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
 | `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
+| `no-open` | `--no-open` on `serve` | nothing | `false` |
 
 ```toml
 store = "~/notes/work/assistant/cases"
@@ -141,7 +142,7 @@ Both:
 ```
 cases list  [--state STATE,...] [--json]
 cases show  ID [--json]
-cases serve [--listen 127.0.0.1:8765]
+cases serve [--listen 127.0.0.1:8765] [--no-open]
 ```
 
 `open` prints the new case id. The other write commands print the id and the
@@ -163,18 +164,36 @@ starts if the store directory does not exist yet.
 
 ## serve
 
-`cases serve` runs a small web inbox over the same store:
+`cases serve` runs a small web inbox over the same store and opens it in the
+browser (`open` on macOS, `xdg-open` elsewhere). Pass `--no-open`, or set
+`no-open = "true"` in the [config file](#configuration), to skip that.
+
+The default address is `127.0.0.1:8765`; change it with `--listen` or the
+`listen` key in the config file. Only loopback addresses (`127.0.0.1`, `::1`,
+`localhost`) are accepted for now.
+
+On a terminal, serve shows a status screen that refreshes every second:
+
+- the inbox URL and the store
+- open cases by urgency (blocking in red), parked cases, cases with the agent
+  (answered or picked up), and cases closed today and in all
+- since start: requests, and answers, parks and resumes recorded by a human
+  from the inbox or the CLI; and how long ago the last event was
+- the last five request log lines
+- how to set up an agent with the bundled skill
+
+Press `q` or Ctrl-C to stop. `NO_COLOR` turns colour off. If stderr is not the
+terminal, the request log is also written there.
+
+When stdout is not a terminal (a pipe, a file, a service), serve prints one
+line instead, logs each request to stderr and does not open the browser:
 
 ```sh
-cases serve
+cases serve > serve.log
 # Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/
 ```
 
-The default address is `127.0.0.1:8765`; change it with `--listen` or the
-`listen` key in the [config file](#configuration). Only
-loopback addresses (`127.0.0.1`, `::1`, `localhost`) are accepted for now.
-Each request is logged to stderr, except the page refreshes that run every two
-seconds. Stop it with Ctrl-C.
+Page refreshes that run every two seconds are not logged or counted.
 
 The inbox is laid out like a mail client. The left column lists open and
 parked cases, blocking first, then oldest first. The right side shows the
