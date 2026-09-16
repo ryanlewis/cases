@@ -4,7 +4,7 @@ CLI and local web inbox for a store of cases raised by an agent and answered by 
 
 ## Workflow
 
-- Personal repo, no remote yet. Commit to `main` locally.
+- Personal repo at github.com/ryanlewis/cases (private). Commit to `main` and push; CI runs on push and pull requests.
 - **DO** use Conventional Commits.
 - **NEVER** edit or delete event files in a store. Changes to the record format must keep reading files written by earlier versions.
 - **DO** update README.md in the same change when a command, flag, event or record field changes.

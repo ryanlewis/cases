@@ -80,7 +80,11 @@ kept: `cases show --json` prints every event file as written.
 
 ## Install
 
+The repository is private, so install from a checkout with Go on the path:
+
 ```sh
+git clone git@github.com:ryanlewis/cases.git
+cd cases
 make install    # go install ./cmd/cases
 ```
 
