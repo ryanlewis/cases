@@ -73,7 +73,8 @@ cases/
     0004-agent-pickup.json     # picked_up_at, by
     0005-agent-note.json       # follow-up question, reopens the case
     0006-human-answer.json
-    0007-agent-close.json      # outcome (markdown), links, closed_at
+    0007-agent-pickup.json     # a reopened case is picked up again before it closes
+    0008-agent-close.json      # outcome (markdown), links, closed_at
 ```
 
 File names are `NNNN-<author>-<event>.json`. The author is `agent` or `human`.
@@ -104,8 +105,11 @@ written without seeing it, for example on a machine the amend had not synced
 to yet, so it is refused and the case stays open for another answer.
 
 A `cases` from before `amend` skips amend files as unknown events: it shows an
-amended case as it was opened and checks answers against that. Update `cases`
-on every machine that uses the store before an agent amends a case.
+amended case as it was opened and checks answers against that. A `cases` from
+before the `question` kind refuses a question case's open event as an unknown
+kind, so it reports the whole case as broken rather than skipping one file.
+Update `cases` on every machine that uses the store before an agent amends a
+case or opens a question.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
