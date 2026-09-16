@@ -68,21 +68,42 @@ Each write adds a new file:
 cases/
   2026-09-15T09-12-03Z-pin-bun-or-float/
     0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], worker, brief, context
-    0002-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
-    0003-agent-pickup.json     # picked_up_at, by
-    0004-agent-note.json       # follow-up question, reopens the case
-    0005-human-answer.json
-    0006-agent-close.json      # outcome (markdown), links, closed_at
+    0002-agent-amend.json      # options[], rows[], links[] to add; body, context to replace; amended_at
+    0003-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
+    0004-agent-pickup.json     # picked_up_at, by
+    0005-agent-note.json       # follow-up question, reopens the case
+    0006-human-answer.json
+    0007-agent-close.json      # outcome (markdown), links, closed_at
 ```
 
 File names are `NNNN-<author>-<event>.json`. The author is `agent` or `human`.
-The events are `open`, `answer`, `pickup`, `note`, `close`, `withdraw`, `park`
-and `resume`. Timestamps are RFC 3339 in UTC.
+The events are `open`, `amend`, `answer`, `pickup`, `note`, `close`,
+`withdraw`, `park` and `resume`. Timestamps are RFC 3339 in UTC.
 
 The `worker`, `brief` and `context` fields on `open` are optional and help the
 human act on a case. `worker` names the agent session waiting on it. `brief`
 is the path to the instructions that session started from, so the work can be
 restarted after the case is parked. `context` is free text shown with the case.
+
+An `amend` changes a case that is still open. Its `options`, `rows` and
+`links` are added after the ones the case has, and its `body` or `context`
+replaces the case's. A field it leaves out stays as it was. Nothing can be
+removed, and options keep their numbers.
+
+An amend is refused if it sets a blank `body`, `context`, option or link, adds
+an option, link or row `id` the case already has, or changes nothing, such as
+setting the `body` the case already has. So the same amend sent twice writes
+nothing the second time.
+
+The `open` file stays as it was written. The case shows the amended fields,
+and the answer is checked against them: an approval answer needs a verdict on
+the added rows too. An answer with the same sequence number as an amend was
+written without seeing it, for example on a machine the amend had not synced
+to yet, so it is refused and the case stays open for another answer.
+
+A `cases` from before `amend` skips amend files as unknown events: it shows an
+amended case as it was opened and checks answers against that. Update `cases`
+on every machine that uses the store before an agent amends a case.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
@@ -102,11 +123,12 @@ open --answer--> answered --pickup--> pickedup --close--> closed
 open --withdraw--> withdrawn
 answered or pickedup --note--> open        (a follow-up question)
 open --park--> parked --resume--> open     (stuck cases only)
+open --amend--> open                       (a change before the answer)
 ```
 
-A note on an open case adds to the thread and leaves it open. Anything else,
-such as closing a case that has not been picked up, is refused and nothing is
-written.
+A note on an open case adds to the thread and leaves it open. An amend is only
+allowed on an open case, and also leaves it open. Anything else, such as
+closing a case that has not been picked up, is refused and nothing is written.
 
 ### Kinds and answers
 
@@ -174,6 +196,8 @@ Agent side:
 cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
                [--body-file FILE|-] [--option TEXT]... [--row JSON]...
                [--link URL]... [--worker NAME] [--brief PATH] [--context TEXT]
+cases amend    ID [--body-file FILE|-] [--option TEXT]... [--row JSON]...
+               [--link URL]... [--context TEXT]
 cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
 cases pickup   ID [--by NAME]
 cases note     ID --body-file FILE|-
@@ -211,7 +235,7 @@ cases skill list
 `open` prints the new case id. The other write commands print the id and the
 new state.
 
-`--row` on `open` takes one JSON object per row, for example
+`--row` on `open` and `amend` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 Add `"note":"…"` to show a line under the row's label.
 
@@ -219,6 +243,11 @@ Add `"note":"…"` to show a line under the row's label.
 [store format](#store-format). `--by` on `pickup` records who picked the case
 up, such as the agent session name. `--reason` on `withdraw` records why the
 case no longer needs an answer; `show` and the web thread print it.
+
+`amend` changes an open case as described in [store format](#store-format):
+`--option`, `--row` and `--link` add to the case, and `--body-file` and
+`--context` replace its body and context. It refuses an amend that changes
+nothing, an empty body file and an empty `--context`.
 
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
@@ -303,6 +332,8 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
   reloads when one arrives.
 - `/cases/ID` selects that case: the body rendered as markdown (GFM tables
   included), its links, a response form that fits the kind, and the thread.
+  An amended case is shown as amended, and the thread lists what each amend
+  changed.
   Sending the form writes one answer. A stuck case has a separate `park`
   button, which parks it instead, with the note if one is written. A parked
   case has a `resume` button, and shows in the list with an ochre edge.
@@ -326,15 +357,17 @@ since, including one a sync brought in from another machine, the form is
 refused and nothing is written. The case is shown again as it is now, so the
 thread can be read before sending again; if the case is still open, the form
 keeps what was typed. This stops a tab left open from answering a case that was
-answered somewhere else and then reopened by a note.
+answered somewhere else and then reopened by a note, or a case that has been
+amended since the page was loaded.
 
 The tab title is the selected case's title, with the number of open blocking
 cases in front; the header shows the same count beside the `inbox` and `done`
 links. The list, the count and the thread refresh every two seconds. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
 `/`, which selects whichever case is first. A change that leaves the state as
-it was, such as a note on an open case, only updates the thread, so what has
-been typed is kept; sending the form is then refused as described above.
+it was, such as a note or an amend on an open case, only updates the thread, so
+what has been typed is kept; sending the form is then refused as described
+above.
 
 The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends

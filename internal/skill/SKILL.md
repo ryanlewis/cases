@@ -5,12 +5,12 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 ## Safety
 
 - **Safe to run freely**: `list`, `show`, `wait`, `status`, `config path`, `config show`, `skill list`, `skill show`. They only read.
-- **Agent writes**: `open`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>` and writes nothing.
+- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>` and writes nothing.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never edit, rename or delete files in the store.** The state is worked out from the files, so a hand edit corrupts the record. Use the commands.
 - **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is plain JSON on disk, may be synced, and is shown in a browser. Name the secret or say where it lives instead.
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
-- **Do not open duplicates.** Before opening, check `cases list --state open,answered,parked --json` for a case of yours on the same question.
+- **Do not open duplicates.** Before opening, check `cases list --state open,answered,parked --json` for a case of yours on the same question. If it is still open and needs changing, amend it.
 - `serve`, `config init` and `skill install` / `skill uninstall` are for the human. Do not run them unasked.
 
 ## The store
@@ -26,12 +26,13 @@ open --answer--> answered --pickup--> pickedup --close--> closed
 open --withdraw--> withdrawn
 answered or pickedup --note--> open        (a follow-up question)
 open --park--> parked --resume--> open     (stuck cases only)
+open --amend--> open                       (a change before the answer)
 ```
 
 - `answer`, `park` and `resume` are written by the human. Everything else is yours.
 - `pickup` is only allowed on an answered case, and `close` only on a picked-up one.
 - `note` on an open case adds to the thread and leaves it open. On an answered or picked-up case it reopens the case for another answer and clears the current one.
-- `withdraw` is only allowed on an open case.
+- `amend` and `withdraw` are only allowed on an open case.
 
 ## Kinds
 
@@ -76,6 +77,22 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
 - `--worker NAME` names your session, the one waiting on the case. `--brief PATH` is the path to the instructions your session started from, so the work can be restarted if the case is parked. `--context TEXT` is free text shown to the human with the case.
 - Prints the new case id.
+
+### `cases amend`
+
+```sh
+cases amend ID [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
+  [--link URL]... [--context TEXT]
+```
+
+- Changes an open case before the human answers it: another option, another script to approve, a link, or a body or context that is wrong or out of date. The answer is checked against the case as amended, so an approval answer covers the rows you add.
+- `--option` adds options to a `decision` case, numbered after the ones it has. `--row` adds rows to an `approval` case; each `id` must be new to the case. `--link` adds links. An option or link the case already has is refused, and so is an amend that changes nothing, so sending the same amend twice writes nothing the second time.
+- `--body-file` replaces the whole body, so write all of it, not only what changed. `--context` replaces the context.
+- An amend erases nothing: the body and context it replaces stay in the store and in `show --json`. If a case holds a secret, amending it out does not remove it; tell the human so they can rotate it.
+- Nothing can be removed or reordered. If the question itself has changed, withdraw the case and open a new one; for a second question, open a second case.
+- Put every change in one amend: each one can send the human back to read the case again. To add to the thread without changing the case, use `note`.
+- An amend does not wake `wait`; leave your wait running.
+- Prints the case id and its state.
 
 ### `cases wait`
 

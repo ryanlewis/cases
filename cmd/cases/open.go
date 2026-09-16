@@ -39,22 +39,33 @@ func (c *OpenCmd) Run(d *Deps) error {
 		}
 		rec.Body = body
 	}
-	for i, raw := range c.Row {
-		var row store.Row
-		dec := json.NewDecoder(strings.NewReader(raw))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&row); err != nil {
-			return fmt.Errorf("--row %d: %w", i+1, err)
-		}
-		if dec.More() {
-			return fmt.Errorf("--row %d: unexpected data after the row object; pass one --row per row", i+1)
-		}
-		rec.Rows = append(rec.Rows, row)
+	rows, err := parseRows(c.Row)
+	if err != nil {
+		return err
 	}
+	rec.Rows = rows
 	created, err := store.Create(d.Store, rec)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(d.Stdout, created.ID)
 	return nil
+}
+
+// parseRows reads --row values, one JSON row object each.
+func parseRows(values []string) ([]store.Row, error) {
+	var rows []store.Row
+	for i, raw := range values {
+		var row store.Row
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&row); err != nil {
+			return nil, fmt.Errorf("--row %d: %w", i+1, err)
+		}
+		if dec.More() {
+			return nil, fmt.Errorf("--row %d: unexpected data after the row object; pass one --row per row", i+1)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }

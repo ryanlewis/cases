@@ -16,6 +16,24 @@ func (c *Case) Describe(ev Event) []string {
 		}
 	}
 	switch ev.Type {
+	case EventAmend:
+		var a AmendRecord
+		_ = json.Unmarshal(ev.Data, &a)
+		if a.Body != "" {
+			add("replaced the body")
+		}
+		for _, o := range a.Options {
+			add("added option: %s", o)
+		}
+		for _, r := range a.Rows {
+			add("added row [%s] %s", r.ID, r.Label)
+		}
+		for _, l := range a.Links {
+			add("added link: %s", l)
+		}
+		if a.Context != "" {
+			add("replaced the context: %s", a.Context)
+		}
 	case EventAnswer:
 		var a AnswerRecord
 		_ = json.Unmarshal(ev.Data, &a)

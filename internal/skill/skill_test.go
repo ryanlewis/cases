@@ -57,7 +57,7 @@ func TestAgentSkillMDFrontmatterAndCommands(t *testing.T) {
 					t.Errorf("frontmatter missing %q:\n%s", need, frontmatter)
 				}
 			}
-			for _, cmd := range []string{"cases open", "cases wait", "cases pickup", "cases note", "cases close", "cases withdraw", "cases show", "cases list", "cases status"} {
+			for _, cmd := range []string{"cases open", "cases amend", "cases wait", "cases pickup", "cases note", "cases close", "cases withdraw", "cases show", "cases list", "cases status"} {
 				if !strings.Contains(content, cmd) {
 					t.Errorf("SKILL.md missing reference to %q", cmd)
 				}

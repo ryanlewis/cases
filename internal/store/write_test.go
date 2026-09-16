@@ -163,6 +163,8 @@ func TestInvalidTransitionIsNotWritten(t *testing.T) {
 		{"resume an open case", func() (*Case, error) { return Resume(c.Dir, AuthorHuman, ResumeRecord{}) }},
 		{"answer with a bad choice", func() (*Case, error) { return Answer(c.Dir, AnswerRecord{Choice: 9}) }},
 		{"resume by an unknown author", func() (*Case, error) { return Resume(c.Dir, "robot", ResumeRecord{}) }},
+		{"amend with nothing", func() (*Case, error) { return Amend(c.Dir, AmendRecord{}) }},
+		{"amend a decision with rows", func() (*Case, error) { return Amend(c.Dir, AmendRecord{Rows: openOf(KindApproval).Rows}) }},
 	}
 	for _, ch := range checks {
 		if _, err := ch.call(); err == nil {
@@ -171,6 +173,52 @@ func TestInvalidTransitionIsNotWritten(t *testing.T) {
 	}
 	if got := fileNames(t, c.Dir); !slices.Equal(got, []string{"0001-agent-open.json"}) {
 		t.Errorf("files after refused writes = %v", got)
+	}
+}
+
+func TestAmend(t *testing.T) {
+	fixClock(t, time.Date(2026, 9, 16, 11, 0, 0, 0, time.UTC))
+	c, err := Create(t.TempDir(), openOf(KindDecision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	openFile := filepath.Join(c.Dir, "0001-agent-open.json")
+	opened, err := os.ReadFile(openFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	amended, err := Amend(c.Dir, AmendRecord{Options: []string{"Vendor it"}, Links: []string{"https://example.com/log"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if amended.State != StateOpen || !slices.Equal(amended.Options, []string{"Pin", "Float", "Vendor it"}) {
+		t.Errorf("amended = %+v", amended)
+	}
+	if got := fileNames(t, c.Dir); !slices.Equal(got, []string{"0001-agent-open.json", "0002-agent-amend.json"}) {
+		t.Errorf("files = %v", got)
+	}
+	if now, _ := os.ReadFile(openFile); string(now) != string(opened) {
+		t.Errorf("open event changed from %s to %s", opened, now)
+	}
+	// Only the fields the amend sets are written.
+	raw, err := os.ReadFile(filepath.Join(c.Dir, "0002-agent-amend.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got["amended_at"] != "2026-09-16T11:00:00Z" || got["options"] == nil || got["links"] == nil {
+		t.Errorf("record = %v", got)
+	}
+	loaded, err := Load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Options) != 3 || len(loaded.Links) != 1 || len(loaded.Problems) != 0 {
+		t.Errorf("loaded = %+v, problems %v", loaded.OpenRecord, loaded.Problems)
 	}
 }
 
@@ -465,6 +513,47 @@ func TestAtRevisionSeesSyncedEvents(t *testing.T) {
 	}
 	if got := fileNames(t, d.Dir); len(got) != 4 {
 		t.Errorf("files after refused write = %v", got)
+	}
+}
+
+// An answer from a machine the amend had not synced to yet has the amend's
+// sequence number or a lower one. It answers the case as it was before the
+// amend, so it is refused and the case stays open for another answer.
+func TestAnswerWrittenWithoutAnAmendIsRefused(t *testing.T) {
+	for _, kind := range []Kind{KindDecision, KindApproval} {
+		t.Run(string(kind), func(t *testing.T) {
+			c, err := Create(t.TempDir(), openOf(kind))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Amend(c.Dir, AmendRecord{Body: "The question has changed."}); err != nil {
+				t.Fatal(err)
+			}
+			answer, err := json.Marshal(answerOf(kind))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, c.Dir, "0002-human-answer.json", string(answer))
+			loaded, err := Load(c.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused := slices.ContainsFunc(loaded.Problems, func(p string) bool {
+				return p == "0002-human-answer.json: the answer was written without seeing amend 0002"
+			})
+			if loaded.State != StateOpen || loaded.Answer != nil || !refused {
+				t.Errorf("state %s, answer %+v, problems %q", loaded.State, loaded.Answer, loaded.Problems)
+			}
+
+			// Answered again after the amend, the answer is recorded.
+			answered, err := Answer(c.Dir, answerOf(kind))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if answered.State != StateAnswered {
+				t.Errorf("state after answering again = %s", answered.State)
+			}
+		})
 	}
 }
 

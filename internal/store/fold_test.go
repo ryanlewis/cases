@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,7 @@ func answerOf(kind Kind) AnswerRecord {
 }
 
 var (
+	amendStep    = agent(EventAmend, AmendRecord{Context: "Seen on the mirror too."})
 	pickupStep   = agent(EventPickup, PickupRecord{By: "bun-pins"})
 	noteStep     = agent(EventNote, NoteRecord{Body: "One more thing?"})
 	closeStep    = agent(EventClose, CloseRecord{Outcome: "Done."})
@@ -91,6 +93,7 @@ func TestTransitionMatrix(t *testing.T) {
 	}
 	events := map[string]step{
 		"open":         open,
+		"amend":        amendStep,
 		"answer":       answer,
 		"pickup":       pickupStep,
 		"note":         noteStep,
@@ -108,6 +111,7 @@ func TestTransitionMatrix(t *testing.T) {
 			"withdraw": StateWithdrawn,
 			"park":     StateParked,
 			"note":     StateOpen,
+			"amend":    StateOpen,
 		},
 		StateAnswered: {
 			"pickup": StatePickedUp,
@@ -235,6 +239,21 @@ func TestTransitions(t *testing.T) {
 			name:    "agent cannot park",
 			steps:   []step{agent(EventOpen, openOf(KindStuck)), agent(EventPark, ParkRecord{})},
 			wantErr: "park events are not written by the agent",
+		},
+		{
+			name:    "human cannot amend",
+			steps:   []step{agent(EventOpen, openOf(KindFYI)), human(EventAmend, AmendRecord{Body: "Changed."})},
+			wantErr: "amend events are not written by the human",
+		},
+		{
+			name:    "amend an answered case",
+			steps:   []step{agent(EventOpen, openOf(KindFYI)), human(EventAnswer, answerOf(KindFYI)), agent(EventAmend, AmendRecord{Body: "Changed."})},
+			wantErr: "cannot amend a case that is answered",
+		},
+		{
+			name:  "amend a case a note reopened",
+			steps: []step{agent(EventOpen, openOf(KindFYI)), human(EventAnswer, answerOf(KindFYI)), noteStep, agent(EventAmend, AmendRecord{Body: "Changed."})},
+			want:  StateOpen,
 		},
 		{
 			name:    "unknown event",
@@ -396,6 +415,159 @@ func TestAnswerValidation(t *testing.T) {
 			open := openOf(tt.kind)
 			checkErr(t, tt.answer.validate(&open), tt.wantErr)
 		})
+	}
+}
+
+func TestAmendValidation(t *testing.T) {
+	row := func(id string) Row {
+		return Row{ID: id, Label: "Deploy", Script: "make deploy", Link: "https://example.com/" + id}
+	}
+	tests := []struct {
+		name    string
+		kind    Kind
+		amend   AmendRecord
+		wantErr string
+	}{
+		{name: "body on stuck", kind: KindStuck, amend: AmendRecord{Body: "Now with the logs."}},
+		{name: "context on signoff", kind: KindSignoff, amend: AmendRecord{Context: "PR #12"}},
+		{name: "links on fyi", kind: KindFYI, amend: AmendRecord{Links: []string{"https://example.com/log"}}},
+		{name: "options on decision", kind: KindDecision, amend: AmendRecord{Options: []string{"Vendor it"}}},
+		{name: "rows on approval", kind: KindApproval, amend: AmendRecord{Rows: []Row{row("c"), row("d")}}},
+
+		{name: "nothing", kind: KindFYI, amend: AmendRecord{}, wantErr: "the amend has no body, options, rows, links or context"},
+		{name: "blank body", kind: KindFYI, amend: AmendRecord{Body: " \n", Links: []string{"https://example.com/log"}}, wantErr: "amend body is empty"},
+		{name: "blank context", kind: KindFYI, amend: AmendRecord{Context: "  "}, wantErr: "amend context is empty"},
+		{name: "options on approval", kind: KindApproval, amend: AmendRecord{Options: []string{"x"}}, wantErr: "options are for decision cases, not approval"},
+		{name: "rows on decision", kind: KindDecision, amend: AmendRecord{Rows: []Row{row("c")}}, wantErr: "rows are for approval cases, not decision"},
+		{name: "empty option", kind: KindDecision, amend: AmendRecord{Options: []string{"Vendor it", " "}}, wantErr: "option 2 is empty"},
+		{name: "row id already on the case", kind: KindApproval, amend: AmendRecord{Rows: []Row{row("c"), row("b")}}, wantErr: `row 2: id "b" is already on the case`},
+		{name: "row id twice in the amend", kind: KindApproval, amend: AmendRecord{Rows: []Row{row("c"), row("c")}}, wantErr: `row 2: id "c" is used twice`},
+		{name: "row id with =", kind: KindApproval, amend: AmendRecord{Rows: []Row{row("c=d")}}, wantErr: "must be letters"},
+		{name: "row without script", kind: KindApproval, amend: AmendRecord{Rows: []Row{{ID: "c", Label: "Deploy", Link: "https://example.com/c"}}}, wantErr: `row "c": script is empty`},
+		{name: "empty link", kind: KindFYI, amend: AmendRecord{Links: []string{""}}, wantErr: "link 1 is empty"},
+		{name: "blank link", kind: KindFYI, amend: AmendRecord{Links: []string{"https://example.com/log", "  "}}, wantErr: "link 2 is empty"},
+
+		// An amend sent again, or one that repeats the case, adds nothing.
+		{name: "option already on the case", kind: KindDecision, amend: AmendRecord{Options: []string{"Vendor it", "Pin"}}, wantErr: `option "Pin" is already on the case`},
+		{name: "option twice in the amend", kind: KindDecision, amend: AmendRecord{Options: []string{"Vendor it", "Vendor it"}}, wantErr: `option "Vendor it" is used twice`},
+		{name: "link already on the case", kind: KindFYI, amend: AmendRecord{Links: []string{"https://example.com/pr"}}, wantErr: `link "https://example.com/pr" is already on the case`},
+		{name: "link twice in the amend", kind: KindFYI, amend: AmendRecord{Links: []string{"https://example.com/log", "https://example.com/log"}}, wantErr: `link "https://example.com/log" is used twice`},
+		{name: "the body the case has", kind: KindFYI, amend: AmendRecord{Body: "Body."}, wantErr: "the amend changes nothing"},
+		{name: "the body and context the case has", kind: KindSignoff, amend: AmendRecord{Body: "Body.", Context: "Release 1.4"}, wantErr: "the amend changes nothing"},
+		{name: "the body the case has, and a link", kind: KindFYI, amend: AmendRecord{Body: "Body.", Links: []string{"https://example.com/log"}}},
+		{name: "the context the case has, and a new body", kind: KindStuck, amend: AmendRecord{Body: "Now with the logs.", Context: "Release 1.4"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			open := openOf(tt.kind)
+			open.Links = []string{"https://example.com/pr"}
+			open.Context = "Release 1.4"
+			checkErr(t, tt.amend.validate(&open), tt.wantErr)
+		})
+	}
+}
+
+func TestAmendChangesTheCase(t *testing.T) {
+	open := openOf(KindApproval)
+	open.Links = []string{"https://example.com/pr"}
+	open.Context = "Release 1.4"
+	added := Row{ID: "c", Label: "Deploy", Script: "make deploy", Link: "https://example.com/c"}
+	c, _, err := fold(t,
+		agent(EventOpen, open),
+		agent(EventAmend, AmendRecord{
+			Body:    "Three scripts now.",
+			Rows:    []Row{added},
+			Links:   []string{"https://example.com/log"},
+			Context: "Release 1.4.1",
+		}),
+		// An amend that sets one field leaves the others as they are.
+		agent(EventAmend, AmendRecord{Links: []string{"https://example.com/diff"}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Rows, append(openOf(KindApproval).Rows, added)) || c.Body != "Three scripts now." || c.Context != "Release 1.4.1" ||
+		!slices.Equal(c.Links, []string{"https://example.com/pr", "https://example.com/log", "https://example.com/diff"}) {
+		t.Errorf("case = %+v", c.OpenRecord)
+	}
+	if c.State != StateOpen || len(c.Events) != 3 || c.Events[1].Type != EventAmend {
+		t.Errorf("state %s, events %+v", c.State, c.Events)
+	}
+	// The open event is kept as it was written.
+	var first OpenRecord
+	if err := json.Unmarshal(c.Events[0].Data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Body != "Body." || len(first.Rows) != 2 || len(first.Links) != 1 || first.Context != "Release 1.4" {
+		t.Errorf("open event = %+v", first)
+	}
+
+	// A refused amend changes nothing, not even the fields that were valid. Its
+	// row id was added by the first amend, so it is checked against the case
+	// as amended, not as opened.
+	before := c.OpenRecord
+	err = c.apply(Event{Seq: 4, Author: AuthorAgent, Type: EventAmend, Data: []byte(`{"body":"Four scripts.","links":["https://example.com/x"],"rows":[{"id":"c","label":"Again","script":"true","link":"https://example.com/c"}]}`)})
+	if err == nil || !strings.Contains(err.Error(), "already on the case") {
+		t.Fatalf("err = %v", err)
+	}
+	if c.Body != before.Body || len(c.Rows) != 3 || len(c.Links) != 3 || len(c.Events) != 3 {
+		t.Errorf("refused amend changed the case: %+v", c.OpenRecord)
+	}
+}
+
+// The answer is checked against the case as amended, not as it was opened.
+func TestAnswerIsCheckedAgainstTheAmendedCase(t *testing.T) {
+	approval := openOf(KindApproval)
+	approval.Rows = approval.Rows[:1]
+	amended := []step{
+		agent(EventOpen, approval),
+		agent(EventAmend, AmendRecord{Rows: []Row{{ID: "b", Label: "Migrate", Script: "make migrate", Link: "https://example.com/b"}}}),
+	}
+	decision := []step{
+		agent(EventOpen, openOf(KindDecision)),
+		agent(EventAmend, AmendRecord{Options: []string{"Vendor it"}}),
+	}
+	tests := []struct {
+		name    string
+		steps   []step
+		answer  AnswerRecord
+		wantErr string
+	}{
+		{name: "every row, the added one too", steps: amended, answer: AnswerRecord{Rows: []RowAnswer{{ID: "a", Verdict: VerdictApprove}, {ID: "b", Verdict: VerdictHold}}}},
+		{name: "only the rows it opened with", steps: amended, answer: AnswerRecord{Rows: []RowAnswer{{ID: "a", Verdict: VerdictApprove}}}, wantErr: `row "b" has no verdict`},
+		{name: "a row that is not on the case", steps: amended, answer: AnswerRecord{Rows: []RowAnswer{{ID: "a", Verdict: VerdictApprove}, {ID: "b", Verdict: VerdictApprove}, {ID: "c", Verdict: VerdictApprove}}}, wantErr: `row "c" is not on this case`},
+		{name: "the added option", steps: decision, answer: AnswerRecord{Choice: 3}},
+		{name: "past the added option", steps: decision, answer: AnswerRecord{Choice: 4}, wantErr: "choice 4 is not an option (1-3)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, err := fold(t, append(slices.Clone(tt.steps), human(EventAnswer, tt.answer))...)
+			checkErr(t, err, tt.wantErr)
+			if tt.wantErr == "" && c.State != StateAnswered {
+				t.Errorf("state = %s", c.State)
+			}
+		})
+	}
+}
+
+// Only an amend makes an answer's number matter. A case with no amend takes an
+// answer numbered 0000, as a hand-numbered store can have.
+func TestAnswerNumberIsOnlyCheckedAfterAnAmend(t *testing.T) {
+	open, err := json.Marshal(openOf(KindFYI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Case{}
+	for _, ev := range []Event{
+		{Seq: 0, Author: AuthorAgent, Type: EventOpen, Data: open},
+		{Seq: 0, Author: AuthorHuman, Type: EventAnswer, Data: []byte(`{"ack":true}`)},
+	} {
+		if err := c.apply(ev); err != nil {
+			t.Fatalf("%s: %v", ev.Type, err)
+		}
+	}
+	if c.State != StateAnswered {
+		t.Errorf("state = %s", c.State)
 	}
 }
 
