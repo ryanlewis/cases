@@ -123,6 +123,7 @@ type OpenRecord struct {
 	Options  []string  `json:"options,omitempty"`
 	Rows     []Row     `json:"rows,omitempty"`
 	Links    []string  `json:"links,omitempty"`
+	Labels   []string  `json:"labels,omitempty"`
 	Worker   string    `json:"worker,omitempty"`
 	Brief    string    `json:"brief,omitempty"`
 	Context  string    `json:"context,omitempty"`
@@ -130,13 +131,14 @@ type OpenRecord struct {
 }
 
 // AmendRecord is the body of NNNN-agent-amend.json: a change to an open case.
-// Options, rows and links are added after the case's own; a body or context
-// replaces the case's. A field left empty leaves the case's as it was.
+// Options, rows, links and labels are added after the case's own; a body or
+// context replaces the case's. A field left empty leaves the case's as it was.
 type AmendRecord struct {
 	Body      string    `json:"body,omitempty"`
 	Options   []string  `json:"options,omitempty"`
 	Rows      []Row     `json:"rows,omitempty"`
 	Links     []string  `json:"links,omitempty"`
+	Labels    []string  `json:"labels,omitempty"`
 	Context   string    `json:"context,omitempty"`
 	AmendedAt time.Time `json:"amended_at"`
 }

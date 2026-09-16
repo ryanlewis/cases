@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,50 @@ func TestListOrderFilterAndJSON(t *testing.T) {
 	}
 	if r := runCases(t, "", "--store", root, "list", "--state", "done"); r.err == nil {
 		t.Error("unknown state accepted")
+	}
+}
+
+func TestListByLabelAndWorker(t *testing.T) {
+	root := t.TempDir()
+	open := func(title string, args ...string) string {
+		return strings.TrimSpace(mustRun(t, append([]string{"--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", title}, args...)...))
+	}
+	a := open("A", "--label", "round-1", "--worker", "w1")
+	b := open("B", "--label", "round-1", "--label", "docs", "--worker", "w2")
+	c := open("C", "--label", "round-2", "--worker", "w1")
+	d := open("D")
+
+	ids := func(args ...string) []string {
+		t.Helper()
+		var got []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(mustRun(t, append([]string{"--store", root, "list", "--json"}, args...)...)), &got); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, g := range got {
+			out = append(out, g.ID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, tt := range []struct {
+		args []string
+		want []string
+	}{
+		{nil, []string{a, b, c, d}},
+		{[]string{"--label", "round-1"}, []string{a, b}},
+		{[]string{"--label", "docs", "--label", "round-2"}, []string{b, c}},
+		{[]string{"--worker", "w1"}, []string{a, c}},
+		{[]string{"--worker", "w1", "--worker", "w2"}, []string{a, b, c}},
+		{[]string{"--label", "round-1", "--worker", "w1"}, []string{a}},
+		{[]string{"--label", "docs", "--worker", "w1"}, nil},
+		{[]string{"--label", "nope"}, nil},
+	} {
+		if got := ids(tt.args...); !slices.Equal(got, tt.want) {
+			t.Errorf("list %q = %q, want %q", tt.args, got, tt.want)
+		}
 	}
 }
 

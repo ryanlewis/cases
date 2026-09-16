@@ -16,6 +16,7 @@ type WaitCmd struct {
 	Since   string        `help:"Also count human events written after this RFC 3339 time, even if they were already in the store when wait started. By default only events that land while waiting count." placeholder:"TIME"`
 	Timeout time.Duration `help:"Give up after this long: nothing on stdout, one line on stderr, exit 2. 0 waits forever." default:"0"`
 	ID      []string      `help:"Only wait on this case. Repeatable." name:"id" sep:"none" placeholder:"ID"`
+	CaseFilter
 }
 
 // needsAgent reports whether the case is waiting on the agent, and the event
@@ -98,7 +99,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 		var waiting []ready
 		fresh := false
 		for _, cs := range cases {
-			if len(c.ID) > 0 && !slices.Contains(c.ID, cs.ID) {
+			if len(c.ID) > 0 && !slices.Contains(c.ID, cs.ID) || !c.match(cs) {
 				continue
 			}
 			ev, ok := needsAgent(cs)

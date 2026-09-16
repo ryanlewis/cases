@@ -47,6 +47,7 @@ func printCase(w io.Writer, c *store.Case) {
 	field("kind", string(c.Kind))
 	field("urgency", string(c.Urgency))
 	field("opened", stamp(c.OpenedAt))
+	field("labels", strings.Join(c.Labels, ", "))
 	field("worker", c.Worker)
 	field("brief", c.Brief)
 	field("context", c.Context)

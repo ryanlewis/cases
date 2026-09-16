@@ -93,8 +93,8 @@ func AtRevision(rev int) Precondition {
 	return Precondition{revision: rev}
 }
 
-// Amend records the agent changing an open case: adding options, rows or
-// links, or replacing the body or context.
+// Amend records the agent changing an open case: adding options, rows,
+// links or labels, or replacing the body or context.
 func Amend(dir string, rec AmendRecord) (*Case, error) {
 	return appendEvent(dir, AuthorAgent, EventAmend, &rec)
 }

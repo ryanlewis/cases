@@ -67,6 +67,57 @@ func TestCreateWritesOpenEvent(t *testing.T) {
 	}
 }
 
+func TestCreateWritesLabels(t *testing.T) {
+	rec := openOf(KindFYI)
+	rec.Labels = []string{"feat-labels", "round 3"}
+	c, err := Create(t.TempDir(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(c.Dir, "0001-agent-open.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Labels []string }
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Labels, rec.Labels) {
+		t.Errorf("open file = %s", raw)
+	}
+	loaded, err := Load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(loaded.Labels, rec.Labels) {
+		t.Errorf("labels = %q", loaded.Labels)
+	}
+}
+
+// An open file written before labels existed has no labels key and still
+// loads, with no labels.
+func TestOpenFileWithoutLabelsLoads(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "2026-09-01T10-00-00Z-old-case")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "0001-agent-open.json", `{"kind":"fyi","urgency":"whenever","title":"Old case","worker":"w1","brief":"BRIEF.md","opened_at":"2026-09-01T10:00:00Z"}`)
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.State != StateOpen || c.Labels != nil || c.Worker != "w1" || len(c.Problems) != 0 {
+		t.Errorf("case = %+v, problems %q", c.OpenRecord, c.Problems)
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"labels"`) {
+		t.Errorf("json = %s", raw)
+	}
+}
+
 func TestCreateRefusesInvalidOpenWithoutLeavingADirectory(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Create(root, OpenRecord{Kind: KindDecision, Urgency: UrgencyToday, Title: "No options"}); err == nil {

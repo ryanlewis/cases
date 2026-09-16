@@ -30,6 +30,7 @@ func TestDescribeAmend(t *testing.T) {
 		want []string
 	}{
 		{KindDecision, AmendRecord{Options: []string{"Vendor it"}}, []string{"added option: Vendor it"}},
+		{KindFYI, AmendRecord{Labels: []string{"feat-labels", "round 3"}}, []string{"added label: feat-labels", "added label: round 3"}},
 		{
 			KindApproval,
 			AmendRecord{
