@@ -101,9 +101,17 @@ func renderMarkdown(src string) template.HTML {
 	return template.HTML(buf.String()) //nolint:gosec // goldmark output with raw HTML disabled
 }
 
+// isWebLink reports whether a case or row link is an http or https URL. Other
+// links, such as a filesystem path, are shown as text: they would not open.
+func isWebLink(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
 var funcs = template.FuncMap{
 	"markdown":   renderMarkdown,
 	"pathEscape": url.PathEscape,
+	"webLink":    isWebLink,
 	"stamp": func(t time.Time) string {
 		if t.IsZero() {
 			return ""

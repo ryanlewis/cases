@@ -23,7 +23,7 @@
   {{with $c.Context}}<p class="context">{{.}}</p>{{end}}
   <div class="body">{{markdown $c.Body}}</div>
   {{if $c.Links}}
-  <ul class="links">{{range $c.Links}}<li><a href="{{.}}" target="_blank" rel="noopener noreferrer">{{.}}</a></li>{{end}}</ul>
+  <ul class="links">{{range $c.Links}}<li>{{if webLink .}}<a href="{{.}}" target="_blank" rel="noopener noreferrer">{{.}}</a>{{else}}{{.}}{{end}}</li>{{end}}</ul>
   {{end}}
 </article>
 
@@ -46,7 +46,7 @@
   <fieldset class="row">
     <legend>{{.Label}}</legend>
     {{with .Note}}<p class="context">{{.}}</p>{{end}}
-    <p><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a></p>
+    <p>{{if webLink .Link}}<a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a>{{else}}{{.Link}}{{end}}</p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">
       <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve</label>
