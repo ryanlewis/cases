@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -96,11 +97,15 @@ func (e *notFound) Is(target error) bool { return target == fs.ErrNotExist }
 type DB struct {
 	Path string
 
-	mu      sync.Mutex
-	pool    *sql.DB
-	file    os.FileInfo // the file as it was before pool opened it
-	gen     int         // raised each time a pool is opened
-	retired *sql.DB     // the last pool for a file no longer at Path
+	mu   sync.Mutex
+	pool *sql.DB
+	file os.FileInfo // the file pool was opened on
+	gen  int         // raised each time a pool is opened
+	// users counts the calls using each pool: from open until they release
+	// it. A pool for a file no longer at Path is closed once no call is
+	// using it, and never while one is.
+	users   map[*sql.DB]int
+	retired []*sql.DB // pools for files no longer at Path that calls still use
 }
 
 var _ Store = (*DB)(nil)
@@ -117,51 +122,47 @@ func (d *DB) Disconnect() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var errs []error
-	for _, p := range []*sql.DB{d.retired, d.pool} {
+	for _, p := range append(d.retired, d.pool) {
 		if p != nil {
 			errs = append(errs, p.Close())
 		}
 	}
-	d.pool, d.file, d.retired = nil, nil, nil
+	d.pool, d.file, d.retired, d.users = nil, nil, nil, nil
 	return errors.Join(errs...)
 }
 
-// open returns the pool for the file at Path and its generation. With create
-// it makes the file, its directory and the schema when they are missing;
-// without it a missing file, or one with no tables, is fs.ErrNotExist.
-func (d *DB) open(ctx context.Context, create bool) (*sql.DB, int, error) {
+// open returns the pool for the file at Path, its generation, and release,
+// which the caller runs once it is done with the pool. With create it makes
+// the file, its directory and the schema when they are missing; without it a
+// missing file, or one with no tables, is fs.ErrNotExist.
+func (d *DB) open(ctx context.Context, create bool) (pool *sql.DB, gen int, release func(), err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	info, err := os.Stat(d.Path)
 	switch {
 	case err == nil && info.IsDir():
-		return nil, 0, fmt.Errorf("store %s is a directory; the store is now one SQLite file, and directory stores are not read: name a file such as %s", d.Path, filepath.Join(d.Path, "cases.db"))
+		return nil, 0, nil, fmt.Errorf("store %s is a directory; the store is now one SQLite file, and directory stores are not read: name a file such as %s", d.Path, filepath.Join(d.Path, "cases.db"))
 	case err == nil && d.pool != nil && os.SameFile(info, d.file):
-		return d.pool, d.gen, nil
+		return d.pool, d.gen, d.use(d.pool), nil
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
-	// The file is missing, or is not the one the pool has open. A query may be
-	// about to start on the pool, so it is retired rather than closed, and the
-	// pool retired before it, which has had that chance, is closed. Closing a
+	// The file is missing, or is not the one the pool has open. Closing a
 	// pool on a removed file does not delete the WAL of a file now at Path.
 	if d.pool != nil {
-		if old := d.retired; old != nil {
-			go func() { _ = old.Close() }()
-		}
-		d.pool.SetMaxIdleConns(0)
-		d.retired, d.pool, d.file = d.pool, nil, nil
+		d.retire(d.pool)
+		d.pool, d.file = nil, nil
 	}
 	if err != nil && !create {
-		return nil, 0, d.missing()
+		return nil, 0, nil, d.missing()
 	}
 	if err != nil {
 		if err := checkLeftovers(d.Path); err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		if err := createFile(d.Path); err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 	}
 
@@ -173,14 +174,14 @@ func (d *DB) open(ctx context.Context, create bool) (*sql.DB, int, error) {
 	for tries := 1; ; tries++ {
 		before, err := os.Stat(d.Path)
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, 0, d.missing()
+			return nil, 0, nil, d.missing()
 		}
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		pool, err := sql.Open("sqlite", dsn(d.Path))
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		pool.SetMaxOpenConns(maxOpenConns)
 		ready, err := setup(ctx, pool, d.Path, create)
@@ -189,22 +190,64 @@ func (d *DB) open(ctx context.Context, create bool) (*sql.DB, int, error) {
 		}
 		if err != nil {
 			_ = pool.Close()
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		after, err := os.Stat(d.Path)
 		if err == nil && os.SameFile(before, after) {
 			d.pool, d.file = pool, after
 			d.gen++
-			return pool, d.gen, nil
+			return pool, d.gen, d.use(pool), nil
 		}
 		_ = pool.Close()
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		if tries == 3 {
-			return nil, 0, fmt.Errorf("store %s was replaced three times while it was being opened", d.Path)
+			return nil, 0, nil, fmt.Errorf("store %s was replaced three times while it was being opened", d.Path)
 		}
 	}
+}
+
+// use counts a call using p and returns the function the call runs when it
+// is done with p, which closes p if p was retired and no other call is using
+// it. Running it again does nothing. d.mu must be held.
+func (d *DB) use(p *sql.DB) (release func()) {
+	if d.users == nil {
+		d.users = map[*sql.DB]int{}
+	}
+	d.users[p]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			// Disconnect has closed every pool and forgotten its calls.
+			if d.users[p] == 0 {
+				return
+			}
+			if d.users[p]--; d.users[p] > 0 {
+				return
+			}
+			delete(d.users, p)
+			if i := slices.Index(d.retired, p); i >= 0 {
+				d.retired = slices.Delete(d.retired, i, i+1)
+				_ = p.Close()
+			}
+		})
+	}
+}
+
+// retire takes p, the pool for a file no longer at Path, out of use. It is
+// closed now if no call is using it, or else when the last one is done: a
+// call may have the pool and not have started its query yet. d.mu must be
+// held.
+func (d *DB) retire(p *sql.DB) {
+	if d.users[p] == 0 {
+		_ = p.Close()
+		return
+	}
+	p.SetMaxIdleConns(0)
+	d.retired = append(d.retired, p)
 }
 
 func (d *DB) missing() error {

@@ -29,13 +29,14 @@ func openDB(t *testing.T, path string) *DB {
 }
 
 // pool returns the store's connection pool, for a test to read or write rows
-// directly. The store must exist.
+// directly, in use until the test ends. The store must exist.
 func pool(t *testing.T, d *DB) *sql.DB {
 	t.Helper()
-	p, _, err := d.open(t.Context(), false)
+	p, _, release, err := d.open(t.Context(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(release)
 	return p
 }
 
@@ -355,47 +356,99 @@ func TestARunningDBRefusesANewerSchema(t *testing.T) {
 	}
 }
 
-// Each time the file at the path is replaced, the pool on the old file is
-// retired, and the one retired before it is closed, so a long-running serve
-// holds at most one old pool.
-func TestRetiredPoolsAreClosed(t *testing.T) {
-	ctx := t.Context()
-	d := newDB(t)
-	if _, err := d.Create(ctx, openOf(KindFYI)); err != nil {
+// replaceStore throws the store at path away and starts it again, as a
+// command in another process would after the files were deleted. Nothing may
+// be using the store in this process meanwhile.
+func replaceStore(t *testing.T, path string) {
+	t.Helper()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	again := NewDB(path)
+	if _, err := again.Create(t.Context(), openOf(KindFYI)); err != nil {
 		t.Fatal(err)
 	}
-	var pools []*sql.DB
+	if err := again.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// poolState is the DB's current pool, its retired pools, and how many pools
+// have a call counted as using them.
+func poolState(d *DB) (current *sql.DB, retired, used int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pool, len(d.retired), len(d.users)
+}
+
+// closed reports whether p has been closed.
+func closed(t *testing.T, p *sql.DB) bool {
+	t.Helper()
+	err := p.PingContext(t.Context())
+	return err != nil && strings.Contains(err.Error(), "database is closed")
+}
+
+// When the file at the path is replaced and no call is using the pool on the
+// old file, that pool is closed straight away, so a long-running serve keeps
+// no pool for a file that is gone.
+func TestAPoolNoCallIsUsingIsClosedWhenItsFileIsReplaced(t *testing.T) {
+	d := newDB(t)
+	if _, err := d.Create(t.Context(), openOf(KindFYI)); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
-		pools = append(pools, pool(t, d))
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			if err := os.Remove(d.Path + suffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				t.Fatal(err)
-			}
-		}
-		again := NewDB(d.Path)
-		if _, err := again.Create(ctx, openOf(KindFYI)); err != nil {
+		old, _, _ := poolState(d)
+		replaceStore(t, d.Path)
+		if _, err := d.IDs(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if err := again.Disconnect(); err != nil {
-			t.Fatal(err)
+		if !closed(t, old) {
+			t.Fatal("the pool on the replaced file is still open")
 		}
-		if _, err := d.IDs(ctx); err != nil {
+		if _, retired, used := poolState(d); retired != 0 || used != 0 {
+			t.Fatalf("%d retired pools kept, %d pools counted as in use", retired, used)
+		}
+	}
+}
+
+// A call that has its pool but has not started its query when the file is
+// replaced, even twice, can still run it: the pool is retired but not closed.
+// It is closed once the call is done.
+func TestAPoolInUseIsClosedOnceItsLastCallIsDone(t *testing.T) {
+	d := newDB(t)
+	if _, err := d.Create(t.Context(), openOf(KindFYI)); err != nil {
+		t.Fatal(err)
+	}
+	held, _, release, err := d.open(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		replaceStore(t, d.Path)
+		if _, err := d.IDs(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if d.retired != pools[2] {
-		t.Fatal("the last pool replaced is not the one retired")
+	tx, err := held.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("the call's pool was closed under it: %v", err)
 	}
-	for i, p := range pools[:2] {
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-			err := p.PingContext(ctx)
-			if err != nil && strings.Contains(err.Error(), "database is closed") {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("pool %d is still open: ping = %v", i, err)
-			}
-		}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, retired, _ := poolState(d); retired != 1 {
+		t.Errorf("retired pools while the call uses one = %d, want 1", retired)
+	}
+
+	release()
+	release() // a second release does nothing
+	if !closed(t, held) {
+		t.Error("the retired pool is still open after its last call was done")
+	}
+	if _, retired, used := poolState(d); retired != 0 || used != 0 {
+		t.Errorf("%d retired pools kept, %d pools counted as in use", retired, used)
 	}
 }
 

@@ -195,10 +195,11 @@ func (d *DB) append(ctx context.Context, id string, author Author, typ EventType
 // process or another, run one at a time, and each reads the case as the
 // writer before it left it.
 func (d *DB) write(ctx context.Context, create bool, fn func(tx *sql.Tx) error) error {
-	pool, _, err := d.open(ctx, create)
+	pool, _, release, err := d.open(ctx, create)
 	if err != nil {
 		return err
 	}
+	defer release()
 	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		return err
