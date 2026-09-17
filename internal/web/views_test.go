@@ -467,18 +467,31 @@ func TestRedirectConfirmsWhatWasRecorded(t *testing.T) {
 	origin := map[string]string{"Origin": "http://" + testAddr}
 	first := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Ship <v2> & tell"})
 	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Second"})
-	line := `<p class="recorded" role="status">answer recorded on <a href="/cases/` + first.ID + `">Ship &lt;v2&gt; &amp; tell</a></p>`
+	line := func(dismiss string) string {
+		return `<p class="recorded" role="status"><span>answer recorded on <a href="/cases/` + first.ID + `">Ship &lt;v2&gt; &amp; tell</a></span>` +
+			`<span class="chips dismiss"><a href="` + dismiss + `" aria-label="dismiss this confirmation">dismiss</a></span></p>`
+	}
 
 	w := a.do("POST", "/cases/"+first.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, 1), origin)
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("post: %d %s", w.Code, w.Body.String())
 	}
-	if page := a.get(t, w.Header().Get("Location")); !strings.Contains(page, line) {
-		t.Errorf("next case missing %s:\n%s", line, page)
+	next := w.Header().Get("Location")
+	nextPath, _, _ := strings.Cut(next, "?")
+	if page := a.get(t, next); !strings.Contains(page, line(nextPath)) {
+		t.Errorf("next case missing %s:\n%s", line(nextPath), page)
 	}
 	// Answering the last case lands on /, which has no case block.
-	if page := a.get(t, "/?event=answer&recorded="+first.ID); !strings.Contains(page, line) {
-		t.Errorf("/ missing %s", line)
+	if page := a.get(t, "/?event=answer&recorded="+first.ID); !strings.Contains(page, line("/")) {
+		t.Errorf("/ missing %s", line("/"))
+	}
+	// Dismissing keeps any other query parameter, and the page it goes to has no line.
+	withOthers := nextPath + "?b=2&event=answer&a=x+y&recorded=" + first.ID
+	if page := a.get(t, withOthers); !strings.Contains(page, line(nextPath+"?a=x&#43;y&amp;b=2")) {
+		t.Errorf("%s missing %s:\n%s", withOthers, line(nextPath+"?a=x&#43;y&amp;b=2"), page)
+	}
+	if page := a.get(t, nextPath+"?a=x+y&b=2"); strings.Contains(page, `class="recorded"`) || strings.Contains(page, "dismiss this confirmation") {
+		t.Error("the dismissed page still shows the line")
 	}
 
 	for _, target := range []string{
@@ -489,7 +502,7 @@ func TestRedirectConfirmsWhatWasRecorded(t *testing.T) {
 		"/?recorded=" + first.ID,
 		"/?event=answer",
 	} {
-		if page := a.get(t, target); strings.Contains(page, `class="recorded"`) {
+		if page := a.get(t, target); strings.Contains(page, `class="recorded"`) || strings.Contains(page, "dismiss this confirmation") {
 			t.Errorf("%s: shows a recorded line", target)
 		}
 	}
