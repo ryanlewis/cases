@@ -4,6 +4,16 @@ import (
 	"testing"
 )
 
+func TestPickupAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", id, "--option", "1")
+	refusedAsStale(t, root, id, 1, 2, "pickup", id, "--revision", "1")
+	if out := mustRun(t, "--store", root, "pickup", id, "--revision", "2"); out != id+" pickedup\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
 func TestPickup(t *testing.T) {
 	root := t.TempDir()
 	id := openDecision(t, root)

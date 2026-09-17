@@ -18,6 +18,7 @@ type AmendCmd struct {
 	Link     []string `help:"A link to add to the case. Repeatable." sep:"none" placeholder:"URL"`
 	Label    []string `help:"A label to add to the case. Repeatable." sep:"none" placeholder:"TEXT"`
 	Context  *string  `help:"Free-text context that replaces the case's." placeholder:"STRING"`
+	Revision *int     `help:"Refuse the amend if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *AmendCmd) Run(d *Deps) error {
@@ -55,7 +56,7 @@ func (c *AmendCmd) Run(d *Deps) error {
 		}
 		rec.Context = *c.Context
 	}
-	cs, err := store.Amend(dir, rec)
+	cs, err := store.Amend(dir, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

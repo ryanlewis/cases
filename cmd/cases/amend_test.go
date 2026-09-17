@@ -104,6 +104,16 @@ func TestShowPrintsWhatAnAmendReplaced(t *testing.T) {
 	}
 }
 
+func TestAmendAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openApproval(t, root)
+	mustRun(t, "--store", root, "amend", id, "--link", "https://example.com/a")
+	refusedAsStale(t, root, id, 1, 2, "amend", id, "--body", "Replaced.", "--revision", "1")
+	if out := mustRun(t, "--store", root, "amend", id, "--body", "Replaced.", "--revision", "2"); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
 func TestAmendInlineBody(t *testing.T) {
 	root := t.TempDir()
 	id := openApproval(t, root)

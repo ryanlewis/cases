@@ -35,6 +35,17 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestCloseAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", id, "--option", "1")
+	mustRun(t, "--store", root, "pickup", id)
+	refusedAsStale(t, root, id, 2, 3, "close", id, "--outcome", "Pinned.", "--revision", "2")
+	if out := mustRun(t, "--store", root, "close", id, "--outcome", "Pinned.", "--revision", "3"); out != id+" closed\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
 func TestCloseInlineOutcome(t *testing.T) {
 	root := t.TempDir()
 	id := openDecision(t, root)

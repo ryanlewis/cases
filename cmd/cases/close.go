@@ -11,6 +11,7 @@ type CloseCmd struct {
 	Outcome     string   `help:"The outcome as one line of text." xor:"outcome" required:"" placeholder:"TEXT"`
 	OutcomeFile string   `help:"Markdown outcome. - reads stdin." name:"outcome-file" xor:"outcome" required:"" placeholder:"FILE"`
 	Link        []string `help:"A link to evidence of the outcome. Repeatable." sep:"none" placeholder:"URL"`
+	Revision    *int     `help:"Refuse the close if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *CloseCmd) Run(d *Deps) error {
@@ -27,7 +28,7 @@ func (c *CloseCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}
-	cs, err := store.Close(dir, store.CloseRecord{Outcome: outcome, Links: c.Link})
+	cs, err := store.Close(dir, store.CloseRecord{Outcome: outcome, Links: c.Link}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

@@ -523,6 +523,63 @@ func TestAtRevision(t *testing.T) {
 	}
 }
 
+// The agent's writes take the same precondition. Each is refused at a
+// revision the case has moved on from, and goes through at its current one.
+func TestAgentWritesAtRevision(t *testing.T) {
+	writes := []struct {
+		name  string
+		setup func(dir string) error
+		write func(dir string, pre ...Precondition) (*Case, error)
+	}{
+		{"amend", nil, func(dir string, pre ...Precondition) (*Case, error) {
+			return Amend(dir, AmendRecord{Links: []string{"https://example.com/log"}}, pre...)
+		}},
+		{"pickup", func(dir string) error { _, err := Answer(dir, answerOf(KindStuck)); return err },
+			func(dir string, pre ...Precondition) (*Case, error) { return Pickup(dir, PickupRecord{}, pre...) }},
+		{"note", func(dir string) error { _, err := Answer(dir, answerOf(KindStuck)); return err },
+			func(dir string, pre ...Precondition) (*Case, error) {
+				return Note(dir, NoteRecord{Body: "Which mirror?"}, pre...)
+			}},
+		{"close", func(dir string) error {
+			if _, err := Answer(dir, answerOf(KindStuck)); err != nil {
+				return err
+			}
+			_, err := Pickup(dir, PickupRecord{})
+			return err
+		}, func(dir string, pre ...Precondition) (*Case, error) {
+			return Close(dir, CloseRecord{Outcome: "Done."}, pre...)
+		}},
+		{"withdraw", nil, func(dir string, pre ...Precondition) (*Case, error) { return Withdraw(dir, WithdrawRecord{}, pre...) }},
+	}
+	for _, w := range writes {
+		t.Run(w.name, func(t *testing.T) {
+			c, err := Create(t.TempDir(), openOf(KindStuck))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w.setup != nil {
+				if err := w.setup(c.Dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rev := len(fileNames(t, c.Dir))
+			if _, err := w.write(c.Dir, AtRevision(rev-1)); !errors.Is(err, ErrStale) {
+				t.Errorf("at revision %d: err = %v, want ErrStale", rev-1, err)
+			}
+			if got := fileNames(t, c.Dir); len(got) != rev {
+				t.Fatalf("files after a refused write = %v", got)
+			}
+			done, err := w.write(c.Dir, AtRevision(rev))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if done.Revision() != rev+1 {
+				t.Errorf("revision = %d, want %d", done.Revision(), rev+1)
+			}
+		})
+	}
+}
+
 // The flock does nothing across machines, so a sync can bring in an event with
 // a sequence number the case already has, or one below its latest. Either one
 // changes the case, and a write at the revision read before it is refused.

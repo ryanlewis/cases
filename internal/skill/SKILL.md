@@ -90,7 +90,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 
 ```sh
 cases amend ID [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON]... \
-  [--link URL]... [--label TEXT]... [--context TEXT]
+  [--link URL]... [--label TEXT]... [--context TEXT] [--revision N]
 ```
 
 - Changes an open case before the human answers it: another option, another script to approve, a link, or a body or context that is wrong or out of date. The answer is checked against the case as amended, so an approval answer covers the rows you add.
@@ -145,11 +145,13 @@ cases status [--json]
 ### `cases pickup`, `cases note`, `cases close`, `cases withdraw`
 
 ```sh
-cases pickup   ID [--by NAME]
-cases note     ID --body TEXT | --body-file FILE|-
-cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
-cases withdraw ID [--reason TEXT]
+cases pickup   ID [--by NAME] [--revision N]
+cases note     ID --body TEXT | --body-file FILE|- [--revision N]
+cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]... [--revision N]
+cases withdraw ID [--reason TEXT] [--revision N]
 ```
+
+- `--revision N` refuses the write, and writes nothing, if the case has changed since you read it at revision N. Take N from the `revision` in the `show --json` you acted on (`wait` lines do not carry it). **Always pass it on `note` and `close`**: a note on a case the human has answered since you read it reopens the case and throws that answer away. If the write is refused as stale, read the case again with `show --json` before deciding what to do. `amend`, `pickup` and `withdraw` take it too.
 
 - `pickup` records that you have read the answer. Do it before you act, so the human can see the answer was received.
 - `note` adds a follow-up in markdown. Use it to ask a clarifying question about the answer; the case goes back to `open` for another answer.
@@ -168,10 +170,12 @@ id=$(cases open --kind decision --urgency today --worker bun-pins \
 # In the background. Exit 2 means the timeout passed: run it again.
 cases wait --id "$id" --since "$since" --timeout 2h
 
-cases show "$id" --json            # read .state and .answer
-cases pickup "$id" --by bun-pins
+cases show "$id" --json            # read .state, .answer and .revision
+rev=3                              # the .revision you read
+cases pickup "$id" --by bun-pins --revision "$rev"
 # ... act on the answer ...
-cases close "$id" --outcome "Pinned bun to 1.2.3 in abc123." --link https://github.com/o/r/pull/12
+# Your pickup was one more event, so the case is now at rev + 1.
+cases close "$id" --outcome "Pinned bun to 1.2.3 in abc123." --revision "$((rev + 1))" --link https://github.com/o/r/pull/12
 ```
 
 Check the inbox with `cases status` at two points:
