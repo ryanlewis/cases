@@ -96,8 +96,8 @@ func AtRevision(rev int) Precondition {
 
 // Amend records the agent changing an open case: adding options, rows,
 // links or labels, or replacing the body or context.
-func Amend(dir string, rec AmendRecord) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventAmend, &rec)
+func Amend(dir string, rec AmendRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorAgent, EventAmend, &rec, pre...)
 }
 
 // Answer records the human's answer.
@@ -106,24 +106,24 @@ func Answer(dir string, rec AnswerRecord, pre ...Precondition) (*Case, error) {
 }
 
 // Pickup records that the agent has read the answer.
-func Pickup(dir string, rec PickupRecord) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventPickup, &rec)
+func Pickup(dir string, rec PickupRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorAgent, EventPickup, &rec, pre...)
 }
 
 // Note records a follow-up from the agent. It reopens an answered or picked-up
 // case.
-func Note(dir string, rec NoteRecord) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventNote, &rec)
+func Note(dir string, rec NoteRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorAgent, EventNote, &rec, pre...)
 }
 
 // Close records the outcome of a picked-up case.
-func Close(dir string, rec CloseRecord) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventClose, &rec)
+func Close(dir string, rec CloseRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorAgent, EventClose, &rec, pre...)
 }
 
 // Withdraw records that the agent no longer needs an open case answered.
-func Withdraw(dir string, rec WithdrawRecord) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventWithdraw, &rec)
+func Withdraw(dir string, rec WithdrawRecord, pre ...Precondition) (*Case, error) {
+	return appendEvent(dir, AuthorAgent, EventWithdraw, &rec, pre...)
 }
 
 // Park records the human parking an open stuck case.

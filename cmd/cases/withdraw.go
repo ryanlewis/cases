@@ -3,8 +3,9 @@ package main
 import "github.com/ryanlewis/cases/internal/store"
 
 type WithdrawCmd struct {
-	ID     string `arg:"" help:"Case id."`
-	Reason string `help:"Why the case no longer needs an answer." placeholder:"TEXT"`
+	ID       string `arg:"" help:"Case id."`
+	Reason   string `help:"Why the case no longer needs an answer." placeholder:"TEXT"`
+	Revision *int   `help:"Refuse the withdraw if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *WithdrawCmd) Run(d *Deps) error {
@@ -12,7 +13,7 @@ func (c *WithdrawCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	cs, err := store.Withdraw(dir, store.WithdrawRecord{Reason: c.Reason})
+	cs, err := store.Withdraw(dir, store.WithdrawRecord{Reason: c.Reason}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

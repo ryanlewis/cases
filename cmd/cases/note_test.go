@@ -34,6 +34,21 @@ func TestNoteReopensAnAnsweredCase(t *testing.T) {
 	}
 }
 
+// A note made on a case read before the human answered would reopen it and
+// throw the answer away; with --revision it is refused.
+func TestNoteAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", id, "--option", "1")
+	refusedAsStale(t, root, id, 1, 2, "note", id, "--body", "Pin to which patch?", "--revision", "1")
+	if c := loadCase(t, root, id); c.Answer == nil {
+		t.Error("the refused note cleared the answer")
+	}
+	if out := mustRun(t, "--store", root, "note", id, "--body", "Pin to which patch?", "--revision", "2"); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
 func TestNoteInlineBody(t *testing.T) {
 	root := t.TempDir()
 	id := openDecision(t, root)

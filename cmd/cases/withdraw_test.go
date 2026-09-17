@@ -22,6 +22,16 @@ func TestWithdraw(t *testing.T) {
 	}
 }
 
+func TestWithdrawAtRevision(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "amend", id, "--link", "https://example.com/log")
+	refusedAsStale(t, root, id, 1, 2, "withdraw", id, "--revision", "1")
+	if out := mustRun(t, "--store", root, "withdraw", id, "--revision", "2"); out != id+" withdrawn\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
 func TestWithdrawReason(t *testing.T) {
 	withdrawFile := func(t *testing.T, root, id string) string {
 		t.Helper()

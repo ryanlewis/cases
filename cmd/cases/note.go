@@ -10,6 +10,7 @@ type NoteCmd struct {
 	ID       string `arg:"" help:"Case id."`
 	Body     string `help:"The follow-up as one line of text." xor:"body" required:"" placeholder:"TEXT"`
 	BodyFile string `help:"Markdown follow-up. - reads stdin." name:"body-file" xor:"body" required:"" placeholder:"FILE"`
+	Revision *int   `help:"Refuse the note if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *NoteCmd) Run(d *Deps) error {
@@ -26,7 +27,7 @@ func (c *NoteCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("body: %w", err)
 	}
-	cs, err := store.Note(dir, store.NoteRecord{Body: body})
+	cs, err := store.Note(dir, store.NoteRecord{Body: body}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}
