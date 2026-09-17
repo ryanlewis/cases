@@ -371,6 +371,9 @@ func nextCase(cases []*store.Case, id string) string {
 type recorded struct {
 	Event store.EventType
 	Case  *store.Case
+	// Dismiss is the page's own URL without the query withRecorded added,
+	// so following it drops the line and keeps everything else.
+	Dismiss string
 }
 
 // withRecorded adds the event just written on the case with id to target, the
@@ -379,10 +382,11 @@ func withRecorded(target string, event store.EventType, id string) string {
 	return target + "?" + url.Values{"recorded": {id}, "event": {string(event)}}.Encode()
 }
 
-// findRecorded resolves the query withRecorded wrote against the loaded
+// findRecorded resolves the query withRecorded wrote on u against the loaded
 // cases. It returns nil unless the event is one a form writes and the id names
 // a loaded case, so a made-up query shows nothing.
-func findRecorded(q url.Values, cases []*store.Case) *recorded {
+func findRecorded(u *url.URL, cases []*store.Case) *recorded {
+	q := u.Query()
 	event := store.EventType(q.Get("event"))
 	switch event {
 	case store.EventAnswer, store.EventPark, store.EventResume:
@@ -392,7 +396,13 @@ func findRecorded(q url.Values, cases []*store.Case) *recorded {
 	id := q.Get("recorded")
 	for _, c := range cases {
 		if c.ID == id {
-			return &recorded{Event: event, Case: c}
+			q.Del("event")
+			q.Del("recorded")
+			dismiss := u.EscapedPath()
+			if len(q) > 0 {
+				dismiss += "?" + q.Encode()
+			}
+			return &recorded{Event: event, Case: c, Dismiss: dismiss}
 		}
 	}
 	return nil
@@ -427,7 +437,7 @@ func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 	if shown := inboxCases(cases); len(shown) > 0 {
 		first = shown[0]
 	}
-	s.renderCase(w, http.StatusOK, first, cases, true, findRecorded(r.URL.Query(), cases), "", nil)
+	s.renderCase(w, http.StatusOK, first, cases, true, findRecorded(r.URL, cases), "", nil)
 }
 
 func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
@@ -664,7 +674,7 @@ func (s *Server) casePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderCase(w, http.StatusOK, c, cases, false, findRecorded(r.URL.Query(), cases), "", nil)
+	s.renderCase(w, http.StatusOK, c, cases, false, findRecorded(r.URL, cases), "", nil)
 }
 
 func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, rec *recorded, msg string, form url.Values) {

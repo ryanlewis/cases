@@ -588,7 +588,8 @@ After a successful answer, park or resume, the page moves to the case after it
 in the inbox, or to `/` if it was the last one. A parked case stays in the
 inbox. The redirect carries `event` (`answer`, `park` or `resume`) and
 `recorded` (the case id), and the page it lands on starts with one line saying
-what was recorded on which case, linked to it. The line is shown only when the
+what was recorded on which case, linked to it, with a `dismiss` link that
+reloads the page without those two parameters. The line is shown only when the
 event is one of those three and the id names a case in the store, and it stays
 in the URL, so a reload shows it again. If the form is refused, the same case
 is shown again with the error.

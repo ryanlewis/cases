@@ -1,5 +1,5 @@
 {{define "content"}}
-{{with .Recorded}}<p class="recorded" role="status">{{.Event}} recorded on <a href="/cases/{{.Case.ID | pathEscape}}">{{.Case.Title}}</a></p>{{end}}
+{{with .Recorded}}<p class="recorded" role="status"><span>{{.Event}} recorded on <a href="/cases/{{.Case.ID | pathEscape}}">{{.Case.Title}}</a></span><span class="chips dismiss"><a href="{{.Dismiss}}" aria-label="dismiss this confirmation">dismiss</a></span></p>{{end}}
 {{if and .Home (not .Case)}}
 <section class="zero" aria-label="inbox">
 {{template "inbox-list" .Inbox}}

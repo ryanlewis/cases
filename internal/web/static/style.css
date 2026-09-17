@@ -256,8 +256,15 @@ pre code { padding: 0; background: none; }
 .error { color: var(--fg); font-weight: 700; }
 .error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
 /* [OK] what the last answer, park or resume wrote, above the columns, the same way. */
-.recorded { margin: 0; padding: .5rem 1rem; border-bottom: 1px solid var(--rule); }
-.recorded::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
+.recorded {
+  display: flex; flex-wrap: wrap; align-items: center; row-gap: .5rem;
+  margin: 0; padding: .5rem 1rem; border-bottom: 1px solid var(--rule);
+}
+/* Its dismiss link is one header chip at the right end, or under the message
+   when the line is too narrow for both. */
+.recorded .dismiss { margin-left: auto; }
+.recorded > span:first-child { margin-right: 1rem; }
+.recorded > span:first-child::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
 @media (width >= 56rem) {
   main:has(> .recorded) { display: flex; flex-direction: column; }
   main > .recorded + .split { flex: 1; min-height: 0; height: auto; }
