@@ -411,8 +411,9 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
 
 - `/` selects the first case in the inbox, or says there are no open cases and
   reloads when one arrives.
-- `/cases/ID` selects that case: the body rendered as markdown (GFM tables
-  included), its links, a response form that fits the kind, and the thread.
+- `/cases/ID` selects that case: its context and brief, the body rendered as
+  markdown (GFM tables included), its links, a response form that fits the
+  kind, and the thread.
   An amended case is shown as amended, and the thread lists what each amend
   changed.
   Sending the form writes one answer. A stuck case has a separate `park`
