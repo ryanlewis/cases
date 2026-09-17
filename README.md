@@ -299,7 +299,12 @@ with `-`, in place of `--text`. An empty file is refused.
 Add `"note":"…"` to show a line under the row's label.
 
 `--label`, `--worker`, `--brief` and `--context` on `open` set the fields described in
-[store format](#store-format). `--by` on `pickup` records who picked the case
+[store format](#store-format). `open` takes the worker from `CASES_WORKER` and
+one label from `CASES_LABEL` when the flags are not given, so a session can
+export them once. `CASES_LABEL` is always exactly one label: the whole value,
+commas and spaces included. A `--label` flag replaces it rather than adding to
+it, and `CASES_LABEL` set to an empty string is a blank label, which `open`
+refuses. Only `open` reads them; `list`, `wait` and `sweep` do not. `--by` on `pickup` records who picked the case
 up, such as the agent session name. `--reason` on `withdraw` records why the
 case no longer needs an answer; `show` and the web thread print it.
 

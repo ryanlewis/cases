@@ -17,8 +17,8 @@ type OpenCmd struct {
 	Option   []string `help:"An option for a decision case. Repeat per option; \"Other, see note\" is always offered." sep:"none" placeholder:"TEXT"`
 	Row      []string `help:"A row for an approval case, as a JSON object with id, label, script, link and an optional note, e.g. '{\"id\":\"deps\",\"label\":\"Install deps\",\"script\":\"npm ci\",\"link\":\"https://…\"}'. Repeat per row." sep:"none" placeholder:"JSON"`
 	Link     []string `help:"A link to show with the case. Repeatable." sep:"none" placeholder:"URL"`
-	Label    []string `help:"A label to group the case by, such as the work it belongs to. Repeatable." sep:"none" placeholder:"TEXT"`
-	Worker   string   `help:"The agent session waiting on this case."`
+	Label    []string `help:"A label to group the case by, such as the work it belongs to. Repeatable; replaces the label CASES_LABEL sets." env:"CASES_LABEL" sep:"none" placeholder:"TEXT"`
+	Worker   string   `help:"The agent session waiting on this case." env:"CASES_WORKER"`
 	Brief    string   `help:"Where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line."`
 	Context  string   `help:"Free-text context for the human, shown with the case."`
 }
