@@ -334,7 +334,12 @@ the JSON.
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
 prints every case still waiting on the agent, one JSON object per line, and
-exits 0. A case is waiting on the agent when its last event is one of those
+exits 0. Each line is the case as `show --json` prints it, without `revision`,
+plus `next_since`: the value to pass as `--since` to the next `wait`. It is the
+same on every line: the time of the latest event that put a printed case there,
+or the `--since` given if that is later. Waiting again with it does not wake on
+the events just printed, but does wake on one that lands before the new `wait`
+starts. It is left out when no such event records a time. A case is waiting on the agent when its last event is one of those
 three human events. By default only events that land after `wait` starts can
 wake it, so running it again does not wake on answers already reported. With
 `--since TIME` it also wakes on human events recorded after that RFC 3339
