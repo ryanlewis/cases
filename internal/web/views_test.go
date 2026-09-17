@@ -1000,7 +1000,7 @@ func TestTallyHidesZeros(t *testing.T) {
 	}
 	// The title counts the open cases, so it leads with the two here.
 	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>(2) done · cases</title>") {
-		t.Errorf("a tally without blocking cases is red or titled with a count:\n%s", body)
+		t.Errorf("a tally without blocking cases is red, or its title lacks the open count:\n%s", body)
 	}
 }
 
