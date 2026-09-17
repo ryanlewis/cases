@@ -100,19 +100,31 @@
     fetch("/notifications" + (have ? "?after=" + have.id : ""), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (page) {
-        if (!page) return;
+        if (!page) return false;
         // Read again: another tab may have shown these while this one waited.
         var c = readCursor();
-        // A page with no kept id, or one from before serve restarted, starts
-        // at the latest item and shows nothing.
-        if (c && c.boot === page.boot) {
-          if (c.id >= page.latest) return;
-          page.items.forEach(function (item) { if (item.id > c.id) notify(item); });
+        // A page with no kept id starts at the latest item and shows nothing.
+        if (!c) {
+          writeCursor({ boot: page.boot, id: page.latest });
+          return false;
         }
+        // serve restarted. Its feed only holds cases that came in after it
+        // started, so start the new boot from 0 and ask again now: the page
+        // just fetched asked after an id from the old boot.
+        if (c.boot !== page.boot) {
+          writeCursor({ boot: page.boot, id: 0 });
+          return true;
+        }
+        // This page was asked after an id the kept one has since moved
+        // before (another tab started the new boot), so it can miss items.
+        if (have && (have.boot !== c.boot || have.id > c.id)) return true;
+        if (c.id >= page.latest) return false;
+        page.items.forEach(function (item) { if (item.id > c.id) notify(item); });
         writeCursor({ boot: page.boot, id: page.latest });
+        return false;
       })
-      .catch(function () {})
-      .then(function () { setTimeout(check, POLL); });
+      .catch(function () { return false; })
+      .then(function (again) { setTimeout(check, again ? 0 : POLL); });
   }
   check();
 

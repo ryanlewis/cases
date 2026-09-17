@@ -633,9 +633,11 @@ Serve reads the store every two seconds and keeps the last 50 notifications in
 memory, numbered from 1. Each page with notifications turned on asks
 `/notifications?after=N` every five seconds and shows the new ones. The
 number shown last is kept in the browser with serve's boot id. A tab with no
-kept number, or one from before serve restarted, starts at the latest and
-shows nothing. Every tab shows the same notification under one tag, so the
-desktop shows it once.
+kept number starts at the latest and shows nothing. A number from before serve
+restarted starts again from the first notification of the new run, so a case
+that lands just after a restart is still shown, and a tab opened later shows
+what came in since the restart, up to 50. Every tab shows the same
+notification under one tag, so the desktop shows it once.
 
 The limits: nothing is shown when no inbox tab is open; browsers slow timers
 in background tabs, so a notification can come up to about a minute late; and
