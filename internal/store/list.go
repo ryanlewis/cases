@@ -21,10 +21,11 @@ func (e *LoadError) Unwrap() error { return e.Err }
 // case that fails to fold is returned in bad and does not stop the others.
 // err is set only when the store itself cannot be read.
 func (d *DB) List(ctx context.Context) (cases []*Case, bad []*LoadError, err error) {
-	pool, _, err := d.open(ctx, false)
+	pool, _, release, err := d.open(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
+	defer release()
 	folded, err := loadCases(ctx, pool, nil)
 	if err != nil {
 		return nil, nil, err
@@ -41,10 +42,11 @@ func (d *DB) List(ctx context.Context) (cases []*Case, bad []*LoadError, err err
 
 // IDs lists the case ids in the store, sorted, without folding the cases.
 func (d *DB) IDs(ctx context.Context) ([]string, error) {
-	pool, _, err := d.open(ctx, false)
+	pool, _, release, err := d.open(ctx, false)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	return queryStrings(ctx, pool, `SELECT id FROM cases ORDER BY id`)
 }
 
@@ -53,10 +55,11 @@ func (d *DB) Get(ctx context.Context, id string) (*Case, error) {
 	if err := ValidID(id); err != nil {
 		return nil, err
 	}
-	pool, _, err := d.open(ctx, false)
+	pool, _, release, err := d.open(ctx, false)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	return loadCase(ctx, pool, id)
 }
 
@@ -183,11 +186,12 @@ func (d *DB) NewPoller() CasePoller {
 // moment of the store.
 func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 	ctx := context.Background()
-	pool, gen, err := p.db.open(ctx, false)
+	pool, gen, release, err := p.db.open(ctx, false)
 	if err != nil {
 		p.reset(0)
 		return nil, nil, err
 	}
+	defer release()
 	if gen != p.gen {
 		p.reset(gen)
 	}
