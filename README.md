@@ -563,7 +563,12 @@ number. The inbox poll keeps it current.
   case drops through its `drop it` choice. A parked
   case has a `resume` button, and shows in the list with an ochre edge.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
-  with the outcome of closed ones.
+  with the outcome of closed ones. Chips at the top filter it and show each
+  count: `in flight` (`?show=inflight`: answered or picked up, with who has
+  each case and how long since the answer or pickup, newest first), `closed
+  today` (`?show=closed-today`: closed since midnight in the local time zone)
+  and `all` (the default). The inbox zero panel's figures link to the first
+  two.
 
 The `options` button in the header opens an overlay that sets the theme
 (system, light or dark), the face for case bodies, notes and outcomes (mono,

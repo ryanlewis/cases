@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -771,6 +772,114 @@ func TestDoneView(t *testing.T) {
 	}
 }
 
+func TestDoneFilters(t *testing.T) {
+	pinZeroClock(t)
+	a := newApp(t)
+	withWorker := func(title, worker string) store.OpenRecord {
+		return store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: title, Worker: worker, Labels: []string{"deps"}, OpenedAt: utc(1, 9, 0)}
+	}
+	// Answered 12m ago, by a case with a worker.
+	answered, err := store.Create(a.root, withWorker("Answered", "bun-pins"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := answerAt(utc(16, 19, 48))(answered.Dir); err != nil {
+		t.Fatal(err)
+	}
+	// Picked up 3m ago by a named agent: the pickup's by wins over the worker.
+	picked, err := store.Create(a.root, withWorker("Picked up", "opener"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := answerAt(utc(16, 19, 0))(picked.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pickup(picked.Dir, store.PickupRecord{By: "rel-notes", PickedUpAt: utc(16, 19, 57)}); err != nil {
+		t.Fatal(err)
+	}
+	// Picked up an hour ago with no worker and no by.
+	anon := a.through(t, store.KindFYI, "Nobody named", answerAt(utc(16, 18, 0)), pickupAt(utc(16, 19, 0)))
+	closedToday := a.through(t, store.KindFYI, "Closed today", answerAt(utc(16, 9, 0)), pickupAt(utc(16, 9, 5)), closeAt(utc(16, 10, 0)))
+	closedYesterday := a.through(t, store.KindFYI, "Closed yesterday", answerAt(utc(15, 9, 0)), pickupAt(utc(15, 9, 5)), closeAt(utc(16, 4, 59)))
+	withdrawn := a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+	open := a.through(t, store.KindFYI, "Still open")
+
+	chips := []string{
+		`<a href="/done?show=inflight"%s>in flight (3)</a>`,
+		`<a href="/done?show=closed-today"%s>closed today (1)</a>`,
+		`<a href="/done"%s>all (6)</a>`,
+	}
+	for _, tc := range []struct {
+		target, title string
+		on            int
+		ids           []string
+	}{
+		{"/done?show=inflight", "<title>(1) in flight · done · cases</title>", 0, []string{picked.ID, answered.ID, anon.ID}},
+		{"/done?show=closed-today", "<title>(1) closed today · done · cases</title>", 1, []string{closedToday.ID}},
+		{"/done", "<title>(1) done · cases</title>", 2, nil},
+		{"/done?show=all", "<title>(1) done · cases</title>", 2, nil},
+		{"/done?show=bogus", "<title>(1) done · cases</title>", 2, nil},
+	} {
+		body := a.get(t, tc.target)
+		if !strings.Contains(body, tc.title) {
+			t.Errorf("%s: title is not %s", tc.target, tc.title)
+		}
+		for i, chip := range chips {
+			mark := ""
+			if i == tc.on {
+				mark = ` class="on" aria-current="page"`
+			}
+			if want := fmt.Sprintf(chip, mark); !strings.Contains(body, want) {
+				t.Errorf("%s lacks chip %s", tc.target, want)
+			}
+		}
+		if tc.ids == nil {
+			tc.ids = []string{picked.ID, answered.ID, anon.ID, closedToday.ID, closedYesterday.ID, withdrawn.ID}
+			got := idsInOrder(body)
+			slices.Sort(got)
+			slices.Sort(tc.ids)
+			if !slices.Equal(got, tc.ids) {
+				t.Errorf("%s lists %v\nwant %v", tc.target, got, tc.ids)
+			}
+		} else if got := idsInOrder(body); !slices.Equal(got, tc.ids) {
+			t.Errorf("%s lists %v\nwant %v", tc.target, got, tc.ids)
+		}
+		if strings.Contains(body, open.ID) {
+			t.Errorf("%s lists an open case", tc.target)
+		}
+	}
+
+	flight := a.get(t, "/done?show=inflight")
+	for _, want := range []string{
+		`<p class="flight">with <strong>bun-pins</strong> · answered 12m ago</p>`,
+		`<p class="flight">with <strong>rel-notes</strong> · picked up 3m ago</p>`,
+		`<p class="flight">with <strong>an agent</strong> · picked up 1h ago</p>`,
+		`<span class="badge">blocking</span>`,
+		`<span class="tag">deps</span>`,
+	} {
+		if !strings.Contains(flight, want) {
+			t.Errorf("in-flight view lacks %s", want)
+		}
+	}
+	if strings.Contains(flight, "opener") {
+		t.Error("in-flight view names the worker of a case picked up by someone else")
+	}
+}
+
+func TestDoneFiltersEmpty(t *testing.T) {
+	pinZeroClock(t)
+	a := newApp(t)
+	for target, want := range map[string]string{
+		"/done?show=inflight":     "nothing is with an agent.",
+		"/done?show=closed-today": "nothing closed today.",
+		"/done":                   "nothing done yet.",
+	} {
+		if body := a.get(t, target); !strings.Contains(body, `<p class="empty">`+want+`</p>`) {
+			t.Errorf("%s lacks %q", target, want)
+		}
+	}
+}
+
 func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	a := newApp(t)
 	body := a.get(t, "/")
@@ -1119,8 +1228,8 @@ func TestInboxZeroCountsWhatWasGotThrough(t *testing.T) {
 		`<section class="zero" aria-label="inbox">`,
 		"<h1>inbox zero.</h1>",
 		"<p>you got through <strong>2</strong> cases today, <strong>4</strong> this week.</p>",
-		`<p><a href="/done"><strong>1</strong> closed</a> by agents today.</p>`,
-		`<p><a href="/done"><strong>3</strong> answered</a> and still with an agent.</p>`,
+		`<p><a href="/done?show=closed-today"><strong>1</strong> closed</a> by agents today.</p>`,
+		`<p><a href="/done?show=inflight"><strong>3</strong> answered</a> and still with an agent.</p>`,
 		`<p class="age">last answered 1h ago.</p>`,
 		`hx-get="/fragments/inbox?empty=1"`,
 	} {

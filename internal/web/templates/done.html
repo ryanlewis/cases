@@ -1,5 +1,21 @@
 {{define "content"}}
 <h1 class="section">done</h1>
+<nav class="chips filters" aria-label="filter">{{range .Filters}}<a href="{{.Href}}"{{if eq .Show $.Show}} class="on" aria-current="page"{{end}}>{{.Label}} ({{.N}})</a>{{end}}</nav>
+{{if eq .Show "inflight"}}
+{{range .Flight}}
+<article class="card">
+  <div class="meta">
+    <span class="badge">{{.Urgency}}</span>
+    <span>{{.Kind}}</span>
+    {{range .Labels}}<span class="tag">{{.}}</span>{{end}}
+  </div>
+  <h2><a href="/cases/{{.ID | pathEscape}}">{{.Title}}</a></h2>
+  <p class="flight">with <strong>{{.Who}}</strong> · {{.Last}} {{if eq .Age "now"}}just now{{else}}{{.Age}} ago{{end}}</p>
+</article>
+{{else}}
+<p class="empty">nothing is with an agent.</p>
+{{end}}
+{{else}}
 {{range .Cards}}
 <article class="card">
   <div class="meta">
@@ -13,6 +29,7 @@
   {{with .Close}}<div class="outcome body">{{markdown .Outcome}}</div>{{end}}
 </article>
 {{else}}
-<p class="empty">nothing done yet.</p>
+<p class="empty">{{if eq .Show "closed-today"}}nothing closed today.{{else}}nothing done yet.{{end}}</p>
+{{end}}
 {{end}}
 {{end}}
