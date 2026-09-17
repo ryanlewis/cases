@@ -5,7 +5,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 ## Safety
 
 - **Safe to run freely**: `list`, `show`, `wait`, `status`, `config path`, `config show`, `skill list`, `skill show`. They only read.
-- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>` and writes nothing.
+- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. Other errors exit 1.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never edit, rename or delete files in the store.** The state is worked out from the files, so a hand edit corrupts the record. Use the commands.
 - **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is plain JSON on disk, may be synced, and is shown in a browser. Name the secret or say where it lives instead.
