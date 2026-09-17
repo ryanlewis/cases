@@ -12,7 +12,8 @@ type OpenCmd struct {
 	Kind     string   `help:"decision, approval, signoff, stuck, question or fyi." required:"" enum:"decision,approval,signoff,stuck,question,fyi" placeholder:"KIND"`
 	Urgency  string   `help:"blocking, today or whenever." required:"" enum:"blocking,today,whenever" placeholder:"URGENCY"`
 	Title    string   `help:"One-line title; also names the case directory." required:""`
-	BodyFile string   `help:"Markdown body. - reads stdin." name:"body-file" placeholder:"FILE"`
+	Body     string   `help:"The body as one line of text." xor:"body" placeholder:"TEXT"`
+	BodyFile string   `help:"Markdown body. - reads stdin." name:"body-file" xor:"body" placeholder:"FILE"`
 	Option   []string `help:"An option for a decision case. Repeat per option; \"Other, see note\" is always offered." sep:"none" placeholder:"TEXT"`
 	Row      []string `help:"A row for an approval case, as a JSON object with id, label, script, link and an optional note, e.g. '{\"id\":\"deps\",\"label\":\"Install deps\",\"script\":\"npm ci\",\"link\":\"https://…\"}'. Repeat per row." sep:"none" placeholder:"JSON"`
 	Link     []string `help:"A link to show with the case. Repeatable." sep:"none" placeholder:"URL"`
@@ -33,6 +34,13 @@ func (c *OpenCmd) Run(d *Deps) error {
 		Worker:  c.Worker,
 		Brief:   c.Brief,
 		Context: c.Context,
+	}
+	if c.Body != "" {
+		body, err := inlineText("body", c.Body)
+		if err != nil {
+			return fmt.Errorf("body: %w", err)
+		}
+		rec.Body = body
 	}
 	if c.BodyFile != "" {
 		body, err := d.readText(c.BodyFile)

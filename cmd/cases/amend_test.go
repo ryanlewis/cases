@@ -104,6 +104,17 @@ func TestShowPrintsWhatAnAmendReplaced(t *testing.T) {
 	}
 }
 
+func TestAmendInlineBody(t *testing.T) {
+	root := t.TempDir()
+	id := openApproval(t, root)
+	if out := mustRun(t, "--store", root, "amend", id, "--body", "One script."); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if got := loadCase(t, root, id).Body; got != "One script." {
+		t.Errorf("body = %q", got)
+	}
+}
+
 func TestAmendAddsOptions(t *testing.T) {
 	root := t.TempDir()
 	id := openDecision(t, root)
@@ -143,6 +154,10 @@ func TestAmendRefusals(t *testing.T) {
 		{"blank body", " \n", []string{"--body-file", "-"}, "amend body is empty"},
 		// The store would take an empty body as no change and add the link.
 		{"empty body file with a link", "", []string{"--body-file", "-", "--link", "https://example.com/log"}, "amend body is empty"},
+		{"empty inline body with a link", "", []string{"--body", "", "--link", "https://example.com/log"}, "amend body is empty"},
+		{"blank inline body", "", []string{"--body", " "}, "amend body is empty"},
+		{"inline body that names a file", "", []string{"--body", "amend_test.go"}, "names a file; pass it with --body-file"},
+		{"body and body file", "x", []string{"--body", "x", "--body-file", "-"}, "--body and --body-file can't be used together"},
 		{"missing body file", "", []string{"--body-file", missing}, "body:"},
 		{"body file with no name", "", []string{"--body-file", "", "--link", "https://example.com/log"}, "body:"},
 		{"options on approval", "", []string{"--option", "Skip it"}, "options are for decision cases"},

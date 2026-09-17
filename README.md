@@ -52,7 +52,7 @@ cases answer "$id" --option 1 --note "Revisit after 1.3"
 
 # Agent: record that the answer was read, act on it, and close with the outcome.
 cases pickup "$id" --by bun-pins
-echo "Pinned in #12." | cases close "$id" --outcome-file -
+cases close "$id" --outcome "Pinned in #12."
 cases show "$id"
 ```
 
@@ -230,16 +230,17 @@ Agent side:
 
 ```
 cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
-               [--body-file FILE|-] [--option TEXT]... [--row JSON]...
-               [--link URL]... [--label TEXT]... [--worker NAME]
-               [--brief TEXT] [--context TEXT]
-cases amend    ID [--body-file FILE|-] [--option TEXT]... [--row JSON]...
-               [--link URL]... [--label TEXT]... [--context TEXT]
+               [--body TEXT | --body-file FILE|-] [--option TEXT]...
+               [--row JSON]... [--link URL]... [--label TEXT]...
+               [--worker NAME] [--brief TEXT] [--context TEXT]
+cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
+               [--row JSON]... [--link URL]... [--label TEXT]...
+               [--context TEXT]
 cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
                [--label TEXT]... [--worker NAME]...
 cases pickup   ID [--by NAME]
-cases note     ID --body-file FILE|-
-cases close    ID --outcome-file FILE|- [--link URL]...
+cases note     ID --body TEXT | --body-file FILE|-
+cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
 cases withdraw ID [--reason TEXT]
 ```
 
@@ -283,6 +284,12 @@ new state.
 been added to the case since it was read. The error names the revision read and
 the current one, and the command exits non-zero.
 
+`--body` on `open`, `note` and `amend` and `--outcome` on `close` take the text
+inline, for a line; `--body-file` and `--outcome-file` read markdown from a
+file, or from stdin with `-`. Give one or the other, not both; `note` and
+`close` need one. An inline value that names an existing file is refused, so
+`--outcome outcome.md` is not stored as the text `outcome.md`.
+
 `--row` on `open` and `amend` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 Add `"note":"…"` to show a line under the row's label.
@@ -293,9 +300,9 @@ up, such as the agent session name. `--reason` on `withdraw` records why the
 case no longer needs an answer; `show` and the web thread print it.
 
 `amend` changes an open case as described in [store format](#store-format):
-`--option`, `--row`, `--link` and `--label` add to the case, and `--body-file` and
-`--context` replace its body and context. It refuses an amend that changes
-nothing, an empty body file and an empty `--context`. `show` prints the body
+`--option`, `--row`, `--link` and `--label` add to the case, and `--body` or
+`--body-file` and `--context` replace its body and context. It refuses an amend
+that changes nothing, an empty `--body` or body file and an empty `--context`. `show` prints the body
 or context an amend replaced in full under the thread line that says so, and
 the web thread shows it under a `previous body` or `previous context` toggle.
 

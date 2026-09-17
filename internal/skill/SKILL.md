@@ -66,17 +66,19 @@ An approval row is a JSON object with four non-empty fields. The `id` may use le
 
 ## Commands
 
+Text flags come in two forms. For one line, pass it inline: `--body TEXT`, `--outcome TEXT`. For markdown, or anything longer, use `--body-file FILE` or `--outcome-file FILE`, or `-` to read stdin. Give one form, not both. An inline value that names an existing file is refused.
+
 ### `cases open`
 
 ```sh
 cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
-  [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
+  [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON]... \
   [--link URL]... [--label TEXT]... [--worker NAME] [--brief TEXT] \
   [--context TEXT]
 ```
 
 - `--title` is one line; it also names the case directory.
-- `--body-file` is markdown; `-` reads stdin. Write it for someone reading on a phone with no other context: what you are doing, what the question is, what each option costs, and what you recommend and why.
+- The body is markdown, so it usually goes in `--body-file`; `-` reads stdin. Write it for someone reading on a phone with no other context: what you are doing, what the question is, what each option costs, and what you recommend and why.
 - `--option` is for `decision` only and `--row` for `approval` only; they are refused on any other kind.
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
 - `--label TEXT` (repeatable) groups the case with others, such as every case one piece of work opens. `list` and `wait` filter by it. A blank label, or the same label twice, is refused.
@@ -86,13 +88,13 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 ### `cases amend`
 
 ```sh
-cases amend ID [--body-file FILE|-] [--option TEXT]... [--row JSON]... \
+cases amend ID [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON]... \
   [--link URL]... [--label TEXT]... [--context TEXT]
 ```
 
 - Changes an open case before the human answers it: another option, another script to approve, a link, or a body or context that is wrong or out of date. The answer is checked against the case as amended, so an approval answer covers the rows you add.
 - `--option` adds options to a `decision` case, numbered after the ones it has. `--row` adds rows to an `approval` case; each `id` must be new to the case. `--link` adds links and `--label` adds labels. An option, link or label the case already has is refused, and so is an amend that changes nothing, so sending the same amend twice writes nothing the second time.
-- `--body-file` replaces the whole body, so write all of it, not only what changed. `--context` replaces the context.
+- `--body` or `--body-file` replaces the whole body, so write all of it, not only what changed. `--context` replaces the context.
 - An amend erases nothing: the body and context it replaces stay in the store, and `show`, `show --json` and the web thread show them. If a case holds a secret, amending it out does not remove it; tell the human so they can rotate it.
 - Nothing can be removed or reordered. If the question itself has changed, withdraw the case and open a new one; for a second question, open a second case.
 - Put every change in one amend: each one can send the human back to read the case again. To add to the thread without changing the case, use `note`.
@@ -143,8 +145,8 @@ cases status [--json]
 
 ```sh
 cases pickup   ID [--by NAME]
-cases note     ID --body-file FILE|-
-cases close    ID --outcome-file FILE|- [--link URL]...
+cases note     ID --body TEXT | --body-file FILE|-
+cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
 cases withdraw ID [--reason TEXT]
 ```
 
@@ -168,7 +170,7 @@ cases wait --id "$id" --since "$since" --timeout 2h
 cases show "$id" --json            # read .state and .answer
 cases pickup "$id" --by bun-pins
 # ... act on the answer ...
-echo "Pinned bun to 1.2.3 in abc123." | cases close "$id" --outcome-file - --link https://github.com/o/r/pull/12
+cases close "$id" --outcome "Pinned bun to 1.2.3 in abc123." --link https://github.com/o/r/pull/12
 ```
 
 Check the inbox with `cases status` at two points:

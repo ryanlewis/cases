@@ -54,6 +54,14 @@ func TestOpenBody(t *testing.T) {
 	}
 }
 
+func TestOpenInlineBody(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Inline", "--body", "Bun is pinned."))
+	if got := loadCase(t, root, id).Body; got != "Bun is pinned." {
+		t.Errorf("body = %q", got)
+	}
+}
+
 func TestOpenApprovalRows(t *testing.T) {
 	root := t.TempDir()
 	out := mustRun(t, "--store", root, "open", "--kind", "approval", "--urgency", "blocking", "--title", "Scripts",
@@ -120,6 +128,8 @@ func TestOpenRefusals(t *testing.T) {
 		{"rows on question", []string{"--kind", "question", "--urgency", "today", "--title", "x", "--row", `{"id":"a","label":"l","script":"s","link":"k"}`}, "rows are for approval cases, not question"},
 		{"options on fyi", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--option", "a"}, "options are for decision cases"},
 		{"blank label", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--label", "a", "--label", " "}, "label 2 is empty"},
+		{"body and body file", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--body", "x", "--body-file", "-"}, "--body and --body-file can't be used together"},
+		{"body that names a file", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--body", "open_test.go"}, "names a file; pass it with --body-file"},
 		{"the same label twice", []string{"--kind", "fyi", "--urgency", "today", "--title", "x", "--label", "a", "--label", "a"}, `label "a" is used twice`},
 	}
 	for _, tt := range tests {

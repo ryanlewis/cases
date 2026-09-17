@@ -154,6 +154,16 @@ func (d *Deps) readText(path string) (string, error) {
 	return string(b), err
 }
 
+// inlineText checks the value of an inline text flag, such as --outcome. A
+// value that names a file is refused: it is far more likely a path meant for
+// the -file flag than the text to store, and the store cannot take it back.
+func inlineText(flag, value string) (string, error) {
+	if fi, err := os.Stat(value); err == nil && !fi.IsDir() {
+		return "", fmt.Errorf("--%s %q names a file; pass it with --%s-file", flag, value, flag)
+	}
+	return value, nil
+}
+
 // warn prints problems found while loading, without failing the command.
 // When seen is not nil, a warning already in it is skipped and each one
 // printed is added, so a command that reloads the store says each only once.
