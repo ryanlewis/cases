@@ -197,8 +197,10 @@ To back the store up while `cases` may be using it, run
 still has the store open keeps using its `cases.db-wal` and `cases.db-shm`, and
 a file put in its place would be read with them. To start again, stop them,
 then delete `cases.db`, `cases.db-wal` and `cases.db-shm` together. If
-`cases.db` is gone but the other two are still there, `cases` refuses to make a
-new store until they are deleted or the store is put back. To restore a
+`cases.db` is gone but either of the other two is still there, `cases` refuses
+to make a new store until both are deleted or the store is put back. Putting
+the store back is the safe choice: deleting them throws away any writes that
+were only in `cases.db-wal`. To restore a
 backup, stop them, delete `cases.db-wal` and `cases.db-shm`, and copy the
 backup to `cases.db`.
 
