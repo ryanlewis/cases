@@ -1041,10 +1041,10 @@ func TestAnswerWritesThroughTheStore(t *testing.T) {
 // week at 05:00 UTC on Monday the 14th.
 func pinZeroClock(t *testing.T) {
 	t.Helper()
-	oldZone, oldNow := zone, now
+	oldZone, oldClock := zone, clock
 	zone = time.FixedZone("XST", -5*60*60)
-	now = func() time.Time { return time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC) }
-	t.Cleanup(func() { zone, now = oldZone, oldNow })
+	clock = func() time.Time { return time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { zone, clock = oldZone, oldClock })
 }
 
 // utc is a time on 2026-09-dd in UTC.
