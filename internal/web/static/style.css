@@ -90,18 +90,21 @@ h1.section, h2.section {
 h1.section::before, h2.section::before { content: "\2500\2500"; content: "\2500\2500" / ""; color: var(--fg-3); letter-spacing: 0; }
 h1.section::after, h2.section::after { content: ""; flex: 1; border-top: 1px dashed var(--rule); }
 
-/* Masthead: wordmark, a rule that eats the slack, the tally, the views. */
+/* Masthead: wordmark, a rule that eats the slack, the tally, the views. It
+   wraps rather than squeeze the wordmark or the chips when the text is large. */
 header.top {
-  display: flex; align-items: center; gap: .75rem;
-  height: 3rem; padding: 0 1rem; border-bottom: 1px solid var(--rule);
+  display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  min-height: 3rem; padding: 0 1rem; border-bottom: 1px solid var(--rule);
 }
+.brand, .chips { flex: none; }
 .brand {
   font-size: .8125rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
   color: var(--fg); text-decoration: none; padding: 0 .25rem;
 }
 .rule { flex: 1 1 2rem; border-top: 1px dashed var(--rule); height: 0; }
+.tally span { white-space: nowrap; }
 .tally strong { color: var(--fg); font-weight: 700; }
-.tally.hot, .tally.hot strong { color: var(--blocking); }
+.tally .hot, .tally .hot strong { color: var(--blocking); }
 
 /* Chip group: one outer border, dividers between, the current view inverted. */
 .chips { display: flex; border: 1px solid var(--rule-strong); }
@@ -287,12 +290,15 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
 .event details > .context { white-space: pre-line; }
 .outcome { margin-top: .5rem; font-size: .8125rem; }
 
-/* Phone: the header drops the rule, and controls get a real border and at
-   least 16px text, which stops iOS zooming in on focus. */
+/* Phone: the header drops the rule and puts the tally on a line of its own
+   under the wordmark and chips, and controls get a real border and at least
+   16px text, which stops iOS zooming in on focus. */
 @media (width < 720px) {
-  header.top { gap: .5rem; padding: 0 .75rem; }
+  header.top { gap: .5rem; padding: .5rem .75rem; }
   header.top .rule { display: none; }
-  .tally { margin-left: auto; }
+  .chips { margin-left: auto; }
+  .tally { order: 1; flex-basis: 100%; }
+  .tally:empty { display: none; }
   .chips a, .chips button { padding: .5rem .75rem; }
   .chips button { display: inline-block; width: auto; min-height: 0; border: 0; }
   textarea, input[type=text] { font-size: max(1rem, 16px); }

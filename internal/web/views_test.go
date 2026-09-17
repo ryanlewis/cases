@@ -88,10 +88,13 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Errorf("fragment is not a bare list with a title and no selection:\n%s", list)
 	}
 	// The header tally is swapped out of band, so it keeps up with the title.
-	if !strings.Contains(list, `<span id="tally" class="label tally hot" hx-swap-oob="true"><strong>1</strong> blocking</span>`) {
+	// One of each: the answered case is not counted, and the parked blocker
+	// counts as parked. Only the blocking figure is red.
+	tally := `<span class="hot"><strong>1</strong> blocking</span> · <span><strong>1</strong> today</span> · <span><strong>1</strong> whenever</span> · <span><strong>1</strong> parked</span></span>`
+	if !strings.Contains(list, `<span id="tally" class="label tally" hx-swap-oob="true">`+tally) {
 		t.Errorf("fragment lacks the out-of-band tally:\n%s", list)
 	}
-	if !strings.Contains(body, `<span id="tally" class="label tally hot"><strong>1</strong> blocking</span>`) || !strings.Contains(body, `<a href="/" class="on" aria-current="page">inbox</a>`) {
+	if !strings.Contains(body, `<span id="tally" class="label tally">`+tally) || !strings.Contains(body, `<a href="/" class="on" aria-current="page">inbox</a>`) {
 		t.Error("page header lacks the tally or the current view")
 	}
 	for _, s := range []string{"First line.", "Second line.", "Third.", "bun-pins", "stuck", "blocking", "parked", "Old blocker"} {
@@ -979,5 +982,23 @@ func TestChoicesAreRequiredInTheBrowser(t *testing.T) {
 		if got := strings.Count(page, `type="radio" required`); got != radios {
 			t.Errorf("%s: %d required radios, want %d", kind, got, radios)
 		}
+	}
+}
+
+func TestTallyHidesZeros(t *testing.T) {
+	a := newApp(t)
+	// No cases: no figures, and the span stays for the out-of-band swap.
+	if body := a.get(t, "/done"); !strings.Contains(body, `<span id="tally" class="label tally"></span>`) || !strings.Contains(body, "<title>done · cases</title>") {
+		t.Errorf("empty store tally or title:\n%s", body)
+	}
+	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Later"})
+	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Much later"})
+	body := a.get(t, "/done")
+	if !strings.Contains(body, `<span id="tally" class="label tally"><span><strong>2</strong> whenever</span></span>`) {
+		t.Errorf("tally is not just the whenever count:\n%s", body)
+	}
+	// The title counts only blocking cases, so it has no number here.
+	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>done · cases</title>") {
+		t.Errorf("a tally without blocking cases is red or titled with a count:\n%s", body)
 	}
 }

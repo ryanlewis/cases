@@ -163,20 +163,56 @@ func init() {
 
 // page is what every full page carries for the layout.
 type page struct {
-	Title    string
-	Blocking int
-	Nav      string // the header link to mark as current
+	Title string
+	tally
+	Nav string // the header link to mark as current
 }
 
-// countBlocking counts open blocking cases: the ones an agent is idle on.
-func countBlocking(cases []*store.Case) int {
-	n := 0
-	for _, c := range cases {
-		if c.State == store.StateOpen && c.Urgency == store.UrgencyBlocking {
-			n++
+// tally is the header's counts: open cases by urgency, and parked cases.
+type tally struct {
+	Blocking, Today, Whenever, Parked int
+}
+
+// tallyItem is one figure on the header line.
+type tallyItem struct {
+	N     int
+	Label string
+	Hot   bool
+}
+
+// Items returns the non-zero counts in header order. Only blocking is hot:
+// the open blocking cases are the ones an agent is idle on.
+func (t tally) Items() []tallyItem {
+	var items []tallyItem
+	for _, it := range []tallyItem{
+		{t.Blocking, "blocking", true},
+		{t.Today, "today", false},
+		{t.Whenever, "whenever", false},
+		{t.Parked, "parked", false},
+	} {
+		if it.N > 0 {
+			items = append(items, it)
 		}
 	}
-	return n
+	return items
+}
+
+func countTally(cases []*store.Case) tally {
+	var t tally
+	for _, c := range cases {
+		switch {
+		case c.State == store.StateParked:
+			t.Parked++
+		case c.State != store.StateOpen:
+		case c.Urgency == store.UrgencyBlocking:
+			t.Blocking++
+		case c.Urgency == store.UrgencyToday:
+			t.Today++
+		case c.Urgency == store.UrgencyWhenever:
+			t.Whenever++
+		}
+	}
+	return t
 }
 
 type card struct {
@@ -209,7 +245,7 @@ func inboxCases(cases []*store.Case) []*store.Case {
 }
 
 func newInbox(cases []*store.Case, selected string) inboxData {
-	d := inboxData{page: page{Title: "inbox", Blocking: countBlocking(cases), Nav: "inbox"}, Selected: selected}
+	d := inboxData{page: page{Title: "inbox", tally: countTally(cases), Nav: "inbox"}, Selected: selected}
 	for _, c := range cases {
 		if c.ID == selected {
 			d.Title = c.Title
@@ -332,7 +368,7 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 	d := struct {
 		page
 		Cards []doneCard
-	}{page: page{Title: "done", Blocking: countBlocking(cases), Nav: "done"}}
+	}{page: page{Title: "done", tally: countTally(cases), Nav: "done"}}
 	var shown []*store.Case
 	for _, c := range cases {
 		switch c.State {

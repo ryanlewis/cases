@@ -55,5 +55,5 @@
 
 {{define "title"}}{{if .Blocking}}({{.Blocking}}) {{end}}{{.Title}} · cases{{end}}
 
-{{define "tally-body"}}<strong>{{.Blocking}}</strong> blocking{{end}}
-{{define "tally"}}<span id="tally" class="label tally{{if .Blocking}} hot{{end}}">{{template "tally-body" .}}</span>{{end}}
+{{define "tally-body"}}{{range $i, $t := .Items}}{{if $i}} · {{end}}<span{{if $t.Hot}} class="hot"{{end}}><strong>{{$t.N}}</strong> {{$t.Label}}</span>{{end}}{{end}}
+{{define "tally"}}<span id="tally" class="label tally">{{template "tally-body" .}}</span>{{end}}
