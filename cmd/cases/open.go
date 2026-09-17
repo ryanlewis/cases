@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -54,7 +55,7 @@ func (c *OpenCmd) Run(d *Deps) error {
 		return err
 	}
 	rec.Rows = rows
-	created, err := store.Create(d.Store, rec)
+	created, err := d.cases().Create(context.Background(), rec)
 	if err != nil {
 		return err
 	}

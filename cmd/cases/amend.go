@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -22,8 +23,7 @@ type AmendCmd struct {
 }
 
 func (c *AmendCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
-	if err != nil {
+	if err := store.ValidID(c.ID); err != nil {
 		return err
 	}
 	rows, err := parseRows(c.Row)
@@ -56,7 +56,7 @@ func (c *AmendCmd) Run(d *Deps) error {
 		}
 		rec.Context = *c.Context
 	}
-	cs, err := store.Amend(dir, rec, atRevision(c.Revision)...)
+	cs, err := d.cases().Amend(context.Background(), c.ID, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

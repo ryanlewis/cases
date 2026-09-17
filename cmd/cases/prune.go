@@ -83,13 +83,15 @@ func (c *PruneCmd) Run(d *Deps) error {
 			return err
 		}
 	}
+	// Pruning moves case directories, so it works on the store's path rather
+	// than through the Store.
 	var failed []string
 	for _, cs := range prune {
-		var err error
-		if c.Delete {
-			err = os.RemoveAll(cs.Dir)
-		} else {
-			err = moveNew(cs.Dir, filepath.Join(archive, cs.ID))
+		dir, err := store.CaseDir(d.Store, cs.ID)
+		if err == nil && c.Delete {
+			err = os.RemoveAll(dir)
+		} else if err == nil {
+			err = moveNew(dir, filepath.Join(archive, cs.ID))
 		}
 		if err != nil {
 			failed = append(failed, cs.ID+": "+err.Error())

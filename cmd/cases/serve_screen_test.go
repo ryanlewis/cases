@@ -41,7 +41,7 @@ func frameLines(t *testing.T, out string) []string {
 func TestScreenDrawRedrawsInPlace(t *testing.T) {
 	root := t.TempDir()
 	var out bytes.Buffer
-	s := newStatusScreen(root, "http://127.0.0.1:8765/", &out, false)
+	s := newStatusScreen(root, store.NewDir(root), "http://127.0.0.1:8765/", &out, false)
 
 	s.draw(false, 0)
 	first := out.String()
@@ -103,7 +103,8 @@ func TestScreenDrawRedrawsInPlace(t *testing.T) {
 func TestScreenDrawStoreStates(t *testing.T) {
 	t.Run("missing store is empty", func(t *testing.T) {
 		var out bytes.Buffer
-		newStatusScreen(filepath.Join(t.TempDir(), "absent"), "u", &out, false).draw(false, 0)
+		absent := filepath.Join(t.TempDir(), "absent")
+		newStatusScreen(absent, store.NewDir(absent), "u", &out, false).draw(false, 0)
 		if got := out.String(); strings.Contains(got, "cannot read the store") || !strings.Contains(got, "open          0") {
 			t.Errorf("frame = %q, want an empty store and no error", got)
 		}
@@ -114,7 +115,7 @@ func TestScreenDrawStoreStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
-		newStatusScreen(file, "u", &out, true).draw(false, 0)
+		newStatusScreen(file, store.NewDir(file), "u", &out, true).draw(false, 0)
 		if got := out.String(); !strings.Contains(got, "\x1b[1;31mcannot read the store: ") {
 			t.Errorf("frame = %q, want the error in red", got)
 		}
@@ -123,7 +124,7 @@ func TestScreenDrawStoreStates(t *testing.T) {
 
 func TestScreenLogWriter(t *testing.T) {
 	var stderr bytes.Buffer
-	s := newStatusScreen(t.TempDir(), "u", &bytes.Buffer{}, false)
+	s := newScreenAt(t, "u", &bytes.Buffer{}, false)
 	w := s.logWriter(&stderr, true)
 
 	// A line split across writes is kept once it ends.
@@ -150,7 +151,7 @@ func TestScreenLogWriter(t *testing.T) {
 
 func TestScreenLogWriterWithoutTee(t *testing.T) {
 	var stderr bytes.Buffer
-	s := newStatusScreen(t.TempDir(), "u", &bytes.Buffer{}, false)
+	s := newScreenAt(t, "u", &bytes.Buffer{}, false)
 	if _, err := s.logWriter(&stderr, false).Write([]byte("GET / 200\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestScreenLogWriterWithoutTee(t *testing.T) {
 }
 
 func TestScreenLogWriterStderrFails(t *testing.T) {
-	s := newStatusScreen(t.TempDir(), "u", &bytes.Buffer{}, false)
+	s := newScreenAt(t, "u", &bytes.Buffer{}, false)
 	broken := errors.New("broken pipe")
 	n, err := s.logWriter(writerFunc(func([]byte) (int, error) { return 0, broken }), true).Write([]byte("GET /\n"))
 	if n != 0 || !errors.Is(err, broken) || len(s.log) != 0 {
@@ -173,7 +174,7 @@ func TestScreenLogWriterStderrFails(t *testing.T) {
 // terminal's height need a terminal and are not tested.
 func TestScreenRunWithoutTerminal(t *testing.T) {
 	out := &syncBuffer{}
-	s := newStatusScreen(t.TempDir(), "u", out, false)
+	s := newScreenAt(t, "u", out, false)
 	var requests atomic.Int64
 	requests.Store(3)
 	quit := func() { t.Error("quit called without a key") }
@@ -268,4 +269,11 @@ func TestUptimeAndAgo(t *testing.T) {
 			t.Errorf("ago(%s) = %q, want %q", now.Sub(tt.t), got, tt.want)
 		}
 	}
+}
+
+// newScreenAt is a status screen over an empty store in a scratch directory.
+func newScreenAt(t *testing.T, url string, out io.Writer, color bool) *statusScreen {
+	t.Helper()
+	root := t.TempDir()
+	return newStatusScreen(root, store.NewDir(root), url, out, color)
 }

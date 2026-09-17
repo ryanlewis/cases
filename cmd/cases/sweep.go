@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,7 +23,7 @@ type SweepCmd struct {
 // A case that refuses the withdraw does not stop the rest; sweep fails at the
 // end if any did.
 func (c *SweepCmd) Run(d *Deps) error {
-	cases, bad, err := store.List(d.Store)
+	cases, bad, err := d.cases().List(context.Background())
 	if errors.Is(err, fs.ErrNotExist) {
 		cases, bad, err = nil, nil, nil
 	}
@@ -59,7 +60,7 @@ func (c *SweepCmd) Run(d *Deps) error {
 
 	var failed []string
 	for _, cs := range sweep {
-		withdrawn, err := store.Withdraw(cs.Dir, store.WithdrawRecord{Reason: c.Reason})
+		withdrawn, err := d.cases().Withdraw(context.Background(), cs.ID, store.WithdrawRecord{Reason: c.Reason})
 		if err != nil {
 			failed = append(failed, cs.ID+": "+err.Error())
 			continue

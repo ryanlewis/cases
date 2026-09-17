@@ -1,6 +1,10 @@
 package main
 
-import "github.com/ryanlewis/cases/internal/store"
+import (
+	"context"
+
+	"github.com/ryanlewis/cases/internal/store"
+)
 
 type PickupCmd struct {
 	ID       string `arg:"" help:"Case id."`
@@ -9,11 +13,10 @@ type PickupCmd struct {
 }
 
 func (c *PickupCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
-	if err != nil {
+	if err := store.ValidID(c.ID); err != nil {
 		return err
 	}
-	cs, err := store.Pickup(dir, store.PickupRecord{By: c.By}, atRevision(c.Revision)...)
+	cs, err := d.cases().Pickup(context.Background(), c.ID, store.PickupRecord{By: c.By}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

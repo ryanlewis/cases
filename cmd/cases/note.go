@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ryanlewis/cases/internal/store"
@@ -14,7 +15,7 @@ type NoteCmd struct {
 }
 
 func (c *NoteCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
+	err := store.ValidID(c.ID)
 	if err != nil {
 		return err
 	}
@@ -27,7 +28,7 @@ func (c *NoteCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("body: %w", err)
 	}
-	cs, err := store.Note(dir, store.NoteRecord{Body: body}, atRevision(c.Revision)...)
+	cs, err := d.cases().Note(context.Background(), c.ID, store.NoteRecord{Body: body}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

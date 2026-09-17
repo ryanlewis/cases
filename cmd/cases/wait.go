@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,11 +67,10 @@ func (c *WaitCmd) sinceTime(d *Deps) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, c.Since); err == nil {
 		return t, nil
 	}
-	dir, err := d.caseDir(c.Since)
-	if err != nil {
+	if err := store.ValidID(c.Since); err != nil {
 		return time.Time{}, fmt.Errorf("--since %q is neither an RFC 3339 time nor a case id", c.Since)
 	}
-	cs, err := store.Load(dir)
+	cs, err := d.cases().Get(context.Background(), c.Since)
 	if errors.Is(err, fs.ErrNotExist) {
 		return time.Time{}, fmt.Errorf("--since %q is neither an RFC 3339 time nor a case in the store", c.Since)
 	}
@@ -106,7 +106,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 		return err
 	}
 	for _, id := range c.ID {
-		if _, err := d.caseDir(id); err != nil {
+		if err := store.ValidID(id); err != nil {
 			return err
 		}
 	}
@@ -124,7 +124,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 		needs, side = needsHuman, "human"
 	}
 
-	poller := store.NewPoller(d.Store)
+	poller := d.cases().NewPoller()
 	warned := map[string]bool{}
 	// seen holds the event files present on the first poll; nil until then.
 	var seen map[string]bool

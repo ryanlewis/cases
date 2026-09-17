@@ -30,11 +30,20 @@ var (
 	remove = os.Remove
 )
 
+// ValidID refuses an id that would name anything other than a direct child of
+// a store root. It does not look at the filesystem.
+func ValidID(id string) error {
+	if id == "" || strings.HasPrefix(id, ".") || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("invalid case id %q", id)
+	}
+	return nil
+}
+
 // CaseDir returns the directory for case id in the store root. It refuses an
 // id that would name anything other than a direct child of root.
 func CaseDir(root, id string) (string, error) {
-	if id == "" || strings.HasPrefix(id, ".") || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
-		return "", fmt.Errorf("invalid case id %q", id)
+	if err := ValidID(id); err != nil {
+		return "", err
 	}
 	return filepath.Join(root, id), nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,12 +28,12 @@ type AnswerCmd struct {
 }
 
 func (c *AnswerCmd) Run(d *Deps) error {
-	dir, err := d.findCase(c.ID)
+	id, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}
 	if c.Park {
-		cs, err := store.Park(dir, store.ParkRecord{Note: c.Note}, atRevision(c.Revision)...)
+		cs, err := d.cases().Park(context.Background(), id, store.ParkRecord{Note: c.Note}, atRevision(c.Revision)...)
 		if err != nil {
 			return err
 		}
@@ -71,7 +72,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		}
 		rec.Rows = append(rec.Rows, row)
 	}
-	cs, err := store.Answer(dir, rec, atRevision(c.Revision)...)
+	cs, err := d.cases().Answer(context.Background(), id, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}
