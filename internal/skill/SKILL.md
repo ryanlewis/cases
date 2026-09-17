@@ -42,9 +42,11 @@ open --amend--> open                       (a change before the answer)
 | `decision` | Choosing between options | `--option TEXT`, one per option (at least one) | `choice`: the 1-based option number. Or `other: true` with the human's `note`. "Other, see note" is always offered, so do not add it. |
 | `approval` | Running scripts or gated actions | `--row JSON`, one per row (at least one) | `rows`: one `{id, verdict, note}` per row. `verdict` is `approve`, `hold` or `reject`. |
 | `signoff` | Finished work that needs accepting | | `signoff`: `accept`, or `changes` with a `note` |
-| `stuck` | You are blocked and need guidance | | `text` (guidance) or `drop: true`. The human may park the case instead of answering. |
+| `stuck` | You are blocked and need guidance | | `text` (guidance). The human may park the case instead of answering. |
 | `question` | A question the human answers in their own words, not by picking an option | | `text` (the reply) |
 | `fyi` | Something the human should know; you are not blocked | | `ack: true` |
+
+Any kind may instead come back `drop: true`, with nothing else set but the `note`: the human does not want the work done.
 
 Any answer may carry a `note`. Read it: it often narrows or conditions the choice.
 
@@ -177,10 +179,11 @@ Check the inbox with `cases status` at two points:
 When `wait` returns, read the case's `state` and act on it:
 
 - `answered` — pick it up and follow the answer:
+  - `drop: true`, on any kind: stop that work and do not act on the case. Close with what you stopped, and the `note` if there is one.
   - `decision`: do option `choice` (options are numbered from 1). For `other`, do what the `note` says.
   - `approval`: run only the rows with `approve`. Do not run `hold` or `reject` rows. Say in the outcome which rows ran and what they did.
   - `signoff`: on `accept`, close. On `changes`, make the changes the note asks for, then `note` the case to ask for another look, and close once it is accepted.
-  - `stuck`: follow the `text`, or on `drop` stop that work. Close with what you did.
+  - `stuck`: follow the `text`. Close with what you did.
   - `question`: use the `text`. Close with what you did with it.
   - `fyi`: close with a short outcome, for example "Acknowledged".
 - `parked` — the human has set the work aside. Stop the work, do not pick up, and wait again with `--since` set to the case's `updated_at` from the line `wait` printed, not the old time: the park is later than the old time, so `wait` would return at once, again and again, and with no `--since` a resume that lands before `wait` starts is missed. The next event will be a `resume`.

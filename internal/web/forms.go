@@ -25,10 +25,15 @@ func revisionParam(v url.Values) int {
 
 // answerFromForm turns the posted response form into an answer. park is true
 // when a stuck case is being parked, which is a park event rather than an
-// answer. The store validates the result against the kind; this only reports
-// a response that was not chosen at all, in words that fit the form.
+// answer. The drop button dismisses a case of any kind, whatever else the form
+// holds. The store validates the result against the kind; this only reports a
+// response that was not chosen at all, in words that fit the form.
 func answerFromForm(c *store.Case, f url.Values) (rec store.AnswerRecord, park bool, err error) {
 	rec.Note = strings.TrimSpace(f.Get("note"))
+	if f.Get("drop") != "" {
+		rec.Drop = true
+		return rec, false, nil
+	}
 	switch c.Kind {
 	case store.KindDecision:
 		switch choice := f.Get("choice"); choice {

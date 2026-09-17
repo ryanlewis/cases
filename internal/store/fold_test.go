@@ -401,8 +401,8 @@ func TestAnswerValidation(t *testing.T) {
 		{name: "question text with note", kind: KindQuestion, answer: AnswerRecord{Text: "the staging one", Note: "ask again if it moves"}},
 		{name: "question nothing", kind: KindQuestion, answer: AnswerRecord{Note: "hm"}, wantErr: "no question response"},
 		{name: "question blank text", kind: KindQuestion, answer: AnswerRecord{Text: " \n "}, wantErr: "reply text is empty"},
-		{name: "question with drop", kind: KindQuestion, answer: AnswerRecord{Drop: true}, wantErr: "question answers cannot set drop"},
-		{name: "question text and drop", kind: KindQuestion, answer: AnswerRecord{Text: "x", Drop: true}, wantErr: "question answers cannot set drop"},
+		{name: "question drop", kind: KindQuestion, answer: AnswerRecord{Drop: true}},
+		{name: "question text and drop", kind: KindQuestion, answer: AnswerRecord{Text: "x", Drop: true}, wantErr: "drop the case or answer it, not both"},
 		{name: "question with choice", kind: KindQuestion, answer: AnswerRecord{Text: "x", Choice: 1}, wantErr: "question answers cannot set choice"},
 		{name: "question with other", kind: KindQuestion, answer: AnswerRecord{Text: "x", Other: true}, wantErr: "question answers cannot set other"},
 		{name: "question with rows", kind: KindQuestion, answer: AnswerRecord{Text: "x", Rows: answerOf(KindApproval).Rows}, wantErr: "question answers cannot set rows"},
@@ -412,6 +412,19 @@ func TestAnswerValidation(t *testing.T) {
 		{name: "fyi ack", kind: KindFYI, answer: AnswerRecord{Ack: true, Note: "thanks"}},
 		{name: "fyi nothing", kind: KindFYI, answer: AnswerRecord{}, wantErr: "no fyi response"},
 		{name: "fyi with text", kind: KindFYI, answer: AnswerRecord{Ack: true, Text: "x"}, wantErr: "fyi answers cannot set text"},
+
+		// Drop dismisses a case of any kind, alone or with a note, and never
+		// beside the kind's own response.
+		{name: "decision drop", kind: KindDecision, answer: AnswerRecord{Drop: true, Note: "not needed"}},
+		{name: "decision choice and drop", kind: KindDecision, answer: AnswerRecord{Choice: 1, Drop: true}, wantErr: "drop the case or answer it, not both"},
+		{name: "decision other and drop", kind: KindDecision, answer: AnswerRecord{Other: true, Drop: true, Note: "x"}, wantErr: "not both"},
+		{name: "approval drop", kind: KindApproval, answer: AnswerRecord{Drop: true}},
+		{name: "approval rows and drop", kind: KindApproval, answer: AnswerRecord{Rows: answerOf(KindApproval).Rows, Drop: true}, wantErr: "drop the case or answer it, not both"},
+		{name: "signoff drop", kind: KindSignoff, answer: AnswerRecord{Drop: true}},
+		{name: "signoff changes and drop", kind: KindSignoff, answer: AnswerRecord{Signoff: SignoffChanges, Note: "x", Drop: true}, wantErr: "not both"},
+		{name: "fyi drop", kind: KindFYI, answer: AnswerRecord{Drop: true}},
+		{name: "fyi ack and drop", kind: KindFYI, answer: AnswerRecord{Ack: true, Drop: true}, wantErr: "drop the case or answer it, not both"},
+		{name: "drop with a field the kind never takes", kind: KindFYI, answer: AnswerRecord{Text: "x", Drop: true}, wantErr: "fyi answers cannot set text"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

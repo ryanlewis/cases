@@ -18,7 +18,7 @@ type AnswerCmd struct {
 	Changes bool     `help:"signoff: request changes (needs --note)." xor:"response"`
 	Text    string   `help:"stuck: guidance for the agent. question: the reply." xor:"response"`
 	Park    bool     `help:"stuck: park the case until someone resumes it." xor:"response"`
-	Drop    bool     `help:"stuck: drop the work." xor:"response"`
+	Drop    bool     `help:"any kind: drop the case." xor:"response"`
 	Ack     bool     `help:"fyi: acknowledge." xor:"response"`
 
 	Note     string `help:"A note to the agent. Allowed with every response."`

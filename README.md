@@ -110,8 +110,10 @@ A `cases` from before `amend` skips amend files as unknown events: it shows an
 amended case as it was opened and checks answers against that. A `cases` from
 before the `question` kind refuses a question case's open event as an unknown
 kind, so it reports the whole case as broken rather than skipping one file.
-Update `cases` on every machine that uses the store before an agent amends a
-case or opens a question.
+A `cases` from before `drop` was allowed on every kind refuses a `drop` answer
+to any case but a stuck one: it lists the file as a problem and shows the case
+as still open. Update `cases` on every machine that uses the store before an
+agent amends a case or opens a question, or a human drops a case.
 
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
@@ -146,11 +148,13 @@ closing a case that has not been picked up, is refused and nothing is written.
 | `decision` | one or more `options` | `choice` (1-based option number), or `other` with a note |
 | `approval` | `rows`, each with `id`, `label`, `script` (the text itself), `link` and an optional `note` shown under the label | a verdict per row: `approve`, `hold` or `reject`, each with an optional note |
 | `signoff` | | `accept`, or `changes` with a note |
-| `stuck` | | guidance `text`, or `drop`; parking is a separate `park` event |
+| `stuck` | | guidance `text`; parking is a separate `park` event |
 | `question` | | reply `text` |
 | `fyi` | | `ack` |
 
-Every answer may carry a `note`.
+Any kind may be answered with `drop` instead, which dismisses the case: the
+human does not want the work done. A `drop` answer sets nothing else but the
+note. Every answer may carry a `note`.
 
 ### Archive
 
@@ -416,7 +420,9 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
   An amended case is shown as amended, and the thread lists what each amend
   changed.
   Sending the form writes one answer. A stuck case has a separate `park`
-  button, which parks it instead, with the note if one is written. A parked
+  button, which parks it instead, with the note if one is written. Every other
+  kind has a `drop` button, which answers with `drop` and the note, and a stuck
+  case drops through its `drop it` choice. A parked
   case has a `resume` button, and shows in the list with an ochre edge.
 - `/done` lists answered, picked-up, closed and withdrawn cases, newest first,
   with the outcome of closed ones.

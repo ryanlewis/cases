@@ -209,6 +209,47 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 	}
 }
 
+// The drop button dismisses a case of every kind but stuck, which drops
+// through its own radio. It skips the kind's required fields, so a
+// half-filled form sends a drop and nothing else, and a stale page is refused
+// like any other answer.
+func TestDropAnswersEveryKind(t *testing.T) {
+	const button = `<button type="submit" name="drop" value="1" formnovalidate>drop</button>`
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	for kind, rec := range openRecords {
+		t.Run(string(kind), func(t *testing.T) {
+			a := newApp(t)
+			c := a.open(t, rec)
+			page := a.get(t, "/cases/"+c.ID)
+			if kind == store.KindStuck {
+				if strings.Contains(page, button) {
+					t.Error("stuck form has a drop button beside its drop radio")
+				}
+				return
+			}
+			if !strings.Contains(page, button) {
+				t.Fatalf("form missing the drop button:\n%s", page)
+			}
+
+			form := url.Values{"drop": {"1"}, "note": {"not needed"}, "choice": {"1"}, "signoff": {"accept"}, "text": {"x"}, "ack": {"1"}}
+			if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, 0), origin); w.Code != http.StatusConflict {
+				t.Errorf("drop from a stale page: %d, want 409", w.Code)
+			}
+			if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, pageRevision(t, page)), origin); w.Code != http.StatusSeeOther {
+				t.Fatalf("drop: %d %s", w.Code, w.Body.String())
+			}
+			loaded, err := store.Load(c.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.State != store.StateAnswered || loaded.Answer == nil || !loaded.Answer.Drop || loaded.Answer.Note != "not needed" ||
+				loaded.Answer.Choice != 0 || loaded.Answer.Signoff != "" || loaded.Answer.Text != "" || loaded.Answer.Ack {
+				t.Errorf("state %s, answer %+v", loaded.State, loaded.Answer)
+			}
+		})
+	}
+}
+
 // A case amended after its page was loaded: the page shows the case as
 // amended, a form from the older page is refused, and an answer needs a
 // verdict on the added row.
