@@ -880,6 +880,88 @@ func TestDoneFiltersEmpty(t *testing.T) {
 	}
 }
 
+func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
+	pinZeroClock(t)
+	a := newApp(t)
+	answered := a.through(t, store.KindFYI, "Answered", answerAt(utc(16, 19, 48)))
+	picked := a.through(t, store.KindFYI, "Picked up", answerAt(utc(16, 19, 0)), pickupAt(utc(16, 19, 57)))
+	closed := a.through(t, store.KindFYI, "Closed", answerAt(utc(16, 9, 0)), pickupAt(utc(16, 9, 5)), closeAt(utc(16, 10, 0)))
+	withdrawn := a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+	open := a.through(t, store.KindFYI, "Still open")
+
+	selected := func(id string) string {
+		return `<a href="/cases/` + id + `" aria-current="page">`
+	}
+	doneNav := `<a href="/done" class="on" aria-current="page">done</a>`
+	for _, tc := range []struct {
+		c     *store.Case
+		state store.State
+		title string
+		chip  string
+		ids   []string
+	}{
+		{answered, store.StateAnswered, "<title>(1) Answered · done · cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
+		{picked, store.StatePickedUp, "<title>(1) Picked up · done · cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
+		{closed, store.StateClosed, "<title>(1) Closed · done · cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
+		{withdrawn, store.StateWithdrawn, "<title>(1) Withdrawn · done · cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
+	} {
+		target := "/cases/" + tc.c.ID
+		body := a.get(t, target)
+		for _, want := range []string{tc.title, tc.chip, doneNav, `<aside class="list" aria-label="done">`, `<article class="card selected">`, selected(tc.c.ID)} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %s", target, want)
+			}
+		}
+		if n := strings.Count(body, "card selected"); n != 1 {
+			t.Errorf("%s has %d selected cards, want 1", target, n)
+		}
+		for _, not := range []string{`aria-label="inbox"`, "/fragments/inbox", `class="on" aria-current="page">inbox`, open.ID} {
+			if strings.Contains(body, not) {
+				t.Errorf("%s has %s", target, not)
+			}
+		}
+		// The list has no poll of its own; the thread's poll still runs.
+		if strings.Count(body, `hx-get=`) != 1 {
+			t.Errorf("%s has %d polls, want 1", target, strings.Count(body, `hx-get=`))
+		}
+		if !strings.Contains(body, `hx-get="/cases/`+tc.c.ID+`/thread?state=`+string(tc.state)+`"`) {
+			t.Errorf("%s polls something other than its thread", target)
+		}
+		if tc.ids != nil {
+			// The list, then the case's own link in the recorded line or thread, if any.
+			if got := idsInOrder(body); len(got) < len(tc.ids) || !slices.Equal(got[:len(tc.ids)], tc.ids) {
+				t.Errorf("%s lists %v\nwant %v first", target, got, tc.ids)
+			}
+		} else {
+			for _, id := range []string{answered.ID, picked.ID, closed.ID, withdrawn.ID} {
+				if !strings.Contains(body, `href="/cases/`+id+`"`) {
+					t.Errorf("%s does not list %s", target, id)
+				}
+			}
+		}
+		// A change of state reloads the same case page, which picks the list again.
+		w := a.do("GET", target+"/thread?state=open", nil, map[string]string{"HX-Request": "true"})
+		if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != target {
+			t.Errorf("%s thread poll after a state change: %d, headers %v", target, w.Code, w.Header())
+		}
+	}
+
+	// An open case is beside the inbox list, as before.
+	body := a.get(t, "/cases/"+open.ID)
+	for _, want := range []string{`<aside class="list" aria-label="inbox">`, `hx-get="/fragments/inbox?selected=` + open.ID + `"`, `<a href="/" class="on" aria-current="page">inbox</a>`, "<title>(1) Still open · cases</title>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("open case lacks %s", want)
+		}
+	}
+	if strings.Contains(body, `aria-label="done"`) || strings.Contains(body, "chips filters") {
+		t.Error("open case is beside the done list")
+	}
+	// /done itself marks its filter as the page, and nothing as selected.
+	if done := a.get(t, "/done"); !strings.Contains(done, `<a href="/done" class="on" aria-current="page">all (4)</a>`) || strings.Contains(done, "selected") {
+		t.Errorf("/done marks its filter or cards wrongly:\n%s", done)
+	}
+}
+
 func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	a := newApp(t)
 	body := a.get(t, "/")
@@ -1342,7 +1424,7 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	for path, want := range map[string]string{
 		"/":                  "<title>Parked · cases</title>",
 		"/done":              "<title>done · cases</title>",
-		"/cases/" + first.ID: "<title>First · cases</title>",
+		"/cases/" + first.ID: "<title>First · done · cases</title>",
 		"/fragments/inbox":   "<title>inbox · cases</title>",
 	} {
 		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, want) {
