@@ -521,7 +521,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 		{store.KindDecision, url.Values{"note": {"hm"}}, "choose an option", "hm"},
 		{store.KindDecision, url.Values{"choice": {"other"}}, "other needs a note", ""},
 		{store.KindDecision, url.Values{"choice": {"7"}}, "choice 7 is not an option", ""},
-		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "note.deps": {"fine"}}, "choose approve, hold or reject for &#34;Migrate&#34;", `value="fine"`},
+		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "note.deps": {"fine"}}, "choose approve, hold or reject for &#34;Migrate&#34;", `<textarea name="note.deps" rows="1">fine</textarea>`},
 		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "verdict.mig": {"maybe"}}, "verdict &#34;maybe&#34;", ""},
 		{store.KindSignoff, url.Values{"signoff": {"changes"}}, "requesting changes needs a note", `value="changes" checked`},
 		{store.KindStuck, url.Values{"stuck": {"text"}}, "write the guidance", ""},

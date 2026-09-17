@@ -128,7 +128,20 @@
   }
   check();
 
+  // Textareas grow with their content. CSS field-sizing does it where the
+  // browser has it; elsewhere the height follows scrollHeight on every input
+  // and once for anything prefilled, such as a form sent back with a 409.
+  var grows = false;
+  try { grows = CSS.supports("field-sizing", "content"); } catch (e) {}
+  function grow(el) {
+    if (grows || !el || el.tagName !== "TEXTAREA") return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + "px";
+  }
+  document.addEventListener("input", function (e) { grow(e.target); });
+
   document.addEventListener("DOMContentLoaded", function () {
+    Array.prototype.forEach.call(document.getElementsByTagName("textarea"), grow);
     var form = document.getElementById("options");
     if (!form) return;
     var status = document.getElementById("notify-status");

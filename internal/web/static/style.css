@@ -296,6 +296,15 @@ textarea, input[type=text] {
   background: var(--bg-1); border: 1px solid var(--rule-strong); border-radius: 0;
 }
 textarea:focus-visible, input[type=text]:focus-visible { outline-offset: -3px; }
+/* A textarea starts at its rows and grows with what is typed, so a long reply
+   or a pasted dump never scrolls inside a one-line box. field-sizing does it
+   where supported; prefs.js sets the height from scrollHeight elsewhere. */
+textarea {
+  --rows: 3; min-height: calc(var(--rows) * 1.25rem + 1rem + 2px);
+  field-sizing: content; resize: vertical; overflow-y: hidden;
+}
+textarea[rows="1"] { --rows: 1; }
+textarea[rows="4"] { --rows: 4; }
 
 /* Buttons wear their brackets in CSS with empty alt text, so they stay out of
    the accessible name. Browsers without the alt syntax keep the first content. */

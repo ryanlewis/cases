@@ -476,3 +476,34 @@ func TestOptionsOverlayAndPrefsScript(t *testing.T) {
 		t.Errorf("/options: %d, want 404 now that options are an overlay", w.Code)
 	}
 }
+
+// TestFormsGrowWithTheirText checks that every free-text field in the answer
+// form is a textarea that sizes to its content: an approval row's note, which
+// used to be a single-line input, and the note to the agent. The CSS rule
+// carries the sizing where the browser has field-sizing, and prefs.js grows
+// the box from scrollHeight where it does not.
+func TestFormsGrowWithTheirText(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindApproval])
+	body := a.do("GET", "/cases/"+c.ID, nil, nil).Body.String()
+	if strings.Contains(body, `type="text"`) {
+		t.Error("case page still has a single-line text input")
+	}
+	for _, want := range []string{`<textarea name="note.` + c.Rows[0].ID + `" rows="1">`, `<textarea name="note" rows="3">`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("case page lacks %s", want)
+		}
+	}
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	for _, want := range []string{"field-sizing: content;", `textarea[rows="1"] { --rows: 1; }`} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css lacks %s", want)
+		}
+	}
+	js := a.do("GET", "/static/prefs.js", nil, nil).Body.String()
+	for _, want := range []string{`CSS.supports("field-sizing", "content")`, `document.addEventListener("input"`, `el.scrollHeight`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("prefs.js lacks %s", want)
+		}
+	}
+}
