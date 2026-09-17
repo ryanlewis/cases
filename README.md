@@ -16,7 +16,17 @@ live in a synced folder. No server is needed.
 
 ## Install
 
-The repository is private, so install from a checkout with Go on the path:
+Download a release binary for your platform and verify it against the
+published checksums (needs `gh` for the private repository):
+
+```sh
+gh release download vX.Y.Z -R ryanlewis/cases -p 'cases_vX.Y.Z_<os>_<arch>.*' -p SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf cases_vX.Y.Z_<os>_<arch>.tar.gz   # unzip the .zip on windows
+install cases /usr/local/bin/cases
+```
+
+Or install from a checkout with Go on the path:
 
 ```sh
 git clone git@github.com:ryanlewis/cases.git
@@ -626,6 +636,11 @@ make fmt     # golangci-lint fmt ./...
 `govulncheck` is pinned as a `tool` directive in go.mod, so its dependency
 graph (`golang.org/x/vuln` and its own dependencies) shows up in go.mod and
 go.sum alongside the runtime dependencies.
+
+To cut a release, push a semver tag: `git tag vX.Y.Z && git push origin
+vX.Y.Z`. `.github/workflows/release.yml` builds binaries for linux, darwin
+and windows, and publishes them with a `SHA256SUMS` file as a GitHub
+release.
 
 ## License
 
