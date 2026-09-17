@@ -219,6 +219,11 @@ main > .empty { margin: 0; }
    It rises in once when / loads; the polled list inside it is swapped
    without the section, so the reveal does not replay every two seconds. */
 .zero { padding-top: 1rem; animation: zero-in .4s ease-out both; }
+/* The panel keeps the width main gave it and sits in the middle of the page;
+   narrower than that, it spans the page as before. The width holds it there
+   when main is a flex column under a recorded line. */
+main:has(> .zero) { max-width: none; }
+.zero { width: 100%; max-width: 58rem; margin: 0 auto; }
 .zero-panel { border: 1px dashed var(--rule-strong); padding: 2.5rem 1.5rem; color: var(--fg-1); }
 .zero-panel h1 { font-size: 1.5rem; line-height: 2rem; margin: 0 0 1rem; color: var(--fg); }
 .zero-panel h1::before { content: "\2713  "; content: "\2713  " / ""; color: var(--fg-3); white-space: pre; }
