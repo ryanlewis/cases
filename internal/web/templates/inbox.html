@@ -1,5 +1,4 @@
-{{define "inbox-fragment"}}<title>{{template "title" .}}</title>
-<span id="tally" class="label tally" hx-swap-oob="true">{{template "tally-body" .}}</span>
+{{define "inbox-fragment"}}{{template "tally-fragment" .}}
 {{template "inbox-list" .}}{{end}}
 
 {{define "inbox-list"}}

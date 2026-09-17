@@ -920,12 +920,11 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 				t.Errorf("%s has %s", target, not)
 			}
 		}
-		// The list has no poll of its own; the thread's poll still runs.
-		if strings.Count(body, `hx-get=`) != 1 {
-			t.Errorf("%s has %d polls, want 1", target, strings.Count(body, `hx-get=`))
-		}
-		if !strings.Contains(body, `hx-get="/cases/`+tc.c.ID+`/thread?state=`+string(tc.state)+`"`) {
-			t.Errorf("%s polls something other than its thread", target)
+		// The list has no poll of its own; the thread and the tally poll.
+		tallyPoll := `<div hx-get="/fragments/tally?selected=` + tc.c.ID + `" hx-trigger="every 2s" hx-swap="none" hidden></div>`
+		threadPoll := `hx-get="/cases/` + tc.c.ID + `/thread?state=` + string(tc.state) + `"`
+		if n := strings.Count(body, `hx-get=`); n != 2 || !strings.Contains(body, tallyPoll) || !strings.Contains(body, threadPoll) {
+			t.Errorf("%s has %d polls, want only the tally and the thread", target, n)
 		}
 		if tc.ids != nil {
 			// The list, then the case's own link in the recorded line or thread, if any.
@@ -944,6 +943,12 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 		if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != target {
 			t.Errorf("%s thread poll after a state change: %d, headers %v", target, w.Code, w.Header())
 		}
+	}
+
+	// The tally poll carries the title and the count, and no list.
+	frag := a.do("GET", "/fragments/tally?selected="+closed.ID, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	if want := "<title>(1) Closed · done · cases</title>\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
+		t.Errorf("tally fragment = %q\nwant %q", frag, want)
 	}
 
 	// An open case is beside the inbox list, as before.

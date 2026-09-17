@@ -7,6 +7,7 @@
 {{else}}
 <div class="split{{if .Home}} home{{end}}">
 {{with .Done}}<aside class="list" aria-label="done">
+<div hx-get="/fragments/tally?selected={{$.Case.ID}}" hx-trigger="every 2s" hx-swap="none" hidden></div>
 {{template "done-list" .}}
 </aside>{{else}}<aside class="list" aria-label="inbox">
 {{template "inbox-list" .Inbox}}

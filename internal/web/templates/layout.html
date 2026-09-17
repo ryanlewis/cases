@@ -64,4 +64,6 @@
 {{define "title"}}{{with .Waiting}}({{.}}) {{end}}{{.Title}} · cases{{end}}
 
 {{define "tally-body"}}{{range $i, $t := .Items}}{{if $i}} · {{end}}<span{{if $t.Hot}} class="hot"{{end}}><strong>{{$t.N}}</strong> {{$t.Label}}</span>{{end}}{{end}}
+{{define "tally-fragment"}}<title>{{template "title" .}}</title>
+<span id="tally" class="label tally" hx-swap-oob="true">{{template "tally-body" .}}</span>{{end}}
 {{define "tally"}}<span id="tally" class="label tally">{{template "tally-body" .}}</span>{{end}}

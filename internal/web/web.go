@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.inbox)
 	mux.HandleFunc("GET /fragments/inbox", s.inboxFragment)
+	mux.HandleFunc("GET /fragments/tally", s.tallyFragment)
 	mux.HandleFunc("GET /done", s.done)
 	mux.HandleFunc("GET /cases/{id}", s.casePage)
 	mux.HandleFunc("GET /cases/{id}/thread", s.threadFragment)
