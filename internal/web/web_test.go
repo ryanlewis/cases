@@ -247,7 +247,7 @@ func TestStyleHasViewTransitions(t *testing.T) {
 	if on < 0 || off < 0 || off < on {
 		t.Errorf("style.css lacks the view transition rule, or the reduced-motion guard after it (at %d and %d)", on, off)
 	}
-	for _, want := range []string{"header.top { view-transition-name: masthead; }", ".split > .list { view-transition-name: inbox-list; }"} {
+	for _, want := range []string{"header.top { view-transition-name: masthead; }", "::view-transition-group(masthead) { animation: none; }", ".split > .list { view-transition-name: inbox-list; }"} {
 		if !strings.Contains(css, want) {
 			t.Errorf("style.css lacks %s", want)
 		}

@@ -148,6 +148,9 @@ main:has(> .split) { max-width: none; padding: 0; }
   @view-transition { navigation: none; }
 }
 header.top { view-transition-name: masthead; }
+/* A page scrolled past the masthead would otherwise slide it in from above;
+   pin its group to where it lands, so only its contents cross-fade. */
+::view-transition-group(masthead) { animation: none; }
 
 /* Narrow screens show one column: the list on /, the case on /cases/ID. */
 @media (width < 56rem) {
