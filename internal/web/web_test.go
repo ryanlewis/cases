@@ -374,7 +374,7 @@ func TestMissingStoreShowsAnEmptyInbox(t *testing.T) {
 	r.Host = testAddr
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "nothing waiting") || !strings.Contains(w.Body.String(), "no open cases.") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<h1>inbox zero.</h1>") || !strings.Contains(w.Body.String(), "nothing has needed you yet.") {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
 }

@@ -230,6 +230,70 @@ type inboxData struct {
 	// Empty is set on / when it was rendered with no case to show, so the
 	// polled list reloads / once a case arrives.
 	Empty bool
+	// Zero is what was got through, set with Empty while the inbox is empty.
+	Zero *zeroStats
+}
+
+// now is the clock for the inbox-zero figures. Tests pin it.
+var now = time.Now
+
+// zeroStats is what the inbox-zero panel says. Day and week start at
+// midnight, and on Monday, in the zone pages show times in.
+type zeroStats struct {
+	// Today and Week count the cases with a human answer, park or resume in
+	// that span.
+	Today, Week int
+	// Closed counts the cases closed today.
+	Closed int
+	// WithAgent counts answered and picked-up cases: the agent has not closed them.
+	WithAgent int
+	// LastAnswer is how long ago the human last answered a case, as Age
+	// gives it; empty if never.
+	LastAnswer string
+}
+
+// setEmpty marks d as / with no case to show, with the figures for the panel.
+func (d *inboxData) setEmpty(cases []*store.Case) {
+	d.Empty = true
+	if len(d.Cards) > 0 {
+		return
+	}
+	t := now().In(zone)
+	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, zone)
+	week := day.AddDate(0, 0, -(int(day.Weekday())+6)%7)
+	z := &zeroStats{}
+	var last time.Time
+	for _, c := range cases {
+		if c.State == store.StateAnswered || c.State == store.StatePickedUp {
+			z.WithAgent++
+		}
+		var today, thisWeek bool
+		for _, ev := range c.Events {
+			switch {
+			case ev.Type == store.EventClose:
+				if !ev.At.Before(day) {
+					z.Closed++
+				}
+			case ev.Author != store.AuthorHuman:
+			case ev.Type == store.EventAnswer || ev.Type == store.EventPark || ev.Type == store.EventResume:
+				today = today || !ev.At.Before(day)
+				thisWeek = thisWeek || !ev.At.Before(week)
+				if ev.Type == store.EventAnswer && ev.At.After(last) {
+					last = ev.At
+				}
+			}
+		}
+		if today {
+			z.Today++
+		}
+		if thisWeek {
+			z.Week++
+		}
+	}
+	if !last.IsZero() {
+		z.LastAnswer = Age(last, t)
+	}
+	d.Zero = z
 }
 
 // inboxCases returns the open and parked cases, in inbox order.
@@ -349,7 +413,7 @@ func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		d.Empty = true
+		d.setEmpty(cases)
 	}
 	s.render(w, http.StatusOK, "case", "inbox-fragment", d)
 }
@@ -451,7 +515,9 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 		d.Inbox.Title = c.Title
 	} else {
 		d.Inbox = newInbox(cases, "")
-		d.Inbox.Empty = home
+		if home {
+			d.Inbox.setEmpty(cases)
+		}
 	}
 	d.page = d.Inbox.page
 	s.render(w, status, "case", "layout.html", d)

@@ -208,6 +208,21 @@ main > .card h2 a { text-decoration: none; }
 }
 main > .empty { margin: 0; }
 
+/* Inbox zero: one statement across the page in place of two empty columns.
+   It rises in once when / loads; the polled list inside it is swapped
+   without the section, so the reveal does not replay every two seconds. */
+.zero { padding-top: 1rem; animation: zero-in .4s ease-out both; }
+.zero-panel { border: 1px dashed var(--rule-strong); padding: 2.5rem 1.5rem; color: var(--fg-1); }
+.zero-panel h1 { font-size: 1.5rem; line-height: 2rem; margin: 0 0 1rem; color: var(--fg); }
+.zero-panel h1::before { content: "\2713  "; content: "\2713  " / ""; color: var(--fg-3); white-space: pre; }
+.zero-panel p { margin: .25rem 0 0; }
+.zero-panel strong { color: var(--fg); }
+.zero-panel .age { color: var(--fg-3); margin-top: 1rem; }
+@keyframes zero-in { from { opacity: 0; transform: translateY(.5rem); } }
+@media (prefers-reduced-motion: reduce) {
+  .zero { animation: none; }
+}
+
 /* The case. */
 .case { padding-top: 1rem; }
 .context, .brief { color: var(--fg-1); margin: 0 0 .75rem; }
