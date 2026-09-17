@@ -15,20 +15,28 @@ import (
 )
 
 type ListCmd struct {
-	State []string `help:"Only cases in these states (open, answered, pickedup, closed, withdrawn, parked). Repeat or comma-separate." placeholder:"STATE"`
+	State     []string      `help:"Only cases in these states (open, answered, pickedup, closed, withdrawn, parked). Repeat or comma-separate. Without it, open and parked." placeholder:"STATE"`
+	All       bool          `help:"Cases in every state. --state wins over it."`
+	Urgency   []string      `help:"Only cases with this urgency (blocking, today, whenever). Repeat for any of them." enum:"blocking,today,whenever" sep:"none" placeholder:"URGENCY"`
+	OlderThan time.Duration `help:"Only cases whose last event is older than this Go duration (30m), so a resumed case counts from its resume. 0 means any age." default:"0" placeholder:"DURATION"`
 	CaseFilter
-	JSON bool `help:"Print JSON." short:"j"`
+	Count bool `help:"Print only the number of matching cases."`
+	JSON  bool `help:"Print JSON." short:"j"`
 }
 
-// CaseFilter picks cases by label and worker, for list and wait.
+// CaseFilter picks cases by kind, label and worker, for list, wait and sweep.
 type CaseFilter struct {
+	Kind   []string `help:"Only cases of this kind (decision, approval, signoff, stuck, question, fyi). Repeat for any of them." enum:"decision,approval,signoff,stuck,question,fyi" sep:"none" placeholder:"KIND"`
 	Label  []string `help:"Only cases with this label. Repeat for cases with any of them." sep:"none" placeholder:"TEXT"`
 	Worker []string `help:"Only cases from this worker. Repeat for cases from any of them." sep:"none" placeholder:"NAME"`
 }
 
-// match reports whether the case has one of the labels and one of the workers
-// asked for. A filter left empty matches every case.
+// match reports whether the case has one of the kinds, one of the labels and
+// one of the workers asked for. A filter left empty matches every case.
 func (f CaseFilter) match(c *store.Case) bool {
+	if len(f.Kind) > 0 && !slices.Contains(f.Kind, string(c.Kind)) {
+		return false
+	}
 	if len(f.Label) > 0 && !slices.ContainsFunc(c.Labels, func(l string) bool { return slices.Contains(f.Label, l) }) {
 		return false
 	}
@@ -44,6 +52,9 @@ func (c *ListCmd) Run(d *Deps) error {
 		}
 		want = append(want, st)
 	}
+	if len(want) == 0 && !c.All {
+		want = []store.State{store.StateOpen, store.StateParked}
+	}
 	cases, bad, err := store.List(d.Store)
 	if errors.Is(err, fs.ErrNotExist) {
 		// A store nobody has written to yet reads as empty.
@@ -56,14 +67,22 @@ func (c *ListCmd) Run(d *Deps) error {
 		fmt.Fprintf(d.Stderr, "warning: %v\n", b)
 	}
 
+	now := time.Now()
 	shown := []*store.Case{}
 	for _, cs := range cases {
 		d.warn(cs, nil)
-		if (len(want) == 0 || slices.Contains(want, cs.State)) && c.match(cs) {
+		if (len(want) == 0 || slices.Contains(want, cs.State)) &&
+			(len(c.Urgency) == 0 || slices.Contains(c.Urgency, string(cs.Urgency))) &&
+			now.Sub(cs.UpdatedAt) >= c.OlderThan && c.match(cs) {
 			shown = append(shown, cs)
 		}
 	}
 	store.SortInbox(shown)
+
+	if c.Count {
+		fmt.Fprintln(d.Stdout, len(shown))
+		return nil
+	}
 
 	if c.JSON {
 		enc := json.NewEncoder(d.Stdout)
@@ -79,7 +98,7 @@ func (c *ListCmd) Run(d *Deps) error {
 	// Labels come before the title so a long title does not push them off the line.
 	fmt.Fprintln(tw, "ID\tSTATE\tURGENCY\tKIND\tAGE\tLABELS\tTITLE")
 	for _, cs := range shown {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, web.Age(cs.OpenedAt, time.Now()), strings.Join(cs.Labels, ","), cs.Title)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cs.ID, cs.State, cs.Urgency, cs.Kind, web.Age(cs.OpenedAt, now), strings.Join(cs.Labels, ","), cs.Title)
 	}
 	return tw.Flush()
 }

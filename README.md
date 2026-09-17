@@ -237,7 +237,7 @@ cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--row JSON]... [--link URL]... [--label TEXT]...
                [--context TEXT] [--revision N]
 cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
-               [--label TEXT]... [--worker NAME]...
+               [--kind KIND]... [--label TEXT]... [--worker NAME]...
 cases pickup   ID [--by NAME] [--revision N]
 cases note     ID --body TEXT | --body-file FILE|- [--revision N]
 cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
@@ -253,15 +253,17 @@ cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
                 --park | --drop | --ack
                 [--note TEXT] [--revision N]
 cases resume ID [--agent] [--revision N]
-cases sweep  [--reason TEXT] [--older-than DURATION] [--label TEXT]...
-             [--worker NAME]... [--yes]
+cases sweep  [--reason TEXT] [--older-than DURATION] [--kind KIND]...
+             [--label TEXT]... [--worker NAME]... [--yes]
 cases prune  [--age DURATION] [--state closed,withdrawn] [--delete] [--yes]
 ```
 
 Both:
 
 ```
-cases list   [--state STATE,...] [--label TEXT]... [--worker NAME]... [--json]
+cases list   [--state STATE,...|--all] [--urgency URGENCY]...
+             [--older-than DURATION] [--kind KIND]... [--label TEXT]...
+             [--worker NAME]... [--count|--json]
 cases show   ID [--json]
 cases serve  [--listen 127.0.0.1:8765] [--no-open]
 cases status [--json]
@@ -316,9 +318,19 @@ that changes nothing, an empty `--body` or body file and an empty `--context`. `
 or context an amend replaced in full under the thread line that says so, and
 the web thread shows it under a `previous body` or `previous context` toggle.
 
-`list --label TEXT` and `list --worker NAME` (each repeatable) show only cases
-that have any of the given labels, or come from any of the given workers.
-Given together, a case must match both.
+`list` shows open and parked cases, the same ones as the web inbox, in the
+same order. `--state` (comma-separated or repeated) shows the states you name
+instead, and `--all` shows every state; `--state` wins if both are given.
+
+`list --kind KIND`, `list --urgency URGENCY`, `list --label TEXT` and
+`list --worker NAME` (each repeatable) show only cases that have any of the
+given kinds, urgencies or labels, or come from any of the given workers. A case
+must match every filter given. `--kind` and `--urgency` refuse a value that is
+not a kind or urgency. `--older-than DURATION` (a Go duration such as `30m`)
+shows only cases whose last event is older than that, so a case resumed a
+minute ago does not count as waiting since it was opened. `--count` prints just
+the number of matching cases, `0` when none match, in place of the table or
+the JSON.
 
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
@@ -328,9 +340,10 @@ three human events. By default only events that land after `wait` starts can
 wake it, so running it again does not wake on answers already reported. With
 `--since TIME` it also wakes on human events recorded after that time.
 `--id ID` (repeatable) waits on those cases only.
-`--label TEXT` and `--worker NAME` (each repeatable) wait on cases that have
-any of the given labels, or come from any of the given workers; given
-together, a case must match both, and with `--id` as well, all three. A filter
+`--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on
+cases that have any of the given kinds or labels, or come from any of the given
+workers; a case must match every filter given, `--id` included. `--kind` does
+not narrow `wait` to your own cases. A filter
 that matches no case, like an `--id` that is never answered, waits until the
 timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
@@ -342,8 +355,9 @@ starts if the store directory does not exist yet.
 would do unless given `--yes` (`-y`).
 
 `sweep` withdraws every open case that matches, with `--reason` recorded on
-each withdraw (default `swept`). `--label` and `--worker` filter as on `list`,
-and `--older-than DURATION` takes only cases opened longer ago than that.
+each withdraw (default `swept`). `--kind`, `--label` and `--worker` filter as on `list`,
+and `--older-than DURATION` takes only cases opened longer ago than that (on
+`list` it reads the last event instead).
 Withdraw is only allowed on an open case, so a matching case that is answered
 or parked is listed as left and not changed. Each withdraw is the same `agent`
 withdraw event `cases withdraw` writes, and goes through the same check. If one is refused, for example because the case

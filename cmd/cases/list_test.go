@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ryanlewis/cases/internal/store"
 )
 
 func TestListOrderFilterAndJSON(t *testing.T) {
@@ -16,7 +19,7 @@ func TestListOrderFilterAndJSON(t *testing.T) {
 	answered := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Seen"))
 	mustRun(t, "--store", root, "answer", answered, "--ack")
 
-	out := mustRun(t, "--store", root, "list")
+	out := mustRun(t, "--store", root, "list", "--all")
 	iu, ia, il := strings.Index(out, urgent), strings.Index(out, answered), strings.Index(out, later)
 	if iu < 0 || ia < 0 || il < 0 || iu >= ia || ia >= il {
 		t.Errorf("list is not blocking, today, whenever:\n%s", out)
@@ -128,5 +131,194 @@ func TestListReportsBrokenCaseAndListsTheRest(t *testing.T) {
 	}
 	if !strings.Contains(r.stdout, good) || !strings.Contains(r.stderr, "warning: "+broken) {
 		t.Errorf("stdout %q\nstderr %q", r.stdout, r.stderr)
+	}
+}
+
+// listIDs runs list --json with args and returns the ids it printed, sorted.
+func listIDs(t *testing.T, root string, args ...string) []string {
+	t.Helper()
+	var got []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(mustRun(t, append([]string{"--store", root, "list", "--json"}, args...)...)), &got); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, g := range got {
+		out = append(out, g.ID)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func sorted(ids ...string) []string {
+	slices.Sort(ids)
+	return ids
+}
+
+func TestListDefaultsToOpenAndParked(t *testing.T) {
+	root := t.TempDir()
+	open := func(title string) string {
+		return strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "today", "--title", title))
+	}
+	opened := open("Open")
+	parked := open("Parked")
+	mustRun(t, "--store", root, "answer", parked, "--park")
+	answered := open("Answered")
+	mustRun(t, "--store", root, "answer", answered, "--text", "Try again")
+	withdrawn := open("Withdrawn")
+	mustRun(t, "--store", root, "withdraw", withdrawn)
+
+	for _, tt := range []struct {
+		args []string
+		want []string
+	}{
+		{nil, sorted(opened, parked)},
+		{[]string{"--all"}, sorted(opened, parked, answered, withdrawn)},
+		{[]string{"--state", "withdrawn"}, []string{withdrawn}},
+		{[]string{"--state", "answered", "--all"}, []string{answered}},
+		{[]string{"--state", "closed"}, nil},
+	} {
+		if got := listIDs(t, root, tt.args...); !slices.Equal(got, tt.want) {
+			t.Errorf("list %q = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+
+	out := mustRun(t, "--store", root, "list")
+	if strings.Contains(out, answered) || !strings.Contains(out, opened) || !strings.Contains(out, parked) {
+		t.Errorf("list table:\n%s", out)
+	}
+}
+
+func TestListByKindAndUrgency(t *testing.T) {
+	root := t.TempDir()
+	open := func(kind, urgency string) string {
+		args := []string{"--store", root, "open", "--kind", kind, "--urgency", urgency, "--title", kind + " " + urgency}
+		if kind == "decision" {
+			args = append(args, "--option", "Yes", "--option", "No")
+		}
+		return strings.TrimSpace(mustRun(t, args...))
+	}
+	fyiToday := open("fyi", "today")
+	fyiBlocking := open("fyi", "blocking")
+	decision := open("decision", "blocking")
+	question := open("question", "whenever")
+
+	for _, tt := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"--kind", "fyi"}, sorted(fyiToday, fyiBlocking)},
+		{[]string{"--kind", "decision", "--kind", "question"}, sorted(decision, question)},
+		{[]string{"--kind", "stuck"}, nil},
+		{[]string{"--urgency", "blocking"}, sorted(fyiBlocking, decision)},
+		{[]string{"--urgency", "today", "--urgency", "whenever"}, sorted(fyiToday, question)},
+		{[]string{"--kind", "fyi", "--urgency", "blocking"}, []string{fyiBlocking}},
+	} {
+		if got := listIDs(t, root, tt.args...); !slices.Equal(got, tt.want) {
+			t.Errorf("list %q = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+
+	// A typo is refused rather than matching nothing, on every command that
+	// shares the filter.
+	for _, args := range [][]string{
+		{"list", "--kind", "decison"},
+		{"list", "--kind", "fyi,decision"},
+		{"list", "--urgency", "urgent"},
+		{"sweep", "--kind", "decison"},
+		{"wait", "--kind", "decison", "--timeout", "1ms"},
+	} {
+		if r := runCases(t, "", append([]string{"--store", root}, args...)...); r.err == nil || !strings.Contains(r.err.Error(), "must be one of") {
+			t.Errorf("%q: err = %v, want an enum error", args, r.err)
+		}
+	}
+}
+
+func TestWaitByKind(t *testing.T) {
+	root := t.TempDir()
+	notice := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Notice"))
+	decision := openDecision(t, root)
+
+	ch := startWait(t, root, "--kind", "decision", "--timeout", "5s")
+	mustRun(t, "--store", root, "answer", notice, "--ack")
+	time.Sleep(60 * time.Millisecond)
+	mustRun(t, "--store", root, "answer", decision, "--option", "1")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != decision {
+		t.Errorf("wait --kind decision printed %+v, want only %s", got, decision)
+	}
+}
+
+func TestListCount(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{{"list", "--count"}, {"list", "--count", "--json"}} {
+		if r := runCases(t, "", append([]string{"--store", filepath.Join(root, "missing")}, args...)...); r.err != nil || r.stdout != "0\n" {
+			t.Errorf("%q on a missing store = %q, %v, want 0", args, r.stdout, r.err)
+		}
+	}
+
+	mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "blocking", "--title", "A")
+	mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "blocking", "--title", "B")
+	answered := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "C"))
+	mustRun(t, "--store", root, "answer", answered, "--ack")
+
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "2\n"},
+		{[]string{"--all"}, "3\n"},
+		{[]string{"--urgency", "blocking"}, "2\n"},
+		{[]string{"--urgency", "whenever"}, "0\n"},
+		{[]string{"--json"}, "2\n"},
+	} {
+		if out := mustRun(t, append([]string{"--store", root, "list", "--count"}, tt.args...)...); out != tt.want {
+			t.Errorf("list --count %q = %q, want %q", tt.args, out, tt.want)
+		}
+	}
+}
+
+func TestListOlderThanReadsTheLastEvent(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC()
+	stuck := func(title string) *store.Case {
+		c, err := store.Create(root, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: title, OpenedAt: now.Add(-48 * time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	old := openAt(t, root, "Old", now.Add(-48*time.Hour), store.OpenRecord{})
+	recent := openAt(t, root, "Recent", now.Add(-time.Minute), store.OpenRecord{})
+	// Opened and parked long ago, resumed a minute ago: it has not waited 30m.
+	resumed := stuck("Resumed")
+	if _, err := store.Park(resumed.Dir, store.ParkRecord{ParkedAt: now.Add(-47 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resume(resumed.Dir, store.AuthorHuman, store.ResumeRecord{ResumedAt: now.Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	// Parked long ago and left parked: it has.
+	parked := stuck("Parked")
+	if _, err := store.Park(parked.Dir, store.ParkRecord{ParkedAt: now.Add(-47 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		args []string
+		want []string
+	}{
+		{nil, sorted(old.ID, recent.ID, resumed.ID, parked.ID)},
+		{[]string{"--older-than", "0"}, sorted(old.ID, recent.ID, resumed.ID, parked.ID)},
+		{[]string{"--older-than", "30m"}, sorted(old.ID, parked.ID)},
+		{[]string{"--older-than", "30m", "--state", "open"}, []string{old.ID}},
+		{[]string{"--older-than", "72h"}, nil},
+	} {
+		if got := listIDs(t, root, tt.args...); !slices.Equal(got, tt.want) {
+			t.Errorf("list %q = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+	if r := runCases(t, "", "--store", root, "list", "--older-than", "soon"); r.err == nil {
+		t.Error("a bad duration was accepted")
 	}
 }
