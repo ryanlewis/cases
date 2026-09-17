@@ -46,6 +46,14 @@
     <label class="choice"><input type="radio" name="links" value="new" checked> open in a new tab</label>
     <label class="choice"><input type="radio" name="links" value="same"> open in this tab</label>
   </fieldset>
+  <fieldset>
+    <legend>desktop notifications</legend>
+    <label class="choice"><input type="radio" name="notify" value="off" checked> off</label>
+    <label class="choice"><input type="radio" name="notify" value="blocking"> blocking cases</label>
+    <label class="choice"><input type="radio" name="notify" value="all"> every case</label>
+    <p class="label" id="notify-status" role="status"></p>
+    <button type="button" id="notify-allow" hidden>allow notifications</button>
+  </fieldset>
   <div class="actions"><button type="button" id="options-reset">reset</button><button type="submit">close</button></div>
 </form>
 </dialog>
