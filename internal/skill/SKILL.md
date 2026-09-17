@@ -110,7 +110,7 @@ cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID].
 ```
 
 - Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision`. Each line also has `fresh` and `next_since`.
-- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was already waiting on you before, such as one you are still handling or a parked case, which is printed on every wake until it is resumed; do not act on it twice.
+- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer synced in late from another machine, so do not skip a case on `fresh` alone: an `answered` case you have not picked up still needs you.
 - `next_since` is the same on every line: pass it as `--since` when you run `wait` again.
 - Run it in the background; it can take hours.
 - `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.

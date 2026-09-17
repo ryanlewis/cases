@@ -362,8 +362,12 @@ Each line `wait` prints is the case as `show --json` prints it, without
 - `next_since` is the value to pass as `--since` to the next `wait`, the same
   on every line: the time of the latest event that put a printed case there,
   or the `--since` given if that is later. Waiting again with it does not wake
-  on the events just printed, but does wake on one that lands before the new
-  `wait` starts. It is left out when none of those events records a time.
+  on the events just printed, but does wake on one recorded later that lands
+  before the new `wait` starts. An answer synced in late from another machine
+  can record a time earlier than `next_since`; if it lands before the next
+  `wait` starts, it does not wake that `wait`, and is printed with `fresh`
+  false on a later wake. It is left out when none of those events records a
+  time.
 
 `wait --for human` is the same wait from the human's side, for a notifier to
 run: it returns when a case lands on the human and prints every case waiting
