@@ -441,7 +441,12 @@ outside it.
 
 After a successful answer, park or resume, the page moves to the case after it
 in the inbox, or to `/` if it was the last one. A parked case stays in the
-inbox. If the form is refused, the same case is shown again with the error.
+inbox. The redirect carries `event` (`answer`, `park` or `resume`) and
+`recorded` (the case id), and the page it lands on starts with one line saying
+what was recorded on which case, linked to it. The line is shown only when the
+event is one of those three and the id names a case in the store, and it stays
+in the URL, so a reload shows it again. If the form is refused, the same case
+is shown again with the error.
 
 Each form carries the case's revision from when the page was loaded: the
 number of event files the case had. If an event has been added to the case

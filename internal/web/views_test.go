@@ -187,7 +187,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 
 			w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(tt.form, 1), map[string]string{"Origin": "http://" + testAddr})
 			// The only case: there is no next one, so back to the inbox.
-			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/?event=answer&recorded="+c.ID {
 				t.Fatalf("post: %d %q %s", w.Code, w.Header().Get("Location"), w.Body.String())
 			}
 			if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", tt.wantFile}) {
@@ -443,17 +443,55 @@ func TestPostsGoToTheNextCase(t *testing.T) {
 		want         string
 	}{
 		// A parked case stays in the inbox, and the page still moves on.
-		{"park", "/cases/" + blocked.ID + "/answer", withRevision(url.Values{"stuck": {"park"}}, 1), "/cases/" + decision.ID},
-		{"answer", "/cases/" + decision.ID + "/answer", withRevision(url.Values{"choice": {"1"}}, 1), "/cases/" + parked.ID},
-		{"resume", "/cases/" + parked.ID + "/resume", withRevision(nil, 2), "/cases/" + zed.ID},
-		{"answer the last", "/cases/" + zed.ID + "/answer", withRevision(url.Values{"ack": {"1"}}, 1), "/"},
-		{"resume the first", "/cases/" + blocked.ID + "/resume", withRevision(nil, 2), "/cases/" + parked.ID},
+		{"park", "/cases/" + blocked.ID + "/answer", withRevision(url.Values{"stuck": {"park"}}, 1), "/cases/" + decision.ID + "?event=park&recorded=" + blocked.ID},
+		{"answer", "/cases/" + decision.ID + "/answer", withRevision(url.Values{"choice": {"1"}}, 1), "/cases/" + parked.ID + "?event=answer&recorded=" + decision.ID},
+		{"resume", "/cases/" + parked.ID + "/resume", withRevision(nil, 2), "/cases/" + zed.ID + "?event=resume&recorded=" + parked.ID},
+		{"answer the last", "/cases/" + zed.ID + "/answer", withRevision(url.Values{"ack": {"1"}}, 1), "/?event=answer&recorded=" + zed.ID},
+		{"resume the first", "/cases/" + blocked.ID + "/resume", withRevision(nil, 2), "/cases/" + parked.ID + "?event=resume&recorded=" + blocked.ID},
 	}
 	for _, st := range steps {
 		w := a.do("POST", st.target, st.form, origin)
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != st.want {
 			t.Errorf("%s: %d %q, want %q %s", st.name, w.Code, w.Header().Get("Location"), st.want, w.Body.String())
 		}
+	}
+}
+
+func TestRedirectConfirmsWhatWasRecorded(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	first := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Ship <v2> & tell"})
+	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Second"})
+	line := `<p class="recorded" role="status">answer recorded on <a href="/cases/` + first.ID + `">Ship &lt;v2&gt; &amp; tell</a></p>`
+
+	w := a.do("POST", "/cases/"+first.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, 1), origin)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("post: %d %s", w.Code, w.Body.String())
+	}
+	if page := a.get(t, w.Header().Get("Location")); !strings.Contains(page, line) {
+		t.Errorf("next case missing %s:\n%s", line, page)
+	}
+	// Answering the last case lands on /, which has no case block.
+	if page := a.get(t, "/?event=answer&recorded="+first.ID); !strings.Contains(page, line) {
+		t.Errorf("/ missing %s", line)
+	}
+
+	for _, target := range []string{
+		"/cases/" + first.ID,
+		"/?event=answer&recorded=2026-01-01T00-00-00Z-no-such-case",
+		"/?event=answer&recorded=",
+		"/?event=close&recorded=" + first.ID,
+		"/?recorded=" + first.ID,
+		"/?event=answer",
+	} {
+		if page := a.get(t, target); strings.Contains(page, `class="recorded"`) {
+			t.Errorf("%s: shows a recorded line", target)
+		}
+	}
+	// A refused post names nothing as recorded.
+	w = a.do("POST", "/cases/"+first.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, 1), origin)
+	if w.Code == http.StatusSeeOther || strings.Contains(w.Body.String(), `class="recorded"`) {
+		t.Errorf("refused post: %d, recorded line %t", w.Code, strings.Contains(w.Body.String(), `class="recorded"`))
 	}
 }
 

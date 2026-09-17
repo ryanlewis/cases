@@ -209,6 +209,13 @@ pre code { padding: 0; background: none; }
 /* [ERR] inline, in reverse video, never a toast. */
 .error { color: var(--fg); font-weight: 700; }
 .error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 4px; margin-right: 8px; }
+/* [OK] what the last answer, park or resume wrote, above the columns, the same way. */
+.recorded { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--rule); }
+.recorded::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 4px; margin-right: 8px; }
+@media (width >= 56rem) {
+  main:has(> .recorded) { display: flex; flex-direction: column; }
+  main > .recorded + .split { flex: 1; min-height: 0; height: auto; }
+}
 
 /* The answer form. */
 fieldset { min-width: 0; margin: 16px 0; padding: 8px 12px 12px; border: 1px solid var(--rule); }
