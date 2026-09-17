@@ -448,6 +448,31 @@ func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "case", "inbox-fragment", d)
 }
 
+// doneTitle is the title of a done case's page.
+func doneTitle(c *store.Case) string {
+	return c.Title + " · done"
+}
+
+// tallyFragment is polled by a done case's page, whose list does not poll,
+// to keep the header tally and the title's count current. selected is the
+// case the page shows.
+func (s *Server) tallyFragment(w http.ResponseWriter, r *http.Request) {
+	cases, err := s.cases()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	p := page{Title: "done", tally: countTally(cases)}
+	selected := r.URL.Query().Get("selected")
+	for _, c := range cases {
+		if c.ID == selected {
+			p.Title = doneTitle(c)
+			break
+		}
+	}
+	s.render(w, http.StatusOK, "case", "tally-fragment", p)
+}
+
 type doneCard struct {
 	*store.Case
 	Age string
@@ -647,14 +672,15 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 	switch {
 	case c != nil && isDone(c):
 		// A done case sits beside the done list, under the filter it is on.
-		// The list does not poll, as on /done; the thread poll reloads the
-		// page when the case changes state, which picks the list again.
+		// The list does not poll, as on /done, but the tally and title do;
+		// the thread poll reloads the page when the case changes state,
+		// which picks the list again.
 		show := "all"
 		if inFlight(c) {
 			show = "inflight"
 		}
 		done := newDone(cases, show, c.ID)
-		done.Title = c.Title + " · done"
+		done.Title = doneTitle(c)
 		d.Case, d.Thread, d.Done = c, thread(c), &done
 		d.page = done.page
 	case c != nil:
