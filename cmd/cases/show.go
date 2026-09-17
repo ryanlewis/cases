@@ -14,8 +14,9 @@ import (
 )
 
 type ShowCmd struct {
-	ID   string `arg:"" help:"Case id, or any part of it that names one case."`
-	JSON bool   `help:"Print JSON, including every event file as written." short:"j"`
+	ID     string `arg:"" help:"Case id, or any part of it that names one case."`
+	JSON   bool   `help:"Print JSON, including every event file as written." short:"j" xor:"format"`
+	Answer bool   `help:"Print only the state, kind, revision and current answer, as JSON." xor:"format"`
 }
 
 func (c *ShowCmd) Run(d *Deps) error {
@@ -28,11 +29,14 @@ func (c *ShowCmd) Run(d *Deps) error {
 		return err
 	}
 	d.warn(cs, nil)
+	enc := json.NewEncoder(d.Stdout)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	if c.Answer {
+		return enc.Encode(shownAnswer{cs.State, cs.Kind, cs.Revision(), cs.Answer})
+	}
 	link := d.inboxLink(cs.ID)
 	if c.JSON {
-		enc := json.NewEncoder(d.Stdout)
-		enc.SetIndent("", "  ")
-		enc.SetEscapeHTML(false)
 		return enc.Encode(shownCase{cs, cs.Revision(), link})
 	}
 	printCase(d.Stdout, cs, link)
@@ -61,6 +65,16 @@ type shownCase struct {
 	*store.Case
 	Revision int    `json:"revision"`
 	URL      string `json:"url"`
+}
+
+// shownAnswer is what show --answer prints: enough to act on the answer
+// without the rest of the case. Answer is null when the case has none, such as
+// an open, parked or reopened case.
+type shownAnswer struct {
+	State    store.State         `json:"state"`
+	Kind     store.Kind          `json:"kind"`
+	Revision int                 `json:"revision"`
+	Answer   *store.AnswerRecord `json:"answer"`
 }
 
 func printCase(w io.Writer, c *store.Case, link string) {

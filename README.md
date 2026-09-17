@@ -269,7 +269,7 @@ Both:
 cases list   [--state STATE,...|--all] [--urgency URGENCY]...
              [--older-than DURATION] [--kind KIND]... [--label TEXT]...
              [--worker NAME]... [--count|--json]
-cases show   ID [--json]
+cases show   ID [--json | --answer]
 cases serve  [--listen 127.0.0.1:8765] [--no-open]
 cases status [--json]
 ```
@@ -301,7 +301,7 @@ exit 1, and `wait` exits 2 on timeout. `sweep` and `prune` exit 1 when any case
 fails.
 
 `cases show` prints the case's revision, the number of event files it has, and
-`show --json` has it as `revision`. Pass it to `answer`, `resume`, `amend`,
+`show --json` and `show --answer` have it as `revision`. Pass it to `answer`, `resume`, `amend`,
 `pickup`, `note`, `close` or `withdraw` as `--revision N` and the write is refused, with nothing written, if an event has
 been added to the case since it was read. The error names the revision read and
 the current one, and the command exits non-zero.
@@ -314,6 +314,11 @@ file, or from stdin with `-`. Give one or the other, not both; `note` and
 
 `--text-file` on `answer` reads the guidance or reply from a file, or from stdin
 with `-`, in place of `--text`. An empty file is refused.
+
+`show --answer` prints only what an agent needs to act on the answer, as one
+JSON object: `state`, `kind`, `revision` and `answer`. `answer` is `null` when
+the case has none, such as an open, parked or reopened case, and the command
+exits 0 either way.
 
 `--row` on `open` and `amend` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.

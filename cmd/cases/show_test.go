@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,5 +183,53 @@ func TestShowWarnsOnADamagedInstanceFile(t *testing.T) {
 	}
 	if !strings.HasPrefix(r.stderr, "warning: read "+path+": ") {
 		t.Errorf("stderr = %q", r.stderr)
+	}
+}
+
+func TestShowAnswer(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	shown := func() map[string]json.RawMessage {
+		t.Helper()
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--answer")), &m); err != nil {
+			t.Fatal(err)
+		}
+		keys := slices.Sorted(maps.Keys(m))
+		if !slices.Equal(keys, []string{"answer", "kind", "revision", "state"}) {
+			t.Errorf("keys = %v", keys)
+		}
+		return m
+	}
+
+	m := shown()
+	if string(m["state"]) != `"open"` || string(m["kind"]) != `"decision"` || string(m["revision"]) != "1" || string(m["answer"]) != "null" {
+		t.Errorf("open case: %s", m)
+	}
+
+	mustRun(t, "--store", root, "answer", id, "--option", "2", "--note", "watch the lockfile")
+	m = shown()
+	var answer struct {
+		Choice int    `json:"choice"`
+		Note   string `json:"note"`
+	}
+	if err := json.Unmarshal(m["answer"], &answer); err != nil {
+		t.Fatal(err)
+	}
+	if string(m["state"]) != `"answered"` || string(m["revision"]) != "2" || answer.Choice != 2 || answer.Note != "watch the lockfile" {
+		t.Errorf("answered case: %s", m)
+	}
+
+	mustRun(t, "--store", root, "pickup", id)
+	if r := runCases(t, "Which lockfile?", "--store", root, "note", id, "--body-file", "-"); r.err != nil {
+		t.Fatal(r.err)
+	}
+	m = shown()
+	if string(m["state"]) != `"open"` || string(m["revision"]) != "4" || string(m["answer"]) != "null" {
+		t.Errorf("case reopened by a note: %s", m)
+	}
+
+	if r := runCases(t, "", "--store", root, "show", id, "--answer", "--json"); r.err == nil {
+		t.Error("show took --answer with --json")
 	}
 }

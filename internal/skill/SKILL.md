@@ -37,7 +37,7 @@ open --amend--> open                       (a change before the answer)
 
 ## Kinds
 
-| Kind | Use it for | Open with | The answer (`answer` in `show --json`) |
+| Kind | Use it for | Open with | The answer (`answer` in `show --answer`) |
 | --- | --- | --- | --- |
 | `decision` | Choosing between options | `--option TEXT`, one per option (at least one) | `choice`: the 1-based option number. Or `other: true` with the human's `note`. "Other, see note" is always offered, so do not add it. |
 | `approval` | Running scripts or gated actions | `--row JSON`, one per row (at least one) | `rows`: one `{id, verdict, note}` per row. `verdict` is `approve`, `hold` or `reject`. |
@@ -122,13 +122,14 @@ cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID].
 ### `cases show` and `cases list`
 
 ```sh
-cases show ID [--json]
+cases show ID [--json | --answer]
 cases list [--state STATE,...|--all] [--urgency URGENCY]... \
   [--older-than DURATION] [--kind KIND]... [--label TEXT]... \
   [--worker NAME]... [--count|--json]
 ```
 
-- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, `revision`, the number of event files including any that were skipped, and `url`, the case's page in the human's web inbox, empty when no inbox is running. Read the answer from here, not from the plain-text output.
+- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, `revision`, the number of event files including any that were skipped, and `url`, the case's page in the human's web inbox, empty when no inbox is running.
+- `show --answer` prints only `state`, `kind`, `revision` and `answer`, as JSON. `answer` is `null` when the case has none (open, parked, or reopened by a note); it exits 0 either way. Read the answer from here, not from the plain-text output.
 - Without `--state`, `list` shows open and parked cases only. `--all` shows every state.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated, and wins over `--all`.
 - `list --kind KIND`, `--urgency URGENCY`, `--label TEXT` and `--worker NAME` (each repeatable) show cases with any of those kinds, urgencies or labels, or from any of those workers. A case must match every filter given.
@@ -159,7 +160,7 @@ cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]... [--revi
 cases withdraw ID [--reason TEXT] [--revision N]
 ```
 
-- `--revision N` refuses the write, and writes nothing, if the case has changed since you read it at revision N. Take N from the `revision` in the `show --json` you acted on (`wait` lines do not carry it). **Always pass it on `note` and `close`**: a note on a case the human has answered since you read it reopens the case and throws that answer away. If the write is refused as stale, read the case again with `show --json` before deciding what to do. `amend`, `pickup` and `withdraw` take it too.
+- `--revision N` refuses the write, and writes nothing, if the case has changed since you read it at revision N. Take N from the `revision` in the `show --answer` or `show --json` you acted on (`wait` lines do not carry it). **Always pass it on `note` and `close`**: a note on a case the human has answered since you read it reopens the case and throws that answer away. If the write is refused as stale, read the case again with `show --answer` before deciding what to do. `amend`, `pickup` and `withdraw` take it too.
 
 - `pickup` records that you have read the answer. Do it before you act, so the human can see the answer was received.
 - `note` adds a follow-up in markdown. Use it to ask a clarifying question about the answer; the case goes back to `open` for another answer.
@@ -178,7 +179,7 @@ id=$(cases open --kind decision --urgency today --worker bun-pins \
 # To wait again after it returns, pass --since the next_since it printed.
 cases wait --id "$id" --since "$id" --timeout 2h
 
-cases show "$id" --json            # read .state, .answer and .revision
+cases show "$id" --answer          # read .state, .answer and .revision
 rev=3                              # the .revision you read
 cases pickup "$id" --by bun-pins --revision "$rev"
 # ... act on the answer ...
