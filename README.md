@@ -605,8 +605,9 @@ when given `--revision N`.
 
 The tab title is the selected case's title, with the number of open blocking
 cases in front; the header shows the same count beside the `inbox` and `done`
-links. The list, the count and the thread refresh every two seconds; the done list
-beside a done case does not, as on `/done`. The page
+links. The list, the count and the thread refresh every two seconds. Beside a
+done case only the thread refreshes: the done list, the count and the number in
+the tab title stay as they were when the page loaded, as on `/done`. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
 `/`, which selects whichever case is first. A change that leaves the state as
 it was, such as a note or an amend on an open case, only updates the thread, so
