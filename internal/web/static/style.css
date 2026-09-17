@@ -72,6 +72,7 @@ body {
 }
 a { color: var(--fg); text-underline-offset: 2px; }
 a:hover { background: var(--fg); color: var(--bg); text-decoration: none; }
+a:hover strong { color: inherit; }
 ::selection { background: var(--fg); color: var(--bg); }
 :focus-visible { outline: 1px dashed var(--fg); outline-offset: 2px; }
 h1 { font-size: 1.25rem; line-height: 1.75rem; font-weight: 700; margin: .5rem 0 .75rem; }

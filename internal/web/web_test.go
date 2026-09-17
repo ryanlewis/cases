@@ -274,6 +274,17 @@ func TestStyleCentresInboxZero(t *testing.T) {
 	}
 }
 
+// TestStyleKeepsBoldReadableOnHover pins the rule that stops a bold figure
+// inside a link vanishing when the hover inverts the link: .zero-panel strong
+// sets its own colour, so the hover must win inside the link.
+func TestStyleKeepsBoldReadableOnHover(t *testing.T) {
+	a := newApp(t)
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	if !strings.Contains(css, "a:hover strong { color: inherit; }") {
+		t.Errorf("style.css lacks the a:hover strong rule")
+	}
+}
+
 // TestStyleScalesWithTextSize keeps lengths in rem, so the size option, which
 // sets the root size, scales the whole page. Hairline rules, offsets and media
 // query breakpoints (which the root size does not move) may stay in px.
