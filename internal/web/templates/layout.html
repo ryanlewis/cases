@@ -61,7 +61,7 @@
 </html>
 {{end}}
 
-{{define "title"}}{{with .Waiting}}({{.}}) {{end}}{{.Title}} · cases{{end}}
+{{define "title"}}{{with .Waiting}}({{.}}) {{end}}cases{{end}}
 
 {{define "tally-body"}}{{range $i, $t := .Items}}{{if $i}} · {{end}}<span{{if $t.Hot}} class="hot"{{end}}><strong>{{$t.N}}</strong> {{$t.Label}}</span>{{end}}{{end}}
 {{define "tally-fragment"}}<title>{{template "title" .}}</title>
