@@ -248,7 +248,8 @@ Human side:
 
 ```
 cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
-                --accept | --changes | --text TEXT | --park | --drop | --ack
+                --accept | --changes | --text TEXT | --text-file FILE|- |
+                --park | --drop | --ack
                 [--note TEXT] [--revision N]
 cases resume ID [--agent] [--revision N]
 cases sweep  [--reason TEXT] [--older-than DURATION] [--label TEXT]...
@@ -289,6 +290,9 @@ inline, for a line; `--body-file` and `--outcome-file` read markdown from a
 file, or from stdin with `-`. Give one or the other, not both; `note` and
 `close` need one. An inline value that names an existing file is refused, so
 `--outcome outcome.md` is not stored as the text `outcome.md`.
+
+`--text-file` on `answer` reads the guidance or reply from a file, or from stdin
+with `-`, in place of `--text`. An empty file is refused.
 
 `--row` on `open` and `amend` takes one JSON object per row, for example
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.

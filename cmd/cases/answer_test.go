@@ -111,6 +111,54 @@ func TestAnswerByKind(t *testing.T) {
 	}
 }
 
+func TestAnswerTextFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "reply.md")
+	if err := os.WriteFile(file, []byte("# The staging one\n\nIt has the fixtures.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.md")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		stdin    string
+		args     []string
+		wantText string
+		wantErr  string
+	}{
+		{name: "file", args: []string{"--text-file", file}, wantText: "# The staging one\n\nIt has the fixtures.\n"},
+		{name: "stdin", stdin: "use the mirror\n", args: []string{"--text-file", "-"}, wantText: "use the mirror\n"},
+		{name: "empty file", args: []string{"--text-file", empty}, wantErr: "answer text is empty"},
+		{name: "empty stdin", args: []string{"--text-file", "-"}, wantErr: "answer text is empty"},
+		{name: "missing file", args: []string{"--text-file", filepath.Join(t.TempDir(), "missing.md")}, wantErr: "text:"},
+		{name: "with --text", args: []string{"--text", "x", "--text-file", file}, wantErr: "--text and --text-file can't be used together"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "question", "--urgency", "today", "--title", "T"))
+			r := runCases(t, tt.stdin, append([]string{"--store", root, "answer", id}, tt.args...)...)
+			c := loadCase(t, root, id)
+			if tt.wantErr != "" {
+				if r.err == nil || !strings.Contains(r.err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", r.err, tt.wantErr)
+				}
+				if len(c.Events) != 1 {
+					t.Errorf("refused answer wrote %d events", len(c.Events))
+				}
+				return
+			}
+			if r.err != nil {
+				t.Fatal(r.err)
+			}
+			if c.Answer == nil || c.Answer.Text != tt.wantText {
+				t.Errorf("answer = %+v", c.Answer)
+			}
+		})
+	}
+}
+
 // eventFiles names the files in a case directory, so a test can tell that a
 // refused write left nothing behind.
 func eventFiles(t *testing.T, root, id string) []string {
