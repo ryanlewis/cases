@@ -268,6 +268,8 @@ func TestDescribe(t *testing.T) {
 			[]Line{{Text: "guidance: Try the other mirror."}, {Text: "Then retry."}}},
 		{"answer drop", []step{open(KindStuck), answer(AnswerRecord{Drop: true})},
 			[]Line{{Text: "drop"}}},
+		{"answer drop on a decision", []step{open(KindDecision), answer(AnswerRecord{Drop: true, Note: "not needed"})},
+			[]Line{{Text: "drop"}, {Text: "note: not needed"}}},
 		{"answer ack", []step{open(KindFYI), answer(AnswerRecord{Ack: true})},
 			[]Line{{Text: "acknowledged"}}},
 		{"answer rows", []step{open(KindApproval), answer(AnswerRecord{

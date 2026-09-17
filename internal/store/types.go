@@ -156,11 +156,12 @@ type RowAnswer struct {
 //   - decision: Choice (1-based index into the options) or Other with a Note
 //   - approval: Rows, one verdict per row of the case
 //   - signoff: Signoff "accept", or "changes" with a Note
-//   - stuck: Text (guidance) or Drop; parking is a separate park event
+//   - stuck: Text (guidance); parking is a separate park event
 //   - question: Text (the reply)
 //   - fyi: Ack
 //
-// Note is allowed on every kind.
+// Drop, which dismisses the case, may stand in for the response on every
+// kind. Note is allowed on every kind.
 type AnswerRecord struct {
 	Choice     int         `json:"choice,omitempty"`
 	Other      bool        `json:"other,omitempty"`

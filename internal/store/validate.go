@@ -161,13 +161,14 @@ func checkRows(rows, have []Row) error {
 }
 
 // answerFields names the fields each kind's answer may set, besides the note.
+// Every kind may be answered with drop instead, which dismisses the case.
 var answerFields = map[Kind][]string{
-	KindDecision: {"choice", "other"},
-	KindApproval: {"rows"},
-	KindSignoff:  {"signoff"},
+	KindDecision: {"choice", "other", "drop"},
+	KindApproval: {"rows", "drop"},
+	KindSignoff:  {"signoff", "drop"},
 	KindStuck:    {"text", "drop"},
-	KindQuestion: {"text"},
-	KindFYI:      {"ack"},
+	KindQuestion: {"text", "drop"},
+	KindFYI:      {"ack", "drop"},
 }
 
 // set lists the response fields the answer sets.
@@ -199,6 +200,12 @@ func (r *AnswerRecord) validate(cur *OpenRecord) error {
 	}
 	if len(set) == 0 {
 		return fmt.Errorf("the answer has no %s response", cur.Kind)
+	}
+	if r.Drop {
+		if len(set) > 1 {
+			return errors.New("drop the case or answer it, not both")
+		}
+		return nil
 	}
 	hasNote := strings.TrimSpace(r.Note) != ""
 
@@ -245,10 +252,7 @@ func (r *AnswerRecord) validate(cur *OpenRecord) error {
 			return fmt.Errorf("signoff %q is not accept or changes", r.Signoff)
 		}
 	case KindStuck:
-		if len(set) > 1 {
-			return errors.New("give guidance text or drop, not both")
-		}
-		if !r.Drop && strings.TrimSpace(r.Text) == "" {
+		if strings.TrimSpace(r.Text) == "" {
 			return errors.New("guidance text is empty")
 		}
 	case KindQuestion:
