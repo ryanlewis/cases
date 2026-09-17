@@ -175,6 +175,7 @@ id=$(cases open --kind decision --urgency today --worker bun-pins \
   --option "Pin to 1.2.3" --option "Float and fix the lockfile")
 
 # In the background. Exit 2 means the timeout passed: run it again.
+# To wait again after it returns, pass --since the next_since it printed.
 cases wait --id "$id" --since "$id" --timeout 2h
 
 cases show "$id" --json            # read .state, .answer and .revision
