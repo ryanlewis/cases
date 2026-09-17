@@ -65,10 +65,10 @@ func TestInboxOrderAndContent(t *testing.T) {
 	if got := idsInOrder(body); !slices.Equal(got, want) {
 		t.Errorf("inbox order = %v\nwant %v", got, want)
 	}
-	// / shows the first case beside the list, selected, and titled after it.
-	// Three open cases: the parked one and the answered one do not count.
-	if !strings.Contains(body, "<title>(3) Old blocker · cases</title>") {
-		t.Errorf("title missing the waiting count or case title:\n%s", body)
+	// / shows the first case beside the list, selected. The title is the count
+	// and the name: three open cases: the parked one and the answered one do not count.
+	if !strings.Contains(body, "<title>(3) cases</title>") {
+		t.Errorf("title is not the waiting count and the name:\n%s", body)
 	}
 	if !strings.Contains(body, `<div class="split home">`) || !strings.Contains(body, `action="/cases/`+oldBlocking.ID+`/resume"`) ||
 		!strings.Contains(body, `hx-get="/cases/`+oldBlocking.ID+`/thread?state=parked&amp;home=1"`) {
@@ -86,7 +86,7 @@ func TestInboxOrderAndContent(t *testing.T) {
 	if frag.Code != http.StatusOK || !slices.Equal(idsInOrder(list), want) {
 		t.Errorf("fragment %d, ids %v", frag.Code, idsInOrder(list))
 	}
-	if !strings.Contains(list, "<title>(3) inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
+	if !strings.Contains(list, "<title>(3) cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
 		t.Errorf("fragment is not a bare list with a title and no selection:\n%s", list)
 	}
 	// The header tally is swapped out of band, so it keeps up with the title.
@@ -108,11 +108,11 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Error("excerpt shows more than three lines")
 	}
 
-	// The polled list keeps the selection and the selected case's title.
+	// The polled list keeps the selection and the count in the title.
 	sel := a.get(t, "/fragments/inbox?selected="+today.ID)
 	if !strings.Contains(sel, `class="card urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) ||
 		strings.Count(sel, "selected") != 2 || !strings.Contains(sel, `hx-get="/fragments/inbox?selected=`+today.ID+`"`) ||
-		!strings.Contains(sel, "<title>(3) Today · cases</title>") {
+		!strings.Contains(sel, "<title>(3) cases</title>") {
 		t.Errorf("fragment lost the selection:\n%s", sel)
 	}
 
@@ -827,11 +827,11 @@ func TestDoneFilters(t *testing.T) {
 		on            int
 		ids           []string
 	}{
-		{"/done?show=inflight", "<title>(1) in flight · done · cases</title>", 0, []string{picked.ID, answered.ID, anon.ID}},
-		{"/done?show=closed-today", "<title>(1) closed today · done · cases</title>", 1, []string{closedToday.ID}},
-		{"/done", "<title>(1) done · cases</title>", 2, nil},
-		{"/done?show=all", "<title>(1) done · cases</title>", 2, nil},
-		{"/done?show=bogus", "<title>(1) done · cases</title>", 2, nil},
+		{"/done?show=inflight", "<title>(1) cases</title>", 0, []string{picked.ID, answered.ID, anon.ID}},
+		{"/done?show=closed-today", "<title>(1) cases</title>", 1, []string{closedToday.ID}},
+		{"/done", "<title>(1) cases</title>", 2, nil},
+		{"/done?show=all", "<title>(1) cases</title>", 2, nil},
+		{"/done?show=bogus", "<title>(1) cases</title>", 2, nil},
 	} {
 		body := a.get(t, tc.target)
 		if !strings.Contains(body, tc.title) {
@@ -913,10 +913,10 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 		chip  string
 		ids   []string
 	}{
-		{answered, store.StateAnswered, "<title>(1) Answered · done · cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
-		{picked, store.StatePickedUp, "<title>(1) Picked up · done · cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
-		{closed, store.StateClosed, "<title>(1) Closed · done · cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
-		{withdrawn, store.StateWithdrawn, "<title>(1) Withdrawn · done · cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
+		{answered, store.StateAnswered, "<title>(1) cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
+		{picked, store.StatePickedUp, "<title>(1) cases</title>", `<a href="/done?show=inflight" class="on" aria-current="true">in flight (2)</a>`, []string{picked.ID, answered.ID}},
+		{closed, store.StateClosed, "<title>(1) cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
+		{withdrawn, store.StateWithdrawn, "<title>(1) cases</title>", `<a href="/done" class="on" aria-current="true">all (4)</a>`, nil},
 	} {
 		target := "/cases/" + tc.c.ID
 		body := a.get(t, target)
@@ -934,7 +934,7 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 			}
 		}
 		// The list has no poll of its own; the thread and the tally poll.
-		tallyPoll := `<div hx-get="/fragments/tally?selected=` + tc.c.ID + `" hx-trigger="every 2s" hx-swap="none" hidden></div>`
+		tallyPoll := `<div hx-get="/fragments/tally" hx-trigger="every 2s" hx-swap="none" hidden></div>`
 		threadPoll := `hx-get="/cases/` + tc.c.ID + `/thread?state=` + string(tc.state) + `"`
 		if n := strings.Count(body, `hx-get=`); n != 2 || !strings.Contains(body, tallyPoll) || !strings.Contains(body, threadPoll) {
 			t.Errorf("%s has %d polls, want only the tally and the thread", target, n)
@@ -959,14 +959,14 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 	}
 
 	// The tally poll carries the title and the count, and no list.
-	frag := a.do("GET", "/fragments/tally?selected="+closed.ID, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if want := "<title>(1) Closed · done · cases</title>\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
+	frag := a.do("GET", "/fragments/tally", nil, map[string]string{"HX-Request": "true"}).Body.String()
+	if want := "<title>(1) cases</title>\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
 		t.Errorf("tally fragment = %q\nwant %q", frag, want)
 	}
 
 	// An open case is beside the inbox list, as before.
 	body := a.get(t, "/cases/"+open.ID)
-	for _, want := range []string{`<aside class="list" aria-label="inbox">`, `hx-get="/fragments/inbox?selected=` + open.ID + `"`, `<a href="/" class="on" aria-current="page">inbox</a>`, "<title>(1) Still open · cases</title>"} {
+	for _, want := range []string{`<aside class="list" aria-label="inbox">`, `hx-get="/fragments/inbox?selected=` + open.ID + `"`, `<a href="/" class="on" aria-current="page">inbox</a>`, "<title>(1) cases</title>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("open case lacks %s", want)
 		}
@@ -1198,7 +1198,7 @@ func TestChoicesAreRequiredInTheBrowser(t *testing.T) {
 func TestTallyHidesZeros(t *testing.T) {
 	a := newApp(t)
 	// No cases: no figures, and the span stays for the out-of-band swap.
-	if body := a.get(t, "/done"); !strings.Contains(body, `<span id="tally" class="label tally"></span>`) || !strings.Contains(body, "<title>done · cases</title>") {
+	if body := a.get(t, "/done"); !strings.Contains(body, `<span id="tally" class="label tally"></span>`) || !strings.Contains(body, "<title>cases</title>") {
 		t.Errorf("empty store tally or title:\n%s", body)
 	}
 	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Later"})
@@ -1208,7 +1208,7 @@ func TestTallyHidesZeros(t *testing.T) {
 		t.Errorf("tally is not just the whenever count:\n%s", body)
 	}
 	// The title counts the open cases, so it leads with the two here.
-	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>(2) done · cases</title>") {
+	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>(2) cases</title>") {
 		t.Errorf("a tally without blocking cases is red, or its title lacks the open count:\n%s", body)
 	}
 }
@@ -1418,10 +1418,10 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	hx := map[string]string{"HX-Request": "true"}
 	// Two open cases of any urgency; the parked one waits on nobody.
 	for path, want := range map[string]string{
-		"/":                   "<title>(2) First · cases</title>",
-		"/done":               "<title>(2) done · cases</title>",
-		"/cases/" + parked.ID: "<title>(2) Parked · cases</title>",
-		"/fragments/inbox":    "<title>(2) inbox · cases</title>",
+		"/":                   "<title>(2) cases</title>",
+		"/done":               "<title>(2) cases</title>",
+		"/cases/" + parked.ID: "<title>(2) cases</title>",
+		"/fragments/inbox":    "<title>(2) cases</title>",
 	} {
 		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, want) {
 			t.Errorf("%s lacks %s", path, want)
@@ -1433,17 +1433,17 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	if _, err := store.Answer(first.Dir, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)
 	}
-	if body := a.do("GET", "/fragments/inbox", nil, hx).Body.String(); !strings.HasPrefix(body, "<title>(1) inbox · cases</title>") {
+	if body := a.do("GET", "/fragments/inbox", nil, hx).Body.String(); !strings.HasPrefix(body, "<title>(1) cases</title>") {
 		t.Errorf("fragment after an answer:\n%s", body)
 	}
 	if _, err := store.Answer(second.Dir, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
-		"/":                  "<title>Parked · cases</title>",
-		"/done":              "<title>done · cases</title>",
-		"/cases/" + first.ID: "<title>First · done · cases</title>",
-		"/fragments/inbox":   "<title>inbox · cases</title>",
+		"/":                  "<title>cases</title>",
+		"/done":              "<title>cases</title>",
+		"/cases/" + first.ID: "<title>cases</title>",
+		"/fragments/inbox":   "<title>cases</title>",
 	} {
 		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, want) {
 			t.Errorf("%s at zero lacks %s", path, want)
@@ -1457,7 +1457,7 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	if _, err := store.Answer(parked.Dir, store.AnswerRecord{Text: "go on"}); err != nil {
 		t.Fatal(err)
 	}
-	if body := a.get(t, "/"); !strings.Contains(body, "<title>inbox · cases</title>") || !strings.Contains(body, "inbox zero.") {
+	if body := a.get(t, "/"); !strings.Contains(body, "<title>cases</title>") || !strings.Contains(body, "inbox zero.") {
 		t.Errorf("inbox zero title:\n%s", body)
 	}
 }

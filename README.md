@@ -541,9 +541,10 @@ pages change at once.
 The header counts open cases by urgency and parked cases, as in
 `3 blocking · 5 today · 12 whenever · 1 parked`. A count of zero is left out,
 and only the blocking count is red. The page title starts with the number of
-open cases, of any urgency, as in `(4) inbox · cases`, so a browser tab shows
+open cases, of any urgency, as in `(4) cases`, so a browser tab shows
 what is waiting; parked cases are not counted, and with none open there is no
-number. The inbox poll keeps it current.
+number; the title is otherwise `cases` on every page. The inbox poll keeps it
+current.
 
 - `/` selects the first case in the inbox. With no open or parked cases it
   shows one inbox zero panel instead of the columns: the cases you answered,
@@ -556,8 +557,7 @@ number. The inbox poll keeps it current.
   An open or parked case sits beside the inbox list. An answered, picked-up,
   closed or withdrawn case sits beside the done list instead, with `done`
   current in the header, the case selected, and the list filtered to `in
-  flight` for an answered or picked-up case and to `all` otherwise; its tab
-  title ends `· done`.
+  flight` for an answered or picked-up case and to `all` otherwise.
   An amended case is shown as amended, and the thread lists what each amend
   changed.
   Times on the case and in the thread are in the local time zone of the
@@ -604,10 +604,9 @@ answered somewhere else and then reopened by a note, or a case that has been
 amended since the page was loaded. `cases answer`, `cases resume` and the agent's write commands do the same
 when given `--revision N`.
 
-The tab title is the selected case's title, with the number of open blocking
-cases in front; the header shows the same count beside the `inbox` and `done`
-links. The list, the count and the thread refresh every two seconds; beside a
-done case the done list does not, as on `/done`, but the count does. The page
+The header counts sit beside the `inbox` and `done` links. The list, the count
+and the thread refresh every two seconds; beside a done case the done list does
+not, as on `/done`, but the count does. The page
 reloads itself if the case changes state while it is open; on `/` it reloads
 `/`, which selects whichever case is first. A change that leaves the state as
 it was, such as a note or an amend on an open case, only updates the thread, so

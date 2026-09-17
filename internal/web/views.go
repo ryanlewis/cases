@@ -163,7 +163,6 @@ func init() {
 
 // page is what every full page carries for the layout.
 type page struct {
-	Title string
 	tally
 	Nav string // the header link to mark as current
 }
@@ -227,8 +226,8 @@ type card struct {
 	Excerpt []string
 }
 
-// inboxData is the list column. Selected is the id of the case beside it,
-// and the title is that case's title, so the polled list keeps both.
+// inboxData is the list column. Selected is the id of the case beside it, so
+// the polled list keeps it selected.
 type inboxData struct {
 	page
 	Cards    []card
@@ -339,13 +338,7 @@ func inboxCases(cases []*store.Case) []*store.Case {
 }
 
 func newInbox(cases []*store.Case, selected string) inboxData {
-	d := inboxData{page: page{Title: "inbox", tally: countTally(cases), Nav: "inbox"}, Selected: selected}
-	for _, c := range cases {
-		if c.ID == selected {
-			d.Title = c.Title
-			break
-		}
-	}
+	d := inboxData{page: page{tally: countTally(cases), Nav: "inbox"}, Selected: selected}
 	now := time.Now()
 	for _, c := range inboxCases(cases) {
 		d.Cards = append(d.Cards, card{Case: c, Age: Age(c.OpenedAt, now), Excerpt: excerpt(c.Body, 3)})
@@ -458,29 +451,15 @@ func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "case", "inbox-fragment", d)
 }
 
-// doneTitle is the title of a done case's page.
-func doneTitle(c *store.Case) string {
-	return c.Title + " · done"
-}
-
 // tallyFragment is polled by a done case's page, whose list does not poll,
-// to keep the header tally and the title's count current. selected is the
-// case the page shows.
+// to keep the header tally and the title's count current.
 func (s *Server) tallyFragment(w http.ResponseWriter, r *http.Request) {
 	cases, err := s.cases()
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	p := page{Title: "done", tally: countTally(cases)}
-	selected := r.URL.Query().Get("selected")
-	for _, c := range cases {
-		if c.ID == selected {
-			p.Title = doneTitle(c)
-			break
-		}
-	}
-	s.render(w, http.StatusOK, "case", "tally-fragment", p)
+	s.render(w, http.StatusOK, "case", "tally-fragment", page{tally: countTally(cases)})
 }
 
 type doneCard struct {
@@ -562,7 +541,7 @@ func newDone(cases []*store.Case, show, selected string) doneData {
 		}
 	}
 	d := doneData{
-		page: page{Title: "done", tally: countTally(cases), Nav: "done"},
+		page: page{tally: countTally(cases), Nav: "done"},
 		Filters: []doneFilter{
 			{"inflight", "in flight", len(flight)},
 			{"closed-today", "closed today", len(closedToday)},
@@ -573,11 +552,9 @@ func newDone(cases []*store.Case, show, selected string) doneData {
 	shown := all
 	switch show {
 	case "inflight":
-		d.Title = "in flight · done"
 		slices.SortStableFunc(flight, func(a, b flightCard) int { return b.at.Compare(a.at) })
 		d.Flight = flight
 	case "closed-today":
-		d.Title = "closed today · done"
 		shown = closedToday
 	default:
 		show = "all"
@@ -682,7 +659,7 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 	switch {
 	case c != nil && isDone(c):
 		// A done case sits beside the done list, under the filter it is on.
-		// The list does not poll, as on /done, but the tally and title do;
+		// The list does not poll, as on /done, but the tally and title count do;
 		// the thread poll reloads the page when the case changes state,
 		// which picks the list again.
 		show := "all"
@@ -690,13 +667,11 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 			show = "inflight"
 		}
 		done := newDone(cases, show, c.ID)
-		done.Title = doneTitle(c)
 		d.Case, d.Thread, d.Done = c, thread(c), &done
 		d.page = done.page
 	case c != nil:
 		d.Case, d.Thread = c, thread(c)
 		d.Inbox = newInbox(cases, c.ID)
-		d.Inbox.Title = c.Title
 		d.page = d.Inbox.page
 	default:
 		d.Inbox = newInbox(cases, "")
