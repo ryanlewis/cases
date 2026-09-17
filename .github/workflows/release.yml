@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+          )
+          for target in "${targets[@]}"; do
+            read -r os arch <<<"$target"
+            name="cases_${version}_${os}_${arch}"
+            dir="dist/${name}"
+            mkdir -p "$dir"
+            bin="cases"
+            [ "$os" = "windows" ] && bin="cases.exe"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "${dir}/${bin}" ./cmd/cases
+            if [ "$os" = "windows" ]; then
+              (cd "$dir" && zip -q "../${name}.zip" "$bin")
+            else
+              tar -C "$dir" -czf "dist/${name}.tar.gz" "$bin"
+            fi
+            rm -rf "$dir"
+          done
+          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "${GITHUB_REF_NAME}"
