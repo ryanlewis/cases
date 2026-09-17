@@ -45,3 +45,12 @@ func TestResumeAtRevision(t *testing.T) {
 		t.Errorf("state %s, revision %d", c.State, c.Revision())
 	}
 }
+
+func TestResumeTakesPartOfAnID(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked on mirror"))
+	mustRun(t, "--store", root, "answer", "mirror", "--park")
+	if out := mustRun(t, "--store", root, "resume", "mirror"); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}

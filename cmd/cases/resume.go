@@ -3,13 +3,13 @@ package main
 import "github.com/ryanlewis/cases/internal/store"
 
 type ResumeCmd struct {
-	ID       string `arg:"" help:"Case id."`
+	ID       string `arg:"" help:"Case id, or any part of it that names one case."`
 	Agent    bool   `help:"Record the resume as written by the agent rather than the human."`
 	Revision *int   `help:"Refuse the resume if the case's revision (from show --json) is no longer N." placeholder:"N"`
 }
 
 func (c *ResumeCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
+	dir, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}

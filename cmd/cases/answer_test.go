@@ -221,3 +221,15 @@ func TestAnswerParkAtRevision(t *testing.T) {
 		t.Errorf("state %s, revision %d", c.State, c.Revision())
 	}
 }
+
+func TestAnswerTakesPartOfAnID(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	if out := mustRun(t, "--store", root, "answer", "pin-bun", "--option", "1"); out != id+" answered\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	// Agent commands still take the exact id only.
+	if r := runCases(t, "", "--store", root, "pickup", "pin-bun"); r.err == nil {
+		t.Error("pickup took part of an id")
+	}
+}

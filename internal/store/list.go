@@ -67,6 +67,19 @@ func caseDirs(root string) ([]string, error) {
 	return dirs, nil
 }
 
+// CaseIDs lists the case ids in root, sorted, without loading the cases.
+func CaseIDs(root string) ([]string, error) {
+	dirs, err := caseDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(dirs))
+	for i, dir := range dirs {
+		ids[i] = filepath.Base(dir)
+	}
+	return ids, nil
+}
+
 // settle is how long after a directory's mtime a read must start before the
 // poller trusts it. A filesystem with coarse mtimes (FAT keeps 2s) can record
 // two writes a moment apart under one mtime, and a read taken between them

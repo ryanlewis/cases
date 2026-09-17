@@ -92,3 +92,11 @@ func TestShowJSONRevisionCountsSkippedFiles(t *testing.T) {
 	}
 	mustRun(t, "--store", root, "answer", id, "--option", "1", "--revision", "2")
 }
+
+func TestShowTakesPartOfAnID(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	if out := mustRun(t, "--store", root, "show", "pin-bun"); !strings.Contains(out, "id:       "+id+"\n") {
+		t.Errorf("show pin-bun:\n%s", out)
+	}
+}

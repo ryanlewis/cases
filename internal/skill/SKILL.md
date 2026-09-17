@@ -12,13 +12,13 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
 - `serve`, `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked.
-- **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no such file or directory`.
+- **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case id contains "<id>"`.
 
 ## The store
 
 Every command reads and writes one store directory. Leave it alone unless told otherwise: the default comes from `CASES_STORE`, the config file (`cases config show` prints what is in use) or `~/.local/share/cases`. If you were told to use a store, pass `--store DIR` to every command, because the human and you must be looking at the same one.
 
-A case id is the name of its directory, such as `2026-09-15T09-12-03Z-pin-bun-or-float`. `cases open` prints it on stdout. Keep it; every other command takes it.
+A case id is the name of its directory, such as `2026-09-15T09-12-03Z-pin-bun-or-float`. `cases open` prints it on stdout. Keep it and pass it whole; every other command takes it.
 
 ## Lifecycle
 

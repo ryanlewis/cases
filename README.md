@@ -282,6 +282,12 @@ cases skill check     [AGENT]
 `open` prints the new case id. The other write commands print the id and the
 new state.
 
+`answer`, `resume` and `show` also take part of a case id, so
+`cases show mirror` works when exactly one case id contains `mirror`. An exact
+id always wins. If no id contains it the command fails, and if more than one
+does it fails and prints the ids that match.
+The agent commands, `wait --id` and the web inbox take the exact id only.
+
 A command on one case exits 3 when the case's state does not allow it, such as
 `pickup` on a case that is not answered or `close` on one that is not picked
 up; the `Error:` line says which. Exit 3 means the store refused the event, not
