@@ -224,4 +224,12 @@ func TestFindCaseTakesPartOfAnID(t *testing.T) {
 	if dir, err := d.findCase(pin); err != nil || dir != filepath.Join(root, pin) {
 		t.Errorf("exact id beside a longer one: %q, %v", dir, err)
 	}
+
+	// A whole id that is gone does not fall back to a longer id containing it.
+	if err := os.RemoveAll(filepath.Join(root, pin)); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := d.findCase(pin); err == nil || err.Error() != fmt.Sprintf("no case %q", pin) {
+		t.Errorf("pruned whole id: %q, %v", dir, err)
+	}
 }

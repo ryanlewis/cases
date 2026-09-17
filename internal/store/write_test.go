@@ -720,3 +720,19 @@ func TestWrittenRecordShape(t *testing.T) {
 		}
 	}
 }
+
+func TestIsWholeID(t *testing.T) {
+	for id, want := range map[string]bool{
+		"2026-09-16T11-17-41Z-cannot-reach-mirror": true,
+		"2026-09-16T11-17-41Z-pin-bun-2":           true,
+		"2026-09-16T11-17-41Z-":                    false,
+		"2026-09-16T11-17-41Z":                     false,
+		"mirror":                                   false,
+		"16T11-17-41Z-cannot-reach-mirror":         false,
+		"2026-13-16T11-17-41Z-bad-month":           false,
+	} {
+		if got := IsWholeID(id); got != want {
+			t.Errorf("IsWholeID(%q) = %v, want %v", id, got, want)
+		}
+	}
+}

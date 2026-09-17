@@ -39,6 +39,17 @@ func CaseDir(root, id string) (string, error) {
 	return filepath.Join(root, id), nil
 }
 
+// IsWholeID reports whether id has the shape Create gives a case id: the open
+// time, a dash and a slug.
+func IsWholeID(id string) bool {
+	n := len(idTimeLayout)
+	if len(id) < n+2 || id[n] != '-' {
+		return false
+	}
+	_, err := time.Parse(idTimeLayout, id[:n])
+	return err == nil
+}
+
 // Create opens a new case in root, creating root if it does not exist. The
 // case id is the open time and a slug of the title; if that directory already
 // exists a numeric suffix is added.

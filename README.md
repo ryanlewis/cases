@@ -290,7 +290,9 @@ new state.
 `answer`, `resume` and `show` also take part of a case id, so
 `cases show mirror` works when exactly one case id contains `mirror`. An exact
 id always wins. If no id contains it the command fails, and if more than one
-does it fails and prints the ids that match.
+does it fails and prints the ids that match. A whole id, the timestamp and
+slug, is taken exactly, so a case that has been pruned is not mistaken for a
+later one such as `ID-2`.
 The agent commands, `wait --id` and the web inbox take the exact id only.
 
 A command on one case exits 3 when the case's state does not allow it, such as
