@@ -94,6 +94,14 @@ func (e *TransitionError) Error() string {
 	return fmt.Sprintf("cannot %s a case that is %s", e.Event, e.From)
 }
 
+// unknown is the error for an event, kind or urgency this build does not
+// know. The likely cause is a newer cases writing to a shared store, but a
+// file name with a typo in it reads the same, so the update is offered as a
+// guess.
+func unknown(what, value string) error {
+	return fmt.Errorf("unknown %s %q: perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest", what, value)
+}
+
 // eventFile matches an event file name: sequence, author, event.
 var eventFile = regexp.MustCompile(`^(\d{4,})-(agent|human)-([a-z]+)\.json$`)
 
@@ -209,7 +217,7 @@ func Load(dir string) (*Case, error) {
 func (c *Case) apply(ev Event) error {
 	allowed, known := authors[ev.Type]
 	if !known {
-		return fmt.Errorf("unknown event %q", ev.Type)
+		return unknown("event", string(ev.Type))
 	}
 	if !slices.Contains(allowed, ev.Author) {
 		return fmt.Errorf("%s events are not written by the %s", ev.Type, ev.Author)

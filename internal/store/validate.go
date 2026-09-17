@@ -12,10 +12,10 @@ import (
 
 func (r *OpenRecord) validate() error {
 	if !slices.Contains(Kinds, r.Kind) {
-		return fmt.Errorf("unknown kind %q", r.Kind)
+		return unknown("kind", string(r.Kind))
 	}
 	if !slices.Contains(Urgencies, r.Urgency) {
-		return fmt.Errorf("unknown urgency %q", r.Urgency)
+		return unknown("urgency", string(r.Urgency))
 	}
 	if strings.TrimSpace(r.Title) == "" {
 		return errors.New("title is empty")

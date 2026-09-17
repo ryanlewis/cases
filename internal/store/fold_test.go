@@ -258,7 +258,7 @@ func TestTransitions(t *testing.T) {
 		{
 			name:    "unknown event",
 			steps:   []step{agent(EventOpen, openOf(KindFYI)), agent("comment", NoteRecord{Body: "x"})},
-			wantErr: `unknown event "comment"`,
+			wantErr: `unknown event "comment": perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest`,
 		},
 		{
 			name:    "empty note",
@@ -332,8 +332,8 @@ func TestOpenValidation(t *testing.T) {
 		{name: "valid stuck", kind: KindStuck},
 		{name: "valid question", kind: KindQuestion},
 		{name: "valid fyi", kind: KindFYI},
-		{name: "unknown kind", kind: KindFYI, mutate: func(r *OpenRecord) { r.Kind = "poll" }, wantErr: `unknown kind "poll"`},
-		{name: "unknown urgency", kind: KindFYI, mutate: func(r *OpenRecord) { r.Urgency = "asap" }, wantErr: `unknown urgency "asap"`},
+		{name: "unknown kind", kind: KindFYI, mutate: func(r *OpenRecord) { r.Kind = "poll" }, wantErr: `unknown kind "poll": perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest`},
+		{name: "unknown urgency", kind: KindFYI, mutate: func(r *OpenRecord) { r.Urgency = "asap" }, wantErr: `unknown urgency "asap": perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest`},
 		{name: "empty title", kind: KindFYI, mutate: func(r *OpenRecord) { r.Title = " " }, wantErr: "title is empty"},
 		{name: "decision without options", kind: KindDecision, mutate: func(r *OpenRecord) { r.Options = nil }, wantErr: "at least one option"},
 		{name: "decision with empty option", kind: KindDecision, mutate: func(r *OpenRecord) { r.Options[1] = "" }, wantErr: "option 2 is empty"},

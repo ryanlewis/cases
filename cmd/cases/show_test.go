@@ -100,3 +100,22 @@ func TestShowTakesPartOfAnID(t *testing.T) {
 		t.Errorf("show pin-bun:\n%s", out)
 	}
 }
+
+func TestShowReportsAnUnknownEventAsVersionSkew(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	if err := os.WriteFile(filepath.Join(root, id, "0002-agent-comment.json"), []byte(`{"body":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := runCases(t, "", "--store", root, "show", id)
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	const problem = `0002-agent-comment.json: unknown event "comment": perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest`
+	if !strings.Contains(r.stdout, "  problem: "+problem+"\n") {
+		t.Errorf("stdout missing the problem:\n%s", r.stdout)
+	}
+	if r.stderr != "warning: "+id+": "+problem+"\n" {
+		t.Errorf("stderr = %q", r.stderr)
+	}
+}

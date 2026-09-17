@@ -1002,3 +1002,15 @@ func TestTallyHidesZeros(t *testing.T) {
 		t.Errorf("a tally without blocking cases is red or titled with a count:\n%s", body)
 	}
 }
+
+func TestThreadShowsAnUnknownEventAsVersionSkew(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindFYI])
+	if err := os.WriteFile(filepath.Join(c.Dir, "0002-agent-comment.json"), []byte(`{"body":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := a.get(t, "/cases/"+c.ID)
+	if !strings.Contains(page, `<p class="error">0002-agent-comment.json: unknown event &#34;comment&#34;: perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest</p>`) {
+		t.Errorf("thread missing the version skew problem:\n%s", page)
+	}
+}
