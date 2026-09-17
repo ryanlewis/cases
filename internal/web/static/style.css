@@ -121,6 +121,8 @@ header.top {
 .chips a:last-child, .chips button:last-child { border-right: 0; }
 .chips a:hover, .chips button:hover { background: var(--bg-1); color: var(--fg); }
 .chips a.on { background: var(--fg); color: var(--bg); }
+/* The filters on /done: the same chip group, as wide as its chips. */
+.chips.filters { width: fit-content; max-width: 100%; flex-wrap: wrap; margin: 0 0 1rem; }
 
 /* The options overlay: a square ruled panel over a dimmed page. The form
    fills the dialog, so a click on the dialog itself is on the backdrop. */
@@ -320,6 +322,9 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
 /* A replaced context keeps its line breaks, as the thread lines for the new one do. */
 .event details > .context { white-space: pre-line; }
 .outcome { margin-top: .5rem; font-size: .8125rem; }
+/* Who has an in-flight case, and since when. */
+.flight { margin: .25rem 0 0; font-size: .8125rem; color: var(--fg-2); }
+.flight strong { color: var(--fg); }
 
 /* Phone: the header drops the rule and puts the tally on a line of its own
    under the wordmark and chips, and controls get a real border and at least

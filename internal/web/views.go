@@ -240,8 +240,33 @@ type inboxData struct {
 	Zero *zeroStats
 }
 
-// clock is the clock for the inbox-zero figures. Tests pin it.
+// clock is the clock for the inbox-zero figures and the done page. Tests pin it.
 var clock = time.Now
+
+// startOfDay is midnight at the start of t's day, in the zone pages show times in.
+func startOfDay(t time.Time) time.Time {
+	t = t.In(zone)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, zone)
+}
+
+// inFlight reports whether c is answered or picked up: an agent has it and
+// has not closed it.
+func inFlight(c *store.Case) bool {
+	return c.State == store.StateAnswered || c.State == store.StatePickedUp
+}
+
+// closedSince reports whether c is closed by a close event at or after t.
+func closedSince(c *store.Case, t time.Time) bool {
+	if c.State != store.StateClosed {
+		return false
+	}
+	for _, ev := range c.Events {
+		if ev.Type == store.EventClose && !ev.At.Before(t) {
+			return true
+		}
+	}
+	return false
+}
 
 // zeroStats is what the inbox-zero panel says. Day and week start at
 // midnight, and on Monday, in the zone pages show times in.
@@ -265,21 +290,20 @@ func (d *inboxData) setEmpty(cases []*store.Case) {
 		return
 	}
 	t := clock().In(zone)
-	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, zone)
+	day := startOfDay(t)
 	week := day.AddDate(0, 0, -(int(day.Weekday())+6)%7)
 	z := &zeroStats{}
 	var last time.Time
 	for _, c := range cases {
-		if c.State == store.StateAnswered || c.State == store.StatePickedUp {
+		if inFlight(c) {
 			z.WithAgent++
+		}
+		if closedSince(c, day) {
+			z.Closed++
 		}
 		var today, thisWeek bool
 		for _, ev := range c.Events {
 			switch {
-			case ev.Type == store.EventClose:
-				if !ev.At.Before(day) {
-					z.Closed++
-				}
 			case ev.Author != store.AuthorHuman:
 			case ev.Type == store.EventAnswer || ev.Type == store.EventPark || ev.Type == store.EventResume:
 				today = today || !ev.At.Before(day)
@@ -429,27 +453,106 @@ type doneCard struct {
 	Age string
 }
 
+// flightCard is a case on the in-flight list: who has it, and the answer or
+// pickup that put it there and how long ago.
+type flightCard struct {
+	*store.Case
+	Who  string
+	Last string // "answered" or "picked up"
+	Age  string
+	at   time.Time
+}
+
+// doneFilter is one chip at the top of /done.
+type doneFilter struct {
+	Show, Label string
+	N           int
+}
+
+// Href is the chip's link. all is /done itself.
+func (f doneFilter) Href() string {
+	if f.Show == "all" {
+		return "/done"
+	}
+	return "/done?show=" + f.Show
+}
+
+func newFlightCard(c *store.Case, now time.Time) flightCard {
+	f := flightCard{Case: c, Who: c.Worker, Last: "answered"}
+	if c.Answer != nil {
+		f.at = c.Answer.AnsweredAt
+	}
+	if c.State == store.StatePickedUp && c.Pickup != nil {
+		f.Last, f.at = "picked up", c.Pickup.PickedUpAt
+		if c.Pickup.By != "" {
+			f.Who = c.Pickup.By
+		}
+	}
+	if f.Who == "" {
+		f.Who = "an agent"
+	}
+	f.Age = Age(f.at, now)
+	return f
+}
+
+// done lists the cases the human is through with. show picks a filter:
+// inflight (answered or picked up), closed-today, or all, which is the
+// default and what an unknown value gets.
 func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 	cases, err := s.cases()
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	d := struct {
-		page
-		Cards []doneCard
-	}{page: page{Title: "done", tally: countTally(cases), Nav: "done"}}
-	var shown []*store.Case
+	now := clock()
+	day := startOfDay(now)
+	var all, closedToday []*store.Case
+	var flight []flightCard
 	for _, c := range cases {
 		switch c.State {
 		case store.StateAnswered, store.StatePickedUp, store.StateClosed, store.StateWithdrawn:
-			shown = append(shown, c)
+			all = append(all, c)
+		}
+		if inFlight(c) {
+			flight = append(flight, newFlightCard(c, now))
+		}
+		if closedSince(c, day) {
+			closedToday = append(closedToday, c)
 		}
 	}
-	slices.SortStableFunc(shown, func(a, b *store.Case) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
-	now := time.Now()
-	for _, c := range shown {
-		d.Cards = append(d.Cards, doneCard{Case: c, Age: Age(c.UpdatedAt, now)})
+	show := r.URL.Query().Get("show")
+	d := struct {
+		page
+		Show    string
+		Filters []doneFilter
+		Cards   []doneCard
+		Flight  []flightCard
+	}{
+		page: page{Title: "done", tally: countTally(cases), Nav: "done"},
+		Filters: []doneFilter{
+			{"inflight", "in flight", len(flight)},
+			{"closed-today", "closed today", len(closedToday)},
+			{"all", "all", len(all)},
+		},
+	}
+	shown := all
+	switch show {
+	case "inflight":
+		d.Title = "in flight · done"
+		slices.SortStableFunc(flight, func(a, b flightCard) int { return b.at.Compare(a.at) })
+		d.Flight = flight
+	case "closed-today":
+		d.Title = "closed today · done"
+		shown = closedToday
+	default:
+		show = "all"
+	}
+	d.Show = show
+	if show != "inflight" {
+		slices.SortStableFunc(shown, func(a, b *store.Case) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
+		for _, c := range shown {
+			d.Cards = append(d.Cards, doneCard{Case: c, Age: Age(c.UpdatedAt, now)})
+		}
 	}
 	s.render(w, http.StatusOK, "done", "layout.html", d)
 }

@@ -28,8 +28,8 @@
 <div class="zero-panel">
   <h1>inbox zero.</h1>
   {{if .Week}}<p>you got through {{if .Today}}<strong>{{.Today}}</strong> {{if eq .Today 1}}case{{else}}cases{{end}} today{{if gt .Week .Today}}, <strong>{{.Week}}</strong> this week{{end}}{{else}}<strong>{{.Week}}</strong> {{if eq .Week 1}}case{{else}}cases{{end}} this week{{end}}.</p>{{end}}
-  {{if .Closed}}<p><a href="/done"><strong>{{.Closed}}</strong> closed</a> by agents today.</p>{{end}}
-  {{if .WithAgent}}<p><a href="/done"><strong>{{.WithAgent}}</strong> answered</a> and still with an agent.</p>{{end}}
+  {{if .Closed}}<p><a href="/done?show=closed-today"><strong>{{.Closed}}</strong> closed</a> by agents today.</p>{{end}}
+  {{if .WithAgent}}<p><a href="/done?show=inflight"><strong>{{.WithAgent}}</strong> answered</a> and still with an agent.</p>{{end}}
   {{with .LastAnswer}}<p class="age">last answered {{if eq . "now"}}just now{{else}}{{.}} ago{{end}}.</p>{{end}}
   {{if not (or .Week .Closed .WithAgent .LastAnswer)}}<p>nothing has needed you yet.</p>{{end}}
 </div>
