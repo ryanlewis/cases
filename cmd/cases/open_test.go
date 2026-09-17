@@ -111,6 +111,34 @@ func TestOpenLabels(t *testing.T) {
 	}
 }
 
+func TestOpenWorkerAndLabelFromTheEnvironment(t *testing.T) {
+	open := func(t *testing.T, root string, args ...string) *store.Case {
+		t.Helper()
+		out := mustRun(t, append([]string{"--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Env"}, args...)...)
+		return loadCase(t, root, strings.TrimSpace(out))
+	}
+	root := t.TempDir()
+	t.Setenv("CASES_WORKER", "bun-pins")
+	// The whole value is one label, commas and all.
+	t.Setenv("CASES_LABEL", "feat-labels, round 3")
+	if c := open(t, root); c.Worker != "bun-pins" || !slices.Equal(c.Labels, []string{"feat-labels, round 3"}) {
+		t.Errorf("worker = %q, labels = %q", c.Worker, c.Labels)
+	}
+	// A flag replaces the environment's value; it does not add to it.
+	if c := open(t, root, "--worker", "other", "--label", "a", "--label", "b"); c.Worker != "other" || !slices.Equal(c.Labels, []string{"a", "b"}) {
+		t.Errorf("worker = %q, labels = %q", c.Worker, c.Labels)
+	}
+	// Set but empty, CASES_LABEL is one blank label, which the store refuses.
+	t.Setenv("CASES_LABEL", "")
+	if r := runCases(t, "", "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Env"); r.err == nil || !strings.Contains(r.err.Error(), "label 1 is empty") {
+		t.Errorf("empty CASES_LABEL: err = %v", r.err)
+	}
+	t.Setenv("CASES_WORKER", "")
+	if c := open(t, root, "--label", "a"); c.Worker != "" {
+		t.Errorf("empty CASES_WORKER: worker = %q", c.Worker)
+	}
+}
+
 func TestOpenRefusals(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -82,6 +82,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	os.Unsetenv("CASES_STORE")
 	os.Unsetenv("CASES_CONFIG")
+	os.Unsetenv("CASES_WORKER")
+	os.Unsetenv("CASES_LABEL")
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

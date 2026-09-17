@@ -82,6 +82,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--option` is for `decision` only and `--row` for `approval` only; they are refused on any other kind.
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
 - `--label TEXT` (repeatable) groups the case with others, such as every case one piece of work opens. `list` and `wait` filter by it. A blank label, or the same label twice, is refused.
+- `CASES_WORKER` and `CASES_LABEL`, if exported, stand in for `--worker` and one `--label` on `open`. `CASES_LABEL` is one label, commas included; an empty one makes `open` fail. Any `--label` flag replaces it, not adds to it. `wait` and `list` do not read them, so still pass `--label` or `--worker` there.
 - `--worker NAME` names your session, the one waiting on the case. `--brief TEXT` says where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line. `--context TEXT` is free text shown to the human with the case.
 - Prints the new case id.
 
