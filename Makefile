@@ -24,8 +24,7 @@ cover:
 	go tool cover -func=coverage.out
 
 fmt:
-	gofmt -w .
-	go tool goimports -w . 2>/dev/null || true
+	golangci-lint fmt ./...
 
 tidy:
 	go mod tidy
