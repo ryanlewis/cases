@@ -22,6 +22,7 @@
   </div>
   <h1>{{$c.Title}}</h1>
   {{with $c.Context}}<p class="context">{{.}}</p>{{end}}
+  {{with $c.Brief}}<p class="brief"><span class="label">brief</span> {{.}}</p>{{end}}
   <div class="body">{{markdown $c.Body}}</div>
   {{if $c.Links}}
   <ul class="links">{{range $c.Links}}<li>{{if webLink .}}<a href="{{.}}" target="_blank" rel="noopener noreferrer">{{.}}</a>{{else}}{{.}}{{end}}</li>{{end}}</ul>

@@ -791,6 +791,23 @@ func TestOnlyWebLinksAreAnchors(t *testing.T) {
 	}
 }
 
+func TestCasePageShowsTheBrief(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "Stuck", Brief: "restart from <step 3> & rerun"})
+	bare := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "No brief"})
+
+	page := a.get(t, "/cases/"+c.ID)
+	if want := `<p class="brief"><span class="label">brief</span> restart from &lt;step 3&gt; &amp; rerun</p>`; !strings.Contains(page, want) {
+		t.Errorf("page missing %s:\n%s", want, page)
+	}
+	if strings.Count(page, "restart from") != 1 {
+		t.Error("brief shown more than once: the inbox cards leave it out")
+	}
+	if page := a.get(t, "/cases/"+bare.ID); strings.Contains(page, `class="brief"`) {
+		t.Error("brief line on a case without a brief")
+	}
+}
+
 func TestApprovalRowNote(t *testing.T) {
 	a := newApp(t)
 	rows := slices.Clone(approvalRows)
