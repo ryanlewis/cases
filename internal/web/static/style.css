@@ -2,7 +2,8 @@
  * so the tools read as one family.
  *
  * Borrowed: one monospace face with ligatures off, square corners, 1px rules
- * with dashed ones as separators, 11px/.08em uppercase micro-labels, outline
+ * with dashed ones as separators, 11px/.08em uppercase micro-labels (sizes are
+ * in rem at 16px to the rem, so the text size option scales them all), outline
  * badges, [ bracket ] buttons and a chip group that invert, reverse video for
  * what is chosen, the `>` marker on the selected row, a dashed empty box.
  *
@@ -57,56 +58,60 @@
 .body pre, .body code, .body th { font-family: var(--mono); }
 .face-sans { font-family: var(--sans); }
 .face-serif { font-family: var(--serif); }
+/* Text size: every length but the hairline rules is in rem, so the root size
+   scales the whole page. Medium leaves the browser's own base size. */
+:root[data-size="small"] { font-size: 87.5%; }
+:root[data-size="large"] { font-size: 125%; }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
-  font: 15px/24px var(--mono); font-variant-ligatures: none;
+  font: .9375rem/1.5rem var(--mono); font-variant-ligatures: none;
   -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
 }
 a { color: var(--fg); text-underline-offset: 2px; }
 a:hover { background: var(--fg); color: var(--bg); text-decoration: none; }
 ::selection { background: var(--fg); color: var(--bg); }
 :focus-visible { outline: 1px dashed var(--fg); outline-offset: 2px; }
-h1 { font-size: 20px; line-height: 28px; font-weight: 700; margin: 8px 0 12px; }
-h2 { font-size: 15px; font-weight: 700; margin: 0; }
+h1 { font-size: 1.25rem; line-height: 1.75rem; font-weight: 700; margin: .5rem 0 .75rem; }
+h2 { font-size: .9375rem; font-weight: 700; margin: 0; }
 
 /* Micro-label: every piece of secondary chrome. */
 .label, .meta, .section, legend, .body th {
-  font-size: 11px; line-height: 16px; font-weight: 500;
+  font-size: .6875rem; line-height: 1rem; font-weight: 500;
   letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
 }
-.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; }
 .meta .age { color: var(--fg-3); }
 h1.section, h2.section {
-  display: flex; align-items: center; gap: 8px; margin: 24px 0 12px;
+  display: flex; align-items: center; gap: .5rem; margin: 1.5rem 0 .75rem;
 }
 h1.section::before, h2.section::before { content: "\2500\2500"; content: "\2500\2500" / ""; color: var(--fg-3); letter-spacing: 0; }
 h1.section::after, h2.section::after { content: ""; flex: 1; border-top: 1px dashed var(--rule); }
 
 /* Masthead: wordmark, a rule that eats the slack, the tally, the views. */
 header.top {
-  display: flex; align-items: center; gap: 12px;
-  height: 48px; padding: 0 16px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: center; gap: .75rem;
+  height: 3rem; padding: 0 1rem; border-bottom: 1px solid var(--rule);
 }
 .brand {
-  font-size: 13px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--fg); text-decoration: none; padding: 0 4px;
+  font-size: .8125rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--fg); text-decoration: none; padding: 0 .25rem;
 }
-.rule { flex: 1 1 32px; border-top: 1px dashed var(--rule); height: 0; }
+.rule { flex: 1 1 2rem; border-top: 1px dashed var(--rule); height: 0; }
 .tally strong { color: var(--fg); font-weight: 700; }
 .tally.hot, .tally.hot strong { color: var(--blocking); }
 
 /* Chip group: one outer border, dividers between, the current view inverted. */
 .chips { display: flex; border: 1px solid var(--rule-strong); }
 .chips a {
-  padding: 4px 12px; font-size: 11px; line-height: 16px; letter-spacing: .08em;
+  padding: .25rem .75rem; font-size: .6875rem; line-height: 1rem; letter-spacing: .08em;
   text-transform: uppercase; color: var(--fg-2); text-decoration: none;
   border-right: 1px solid var(--rule-strong);
 }
 .chips button {
-  margin: 0; padding: 4px 12px; font-size: 11px; line-height: 16px; letter-spacing: .08em;
+  margin: 0; padding: .25rem .75rem; font-size: .6875rem; line-height: 1rem; letter-spacing: .08em;
   color: var(--fg-2); border: 0;
 }
 .chips button::before, .chips button::after { content: none; }
@@ -117,23 +122,23 @@ header.top {
 /* The options overlay: a square ruled panel over a dimmed page. The form
    fills the dialog, so a click on the dialog itself is on the backdrop. */
 dialog.options {
-  width: min(28rem, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+  width: min(28rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem);
   padding: 0; border: 1px solid var(--rule-strong); border-radius: 0;
   background: var(--bg); color: var(--fg);
 }
-dialog.options form { padding: 16px; }
+dialog.options form { padding: 1rem; }
 dialog.options h2.section { margin-top: 0; }
 dialog.options::backdrop { background: rgba(0, 0, 0, .4); background: color-mix(in srgb, var(--fg) 25%, transparent); }
 
-main { max-width: 960px; padding: 8px 16px 48px; }
+main { max-width: 60rem; padding: .5rem 1rem 3rem; }
 main:has(> .split) { max-width: none; padding: 0; }
-.split > * { padding: 0 16px 48px; }
-.work > * { max-width: 760px; }
+.split > * { padding: 0 1rem 3rem; }
+.work > * { max-width: 47.5rem; }
 
 /* Narrow screens show one column: the list on /, the case on /cases/ID. */
 @media (width < 56rem) {
   .split.home .work, .split:not(.home) .list { display: none; }
-  .split > .list { padding: 0 0 48px; }
+  .split > .list { padding: 0 0 3rem; }
   /* The case on / is not shown here, so nothing in the list is selected. */
   .split.home .list .card.selected { background: none; }
   .split.home .list .card.selected h2::before { content: none; }
@@ -142,7 +147,7 @@ main:has(> .split) { max-width: none; padding: 0; }
 @media (width >= 56rem) {
   body:has(.split) { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   main:has(> .split) { flex: 1; min-height: 0; }
-  .split { display: grid; grid-template-columns: clamp(320px, 28%, 440px) minmax(0, 1fr); height: 100%; }
+  .split { display: grid; grid-template-columns: clamp(20rem, 28%, 27.5rem) minmax(0, 1fr); height: 100%; }
   .split > * { overflow-y: auto; }
   .split > .list { padding: 0; border-right: 1px solid var(--rule); }
 }
@@ -153,23 +158,23 @@ main:has(> .split) { max-width: none; padding: 0; }
   position: relative; display: block; color: inherit; text-decoration: none;
   border-left: 2px solid transparent;
 }
-.list .card { padding: 12px 16px 12px 28px; border-bottom: 1px solid var(--rule); }
+.list .card { padding: .75rem 1rem .75rem 1.75rem; border-bottom: 1px solid var(--rule); }
 .list .card:hover { background: var(--bg-1); color: inherit; }
 .list .card.selected { background: var(--bg-2); }
 .list .card.selected h2::before {
-  content: ">"; content: ">" / ""; position: absolute; left: 12px; font-weight: 700; color: var(--fg);
+  content: ">"; content: ">" / ""; position: absolute; left: .75rem; font-weight: 700; color: var(--fg);
 }
 .card.urgency-blocking { border-left-color: var(--blocking); }
 /* Parked outranks urgency: nobody is waiting on it until it is resumed. */
 .card.parked { border-left-color: var(--parked); }
-.card h2 { margin: 4px 0; }
-.excerpt { margin: 0; font-size: 13px; line-height: 20px; color: var(--fg-2); }
-main > .card { padding: 12px 16px; margin: 0 0 8px; border: 1px solid var(--rule); border-left-width: 2px; }
+.card h2 { margin: .25rem 0; }
+.excerpt { margin: 0; font-size: .8125rem; line-height: 1.25rem; color: var(--fg-2); }
+main > .card { padding: .75rem 1rem; margin: 0 0 .5rem; border: 1px solid var(--rule); border-left-width: 2px; }
 main > .card h2 a { text-decoration: none; }
 
 /* Outline badges, so exactly one thing is loud: a blocking case's urgency. */
 .badge {
-  font-size: 10px; line-height: 16px; letter-spacing: .1em; padding: 0 4px;
+  font-size: .625rem; line-height: 1rem; letter-spacing: .1em; padding: 0 .25rem;
   border: 1px solid currentColor; white-space: nowrap;
 }
 .urgency-blocking .badge.urgency { color: var(--bg); background: var(--blocking); border-color: var(--blocking); font-weight: 700; }
@@ -179,61 +184,61 @@ main > .card h2 a { text-decoration: none; }
 .badge.state { color: var(--fg); }
 
 .empty {
-  border: 1px dashed var(--rule); padding: 32px 16px; margin: 16px;
-  color: var(--fg-2); font-size: 13px;
+  border: 1px dashed var(--rule); padding: 2rem 1rem; margin: 1rem;
+  color: var(--fg-2); font-size: .8125rem;
 }
 main > .empty { margin: 0; }
 
 /* The case. */
-.case { padding-top: 16px; }
-.context, .brief { color: var(--fg-1); margin: 0 0 12px; }
+.case { padding-top: 1rem; }
+.context, .brief { color: var(--fg-1); margin: 0 0 .75rem; }
 .body > :first-child { margin-top: 0; }
-.body h1, .body h2, .body h3, .body h4 { font-size: 15px; line-height: 24px; margin: 24px 0 8px; }
-.body h1 { font-size: 17px; }
+.body h1, .body h2, .body h3, .body h4 { font-size: .9375rem; line-height: 1.5rem; margin: 1.5rem 0 .5rem; }
+.body h1 { font-size: 1.0625rem; }
 .body img { max-width: 100%; }
-.body blockquote { margin: 12px 0; padding-left: 12px; border-left: 1px solid var(--rule-strong); color: var(--fg-1); }
+.body blockquote { margin: .75rem 0; padding-left: .75rem; border-left: 1px solid var(--rule-strong); color: var(--fg-1); }
 .body hr { border: 0; border-top: 1px dashed var(--rule); }
-code { font-family: inherit; font-size: 13px; background: var(--bg-1); color: var(--fg-1); padding: 0 4px; }
+code { font-family: inherit; font-size: .8125rem; background: var(--bg-1); color: var(--fg-1); padding: 0 .25rem; }
 pre {
-  overflow-x: auto; padding: 12px; background: var(--bg-1); border: 1px solid var(--rule);
-  font-size: 13px; line-height: 20px; white-space: pre; overflow-wrap: normal;
+  overflow-x: auto; padding: .75rem; background: var(--bg-1); border: 1px solid var(--rule);
+  font-size: .8125rem; line-height: 1.25rem; white-space: pre; overflow-wrap: normal;
 }
 pre code { padding: 0; background: none; }
-.body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
-.body th, .body td { padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }
+.body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: .75rem 0; font-size: .8125rem; }
+.body th, .body td { padding: .25rem .75rem .25rem 0; text-align: left; vertical-align: top; }
 .body th { border-bottom: 1px solid var(--rule-strong); }
 .body td { border-bottom: 1px dashed var(--rule); }
-.links { padding-left: 0; list-style: none; font-size: 13px; }
+.links { padding-left: 0; list-style: none; font-size: .8125rem; }
 .links li::before { content: "-> "; content: "-> " / ""; color: var(--fg-3); }
 
 /* [ERR] inline, in reverse video, never a toast. */
 .error { color: var(--fg); font-weight: 700; }
-.error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 4px; margin-right: 8px; }
+.error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
 /* [OK] what the last answer, park or resume wrote, above the columns, the same way. */
-.recorded { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--rule); }
-.recorded::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 4px; margin-right: 8px; }
+.recorded { margin: 0; padding: .5rem 1rem; border-bottom: 1px solid var(--rule); }
+.recorded::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
 @media (width >= 56rem) {
   main:has(> .recorded) { display: flex; flex-direction: column; }
   main > .recorded + .split { flex: 1; min-height: 0; height: auto; }
 }
 
 /* The answer form. */
-fieldset { min-width: 0; margin: 16px 0; padding: 8px 12px 12px; border: 1px solid var(--rule); }
-legend { padding: 0 4px; }
-label { display: block; margin: 8px 0; }
-label.choice { display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 0; padding: 0 8px; cursor: pointer; }
+fieldset { min-width: 0; margin: 1rem 0; padding: .5rem .75rem .75rem; border: 1px solid var(--rule); }
+legend { padding: 0 .25rem; }
+label { display: block; margin: .5rem 0; }
+label.choice { display: flex; align-items: center; gap: .75rem; min-height: 2.75rem; margin: 0; padding: 0 .5rem; cursor: pointer; }
 label.choice:hover { background: var(--bg-1); }
 label.choice:has(:checked) { background: var(--fg); color: var(--bg); }
 /* Drawn rather than native: a native radio in dark mode is a filled grey disc
    that reads as chosen. Empty is a ring, chosen is a solid dot (○ / ●). */
 input[type=radio] {
-  appearance: none; flex: none; width: 16px; height: 16px; margin: 0; color: inherit;
+  appearance: none; flex: none; width: 1rem; height: 1rem; margin: 0; color: inherit;
   border: 1px solid var(--fg-2); border-radius: 50%; background: transparent;
 }
 input[type=radio]:checked { background: currentColor; border-color: currentColor; }
 textarea, input[type=text] {
-  display: block; width: 100%; margin-top: 4px; padding: 8px;
-  font: inherit; font-size: 13px; line-height: 20px; color: var(--fg);
+  display: block; width: 100%; margin-top: .25rem; padding: .5rem;
+  font: inherit; font-size: .8125rem; line-height: 1.25rem; color: var(--fg);
   background: var(--bg-1); border: 1px solid var(--rule-strong); border-radius: 0;
 }
 textarea:focus-visible, input[type=text]:focus-visible { outline-offset: -3px; }
@@ -241,23 +246,23 @@ textarea:focus-visible, input[type=text]:focus-visible { outline-offset: -3px; }
 /* Buttons wear their brackets in CSS with empty alt text, so they stay out of
    the accessible name. Browsers without the alt syntax keep the first content. */
 button {
-  font: inherit; font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
-  margin: 12px 0; padding: 8px 12px; border: 0; background: transparent;
+  font: inherit; font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+  margin: .75rem 0; padding: .5rem .75rem; border: 0; background: transparent;
   color: var(--fg); cursor: pointer;
 }
-button::before { content: "["; content: "[" / ""; color: var(--fg-3); margin-right: 8px; }
-button::after { content: "]"; content: "]" / ""; color: var(--fg-3); margin-left: 8px; }
+button::before { content: "["; content: "[" / ""; color: var(--fg-3); margin-right: .5rem; }
+button::after { content: "]"; content: "]" / ""; color: var(--fg-3); margin-left: .5rem; }
 button:hover, button:hover::before, button:hover::after { background: var(--fg); color: var(--bg); }
 button:active::before { content: "*"; }
 button:focus-visible { outline-offset: -1px; }
 
 /* The form's action is primary: a filled block, since emphasis here is
    inversion. Brackets stay for secondary actions. Hover swaps to an outline. */
-.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 24px 0 12px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1.5rem 0 .75rem; }
 .actions button { margin: 0; }
 button.primary {
-  display: block; min-height: 44px; margin: 0; padding: 12px 24px;
-  font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  display: block; min-height: 2.75rem; margin: 0; padding: .75rem 1.5rem;
+  font-size: .75rem; font-weight: 700; letter-spacing: .06em;
   background: var(--fg); color: var(--bg); border: 1px solid var(--fg);
 }
 button.primary::before, button.primary::after { content: none; }
@@ -269,29 +274,29 @@ button.primary:hover:focus-visible { outline-color: var(--fg); }
 
 /* The thread: a stream with [author] prefixes and dashed separators. */
 .thread { list-style: none; padding: 0; margin: 0; }
-.event { padding: 12px 0; border-top: 1px dashed var(--rule); }
+.event { padding: .75rem 0; border-top: 1px dashed var(--rule); }
 .event:first-child { border-top: 0; padding-top: 0; }
 .event .who { color: var(--fg-2); font-weight: 500; }
 .event.author-human .who { color: var(--fg); font-weight: 700; }
-.event p { margin: 4px 0 0; }
-.event .body { margin-top: 4px; }
+.event p { margin: .25rem 0 0; }
+.event .body { margin-top: .25rem; }
 /* The body or context an amend replaced, ruled off from the lines after it. */
 .event summary { cursor: pointer; }
-.event details > .body, .event details > .context { padding-left: 12px; border-left: 1px solid var(--rule-strong); }
+.event details > .body, .event details > .context { padding-left: .75rem; border-left: 1px solid var(--rule-strong); }
 /* A replaced context keeps its line breaks, as the thread lines for the new one do. */
 .event details > .context { white-space: pre-line; }
-.outcome { margin-top: 8px; font-size: 13px; }
+.outcome { margin-top: .5rem; font-size: .8125rem; }
 
-/* Phone: the header drops the rule, and controls get a real border and 16px
-   text, which stops iOS zooming in on focus. */
+/* Phone: the header drops the rule, and controls get a real border and at
+   least 16px text, which stops iOS zooming in on focus. */
 @media (width < 720px) {
-  header.top { gap: 8px; padding: 0 12px; }
+  header.top { gap: .5rem; padding: 0 .75rem; }
   header.top .rule { display: none; }
   .tally { margin-left: auto; }
-  .chips a, .chips button { padding: 8px 12px; }
+  .chips a, .chips button { padding: .5rem .75rem; }
   .chips button { display: inline-block; width: auto; min-height: 0; border: 0; }
-  textarea, input[type=text] { font-size: 16px; }
-  button { display: block; width: 100%; min-height: 44px; border: 1px solid var(--rule-strong); }
-  .actions { flex-direction: column; align-items: stretch; gap: 8px; }
+  textarea, input[type=text] { font-size: max(1rem, 16px); }
+  button { display: block; width: 100%; min-height: 2.75rem; border: 1px solid var(--rule-strong); }
+  .actions { flex-direction: column; align-items: stretch; gap: .5rem; }
   button::before, button::after, button:active::before { content: none; }
 }

@@ -434,8 +434,9 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
 
 The `options` button in the header opens an overlay that sets the theme
 (system, light or dark), the face for case bodies, notes and outcomes (mono,
-sans or serif), and whether links to other sites open in a new tab. The choices
-are kept in this browser's local storage, not on the server, and apply at once;
+sans or serif), the text size of the whole page (small, medium or large), and
+whether links to other sites open in a new tab. The choices are kept in this
+browser's local storage, not on the server, and apply at once;
 `reset` goes back to the defaults. Close it with `close`, Escape, or a click
 outside it.
 
