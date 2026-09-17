@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ryanlewis/cases/internal/notify"
 	"github.com/ryanlewis/cases/internal/store"
 )
 
@@ -52,9 +53,13 @@ type Server struct {
 	// address and its localhost spelling, on the listen port.
 	hosts map[string]bool
 
-	mu     sync.Mutex // guards poller and warned
+	mu     sync.Mutex // guards poller, warned and notifier
 	poller store.CasePoller
 	warned map[string]bool
+	// notifier sees every poll and queues a notification on feed for each
+	// case that lands on the human.
+	notifier *notify.Engine
+	feed     *notify.Feed
 
 	logMu sync.Mutex
 }
@@ -79,7 +84,9 @@ func New(cases store.Store, listen string, log io.Writer) (*Server, error) {
 		hosts:  map[string]bool{},
 		poller: cases.NewPoller(),
 		warned: map[string]bool{},
+		feed:   notify.NewFeed(),
 	}
+	s.notifier = notify.New(s.feed, nil)
 	names := []string{host, "localhost"}
 	if ip := net.ParseIP(host); ip != nil {
 		// Browsers send the canonical spelling ([::1], not [0:0:...:1]).
@@ -111,8 +118,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /cases/{id}/thread", s.threadFragment)
 	mux.HandleFunc("POST /cases/{id}/answer", s.answer)
 	mux.HandleFunc("POST /cases/{id}/resume", s.resume)
+	mux.HandleFunc("GET /notifications", s.notifications)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
 	return s.logRequests(s.guard(mux))
+}
+
+// IsPoll reports whether r is one of the requests an open tab repeats on its
+// own: an htmx refresh or a notifications check.
+func IsPoll(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true" || r.URL.Path == "/notifications"
 }
 
 // Serve runs handler on ln until ctx is cancelled, then shuts down.
@@ -174,14 +188,15 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// logRequests writes one line per request. Successful htmx polls are left out:
-// an open tab makes one every two seconds and they would bury everything else.
+// logRequests writes one line per request. Successful polls are left out: an
+// open tab refreshes by htmx every two seconds and asks for notifications every
+// five, and they would bury everything else.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "true" && sw.status < 400 {
+		if r.Method == http.MethodGet && IsPoll(r) && sw.status < 400 {
 			return
 		}
 		s.logf("%s %s %s %d %s", start.Format(time.RFC3339), r.Method, r.URL.RequestURI(), sw.status, time.Since(start).Round(time.Millisecond))
@@ -194,11 +209,15 @@ func (s *Server) cases() ([]*store.Case, error) {
 	defer s.mu.Unlock()
 	cases, bad, err := s.poller.Poll()
 	if errors.Is(err, fs.ErrNotExist) {
+		// An empty first poll still counts, so the first case to arrive
+		// is new.
+		s.notifier.Observe(nil)
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	s.notifier.Observe(cases)
 	for _, b := range bad {
 		if msg := b.Error(); !s.warned[msg] {
 			s.warned[msg] = true
