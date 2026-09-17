@@ -109,7 +109,9 @@ cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID].
   [--kind KIND]... [--label TEXT]... [--worker NAME]...
 ```
 
-- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision`. Each line also has `next_since`, the same on every line: pass it as `--since` when you run `wait` again.
+- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision`. Each line also has `fresh` and `next_since`.
+- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was already waiting on you before, such as one you are still handling or a parked case, which is printed on every wake until it is resumed; do not act on it twice.
+- `next_since` is the same on every line: pass it as `--since` when you run `wait` again.
 - Run it in the background; it can take hours.
 - `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.
 - `--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those kinds or labels, or from any of those workers. A case must match every filter given, `--id` included. `--kind` alone does not scope `wait` to your own cases; pair it with `--id` or `--label`. A filter that matches none of your cases waits until the timeout, as an `--id` that is never answered does, so check the label you pass is the one you opened with.

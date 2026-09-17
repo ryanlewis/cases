@@ -334,12 +334,7 @@ the JSON.
 `wait` is for an agent to run in the background. It checks the store every
 second and returns as soon as a human answers, parks or resumes a case. It then
 prints every case still waiting on the agent, one JSON object per line, and
-exits 0. Each line is the case as `show --json` prints it, without `revision`,
-plus `next_since`: the value to pass as `--since` to the next `wait`. It is the
-same on every line: the time of the latest event that put a printed case there,
-or the `--since` given if that is later. Waiting again with it does not wake on
-the events just printed, but does wake on one that lands before the new `wait`
-starts. It is left out when no such event records a time. A case is waiting on the agent when its last event is one of those
+exits 0. A case is waiting on the agent when its last event is one of those
 three human events. By default only events that land after `wait` starts can
 wake it, so running it again does not wake on answers already reported. With
 `--since TIME` it also wakes on human events recorded after that RFC 3339
@@ -356,6 +351,19 @@ that matches no case, like an `--id` that is never answered, waits until the
 timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
+
+Each line `wait` prints is the case as `show --json` prints it, without
+`revision`, plus two fields:
+
+- `fresh` is true when the event that put the case there is new to this
+  `wait`: its file landed while waiting, or it is later than `--since`. Those
+  are the cases that woke it. The rest were already waiting, such as a parked
+  case, which is printed on every wake until it is resumed.
+- `next_since` is the value to pass as `--since` to the next `wait`, the same
+  on every line: the time of the latest event that put a printed case there,
+  or the `--since` given if that is later. Waiting again with it does not wake
+  on the events just printed, but does wake on one that lands before the new
+  `wait` starts. It is left out when none of those events records a time.
 
 `wait --for human` is the same wait from the human's side, for a notifier to
 run: it returns when a case lands on the human and prints every case waiting

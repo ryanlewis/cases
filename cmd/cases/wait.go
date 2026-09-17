@@ -80,12 +80,14 @@ func (c *WaitCmd) sinceTime(d *Deps) (time.Time, error) {
 	return cs.OpenedAt, nil
 }
 
-// waitLine is a case as wait prints it: the case's own JSON with the
-// --since to pass to the next wait beside it. That is the latest time among
-// the events that put the printed cases there, or the --since given if it is
-// later, so the next wait does not wake again on what this one printed.
+// waitLine is a case as wait prints it: the case's own JSON, whether the event
+// that put it there is new and so could have woken this wait, and the --since
+// to pass to the next wait. That is the latest time among the events that put
+// the printed cases there, or the --since given if it is later, so the next
+// wait does not wake again on what this one printed.
 type waitLine struct {
 	*store.Case
+	Fresh     bool      `json:"fresh"`
 	NextSince time.Time `json:"next_since,omitzero"`
 }
 
@@ -146,11 +148,12 @@ func (c *WaitCmd) Run(d *Deps) error {
 		}
 
 		type ready struct {
-			c  *store.Case
-			ev store.Event
+			c     *store.Case
+			ev    store.Event
+			fresh bool
 		}
 		var waiting []ready
-		fresh := false
+		woke := false
 		for _, cs := range cases {
 			if len(c.ID) > 0 && !slices.Contains(c.ID, cs.ID) || !c.match(cs) {
 				continue
@@ -159,10 +162,9 @@ func (c *WaitCmd) Run(d *Deps) error {
 			if !ok {
 				continue
 			}
-			waiting = append(waiting, ready{cs, ev})
-			if (seen != nil && !seen[cs.ID+"/"+ev.File]) || (!since.IsZero() && ev.At.After(since)) {
-				fresh = true
-			}
+			fresh := (seen != nil && !seen[cs.ID+"/"+ev.File]) || (!since.IsZero() && ev.At.After(since))
+			waiting = append(waiting, ready{cs, ev, fresh})
+			woke = woke || fresh
 		}
 		if seen == nil {
 			seen = map[string]bool{}
@@ -173,7 +175,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 			}
 		}
 
-		if fresh {
+		if woke {
 			slices.SortStableFunc(waiting, func(a, b ready) int {
 				if n := a.ev.At.Compare(b.ev.At); n != 0 {
 					return n
@@ -189,7 +191,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 			enc := json.NewEncoder(d.Stdout)
 			enc.SetEscapeHTML(false)
 			for _, r := range waiting {
-				if err := enc.Encode(waitLine{r.c, next}); err != nil {
+				if err := enc.Encode(waitLine{r.c, r.fresh, next}); err != nil {
 					return err
 				}
 			}
