@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -674,7 +675,7 @@ func TestStaleRefusalShowsTheCaseAsItIsNow(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	a.server.refuse(w, loaded, nil, err, url.Values{"choice": {"1"}, "note": {"float it"}})
+	a.server.refuse(w, httptest.NewRequest(http.MethodPost, "/", nil), loaded, nil, err, url.Values{"choice": {"1"}, "note": {"float it"}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status %d, want 409", w.Code)
 	}
@@ -1012,5 +1013,25 @@ func TestThreadShowsAnUnknownEventAsVersionSkew(t *testing.T) {
 	page := a.get(t, "/cases/"+c.ID)
 	if !strings.Contains(page, `<p class="error">0002-agent-comment.json: unknown event &#34;comment&#34;: perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest</p>`) {
 		t.Errorf("thread missing the version skew problem:\n%s", page)
+	}
+}
+
+// failAnswer is a store whose Answer always fails.
+type failAnswer struct{ store.Store }
+
+func (failAnswer) Answer(context.Context, string, store.AnswerRecord, ...store.Precondition) (*store.Case, error) {
+	return nil, errors.New("store unavailable")
+}
+
+func TestAnswerWritesThroughTheStore(t *testing.T) {
+	a := newAppWith(t, func(s store.Store) store.Store { return failAnswer{s} })
+	c := a.open(t, openRecords[store.KindDecision])
+
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"choice": {"1"}}, c.Revision()), nil)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "store unavailable") {
+		t.Errorf("status %d, body:\n%s", w.Code, w.Body.String())
+	}
+	if files := eventFiles(t, c.Dir); len(files) != 1 {
+		t.Errorf("files = %v, want only the open event", files)
 	}
 }

@@ -26,6 +26,14 @@ type result struct {
 // in-memory stdin and captured output. It never exits the test process.
 func runCases(t *testing.T, stdin string, args ...string) result {
 	t.Helper()
+	return runCasesWith(t, nil, stdin, args...)
+}
+
+// runCasesWith is runCases with cases as the store commands go through, such
+// as a store.Dir with one method overridden to fail. nil is the directory the
+// arguments name, as for runCases.
+func runCasesWith(t *testing.T, cases store.Store, stdin string, args ...string) result {
+	t.Helper()
 	var cli CLI
 	var stdout, stderr bytes.Buffer
 	cfg, cfgErr := loadConfig(args)
@@ -45,6 +53,7 @@ func runCases(t *testing.T, stdin string, args ...string) result {
 	}
 	deps := &Deps{
 		Store:  cli.Store,
+		Cases:  cases,
 		Stdin:  strings.NewReader(stdin),
 		Stdout: &stdout,
 		Stderr: &stderr,
@@ -195,9 +204,9 @@ func TestFindCaseTakesPartOfAnID(t *testing.T) {
 	d := &Deps{Store: root}
 
 	for part, want := range map[string]string{pin: pin, "pin-bun": pin, "float": float} {
-		dir, err := d.findCase(part)
-		if err != nil || dir != filepath.Join(root, want) {
-			t.Errorf("findCase(%q) = %q, %v; want %s", part, dir, err, want)
+		id, err := d.findCase(part)
+		if err != nil || id != want {
+			t.Errorf("findCase(%q) = %q, %v; want %s", part, id, err, want)
 		}
 	}
 
@@ -221,15 +230,15 @@ func TestFindCaseTakesPartOfAnID(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, pin+"-2"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if dir, err := d.findCase(pin); err != nil || dir != filepath.Join(root, pin) {
-		t.Errorf("exact id beside a longer one: %q, %v", dir, err)
+	if id, err := d.findCase(pin); err != nil || id != pin {
+		t.Errorf("exact id beside a longer one: %q, %v", id, err)
 	}
 
 	// A whole id that is gone does not fall back to a longer id containing it.
 	if err := os.RemoveAll(filepath.Join(root, pin)); err != nil {
 		t.Fatal(err)
 	}
-	if dir, err := d.findCase(pin); err == nil || err.Error() != fmt.Sprintf("no case %q", pin) {
-		t.Errorf("pruned whole id: %q, %v", dir, err)
+	if id, err := d.findCase(pin); err == nil || err.Error() != fmt.Sprintf("no case %q", pin) {
+		t.Errorf("pruned whole id: %q, %v", id, err)
 	}
 }

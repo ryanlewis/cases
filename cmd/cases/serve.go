@@ -52,7 +52,7 @@ func (c *ServeCmd) Run(d *Deps) error {
 	var screen *statusScreen
 	logw := d.Stderr
 	if term {
-		screen = newStatusScreen(d.Store, url, d.Stdout, os.Getenv("NO_COLOR") == "")
+		screen = newStatusScreen(d.Store, d.cases(), url, d.Stdout, os.Getenv("NO_COLOR") == "")
 		logw = screen.logWriter(d.Stderr, !isTerminal(d.Stderr))
 	}
 
@@ -64,7 +64,7 @@ func (c *ServeCmd) Run(d *Deps) error {
 		defer func() { _ = instance.Remove(storeDir, pid) }()
 	}
 
-	srv, err := web.New(d.Store, addr, logw)
+	srv, err := web.New(d.cases(), addr, logw)
 	if err != nil {
 		_ = ln.Close()
 		return err

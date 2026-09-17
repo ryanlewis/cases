@@ -1,6 +1,10 @@
 package main
 
-import "github.com/ryanlewis/cases/internal/store"
+import (
+	"context"
+
+	"github.com/ryanlewis/cases/internal/store"
+)
 
 type WithdrawCmd struct {
 	ID       string `arg:"" help:"Case id."`
@@ -9,11 +13,10 @@ type WithdrawCmd struct {
 }
 
 func (c *WithdrawCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
-	if err != nil {
+	if err := store.ValidID(c.ID); err != nil {
 		return err
 	}
-	cs, err := store.Withdraw(dir, store.WithdrawRecord{Reason: c.Reason}, atRevision(c.Revision)...)
+	cs, err := d.cases().Withdraw(context.Background(), c.ID, store.WithdrawRecord{Reason: c.Reason}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

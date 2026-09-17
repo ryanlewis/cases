@@ -489,32 +489,32 @@ func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "case", "thread", caseData{Home: home, Case: c, Thread: thread(c)})
 }
 
-// loadForPost resolves the case a form posts to, straight from disk.
-func (s *Server) loadForPost(w http.ResponseWriter, r *http.Request) (string, *store.Case, bool) {
-	dir, err := store.CaseDir(s.root, r.PathValue("id"))
-	if err != nil {
+// loadForPost resolves the case a form posts to, straight from the store.
+func (s *Server) loadForPost(w http.ResponseWriter, r *http.Request) (*store.Case, bool) {
+	id := r.PathValue("id")
+	if store.ValidID(id) != nil {
 		http.NotFound(w, r)
-		return "", nil, false
+		return nil, false
 	}
-	c, err := store.Load(dir)
+	c, err := s.store.Get(r.Context(), id)
 	if errors.Is(err, fs.ErrNotExist) {
 		http.NotFound(w, r)
-		return "", nil, false
+		return nil, false
 	}
 	if err != nil {
 		s.fail(w, err)
-		return "", nil, false
+		return nil, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxForm)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form: "+err.Error(), http.StatusBadRequest)
-		return "", nil, false
+		return nil, false
 	}
-	return dir, c, true
+	return c, true
 }
 
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
-	dir, c, ok := s.loadForPost(w, r)
+	c, ok := s.loadForPost(w, r)
 	if !ok {
 		return
 	}
@@ -526,7 +526,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	// revision again while the case is locked.
 	rev := revisionParam(r.PostForm)
 	if rev != c.Revision() {
-		s.refuse(w, c, cases, store.ErrStale, r.PostForm)
+		s.refuse(w, r, c, cases, store.ErrStale, r.PostForm)
 		return
 	}
 	rec, park, err := answerFromForm(c, r.PostForm)
@@ -534,27 +534,27 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if park {
 			event = store.EventPark
-			_, err = store.Park(dir, store.ParkRecord{Note: rec.Note}, store.AtRevision(rev))
+			_, err = s.store.Park(r.Context(), c.ID, store.ParkRecord{Note: rec.Note}, store.AtRevision(rev))
 		} else {
-			_, err = store.Answer(dir, rec, store.AtRevision(rev))
+			_, err = s.store.Answer(r.Context(), c.ID, rec, store.AtRevision(rev))
 		}
 	}
 	if err != nil {
-		s.refuse(w, c, cases, err, r.PostForm)
+		s.refuse(w, r, c, cases, err, r.PostForm)
 		return
 	}
 	http.Redirect(w, r, withRecorded(next, event, c.ID), http.StatusSeeOther)
 }
 
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
-	dir, c, ok := s.loadForPost(w, r)
+	c, ok := s.loadForPost(w, r)
 	if !ok {
 		return
 	}
 	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
-	if _, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
-		s.refuse(w, c, cases, err, nil)
+	if _, err := s.store.Resume(r.Context(), c.ID, store.AuthorHuman, store.ResumeRecord{}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
+		s.refuse(w, r, c, cases, err, nil)
 		return
 	}
 	http.Redirect(w, r, withRecorded(next, store.EventResume, c.ID), http.StatusSeeOther)
@@ -566,15 +566,15 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 const staleForm = "this case changed after the page was loaded, so this was not recorded. check the thread before trying again"
 
 // refuse shows the case again with the reason a post wrote nothing. A stale
-// post is shown the case as it is on disk now, not as the handler loaded it:
+// post is shown the case as it is in the store now, not as the handler loaded it:
 // the event that made the post stale can land after that load. The page then
 // carries the case's current revision, so the form can be sent again.
-func (s *Server) refuse(w http.ResponseWriter, c *store.Case, cases []*store.Case, err error, form url.Values) {
+func (s *Server) refuse(w http.ResponseWriter, r *http.Request, c *store.Case, cases []*store.Case, err error, form url.Values) {
 	if !errors.Is(err, store.ErrStale) {
 		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, nil, err.Error(), form)
 		return
 	}
-	if now, lerr := store.Load(c.Dir); lerr == nil {
+	if now, lerr := s.store.Get(r.Context(), c.ID); lerr == nil {
 		c = now
 	}
 	s.renderCase(w, http.StatusConflict, c, cases, false, nil, staleForm, form)

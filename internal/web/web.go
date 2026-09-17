@@ -42,14 +42,14 @@ func CheckLoopback(addr string) error {
 
 // Server is the web app over one store.
 type Server struct {
-	root string
-	log  io.Writer
+	store store.Store
+	log   io.Writer
 	// hosts are the Host header values requests may carry: the listen
 	// address and its localhost spelling, on the listen port.
 	hosts map[string]bool
 
 	mu     sync.Mutex // guards poller and warned
-	poller *store.Poller
+	poller store.CasePoller
 	warned map[string]bool
 
 	logMu sync.Mutex
@@ -62,18 +62,18 @@ func (s *Server) logf(format string, args ...any) {
 	fmt.Fprintf(s.log, format+"\n", args...)
 }
 
-// New returns a Server for the store at root, answering requests addressed
-// to listen (host:port, as bound). Request logs and store warnings go to log.
-func New(root, listen string, log io.Writer) (*Server, error) {
+// New returns a Server for cases, answering requests addressed to listen
+// (host:port, as bound). Request logs and store warnings go to log.
+func New(cases store.Store, listen string, log io.Writer) (*Server, error) {
 	if err := CheckLoopback(listen); err != nil {
 		return nil, err
 	}
 	host, port, _ := net.SplitHostPort(listen)
 	s := &Server{
-		root:   root,
+		store:  cases,
 		log:    log,
 		hosts:  map[string]bool{},
-		poller: store.NewPoller(root),
+		poller: cases.NewPoller(),
 		warned: map[string]bool{},
 	}
 	names := []string{host, "localhost"}

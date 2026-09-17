@@ -43,9 +43,17 @@ type testApp struct {
 
 func newApp(t *testing.T) *testApp {
 	t.Helper()
+	return newAppWith(t, func(s store.Store) store.Store { return s })
+}
+
+// newAppWith is newApp with the server's store wrapped by wrap, such as to
+// make one method fail. Test helpers such as open still write to the
+// directory.
+func newAppWith(t *testing.T, wrap func(store.Store) store.Store) *testApp {
+	t.Helper()
 	root := t.TempDir()
 	log := &lockedBuffer{}
-	s, err := New(root, testAddr, log)
+	s, err := New(wrap(store.NewDir(root)), testAddr, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +152,7 @@ func TestCheckLoopback(t *testing.T) {
 			t.Errorf("%s accepted", bad)
 		}
 	}
-	if _, err := New(t.TempDir(), "0.0.0.0:8765", io.Discard); err == nil {
+	if _, err := New(store.NewDir(t.TempDir()), "0.0.0.0:8765", io.Discard); err == nil {
 		t.Error("New accepted a non-loopback address")
 	}
 }
@@ -155,7 +163,7 @@ func TestHostSpellings(t *testing.T) {
 		{"[::1]:80", "[::1]"},
 		{"[0:0:0:0:0:0:0:1]:8765", "[::1]:8765"},
 	} {
-		s, err := New(t.TempDir(), tc.listen, io.Discard)
+		s, err := New(store.NewDir(t.TempDir()), tc.listen, io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -341,7 +349,7 @@ func TestRequestsAreLogged(t *testing.T) {
 }
 
 func TestMissingStoreShowsAnEmptyInbox(t *testing.T) {
-	s, err := New(filepath.Join(t.TempDir(), "not-yet"), testAddr, io.Discard)
+	s, err := New(store.NewDir(filepath.Join(t.TempDir(), "not-yet")), testAddr, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,7 +72,12 @@ func (c *CLI) AfterApply(vars kong.Vars) error {
 
 // Deps carries what every command needs, so tests can swap the streams.
 type Deps struct {
-	Store  string
+	// Store is the store's directory. Commands that need the path itself,
+	// such as prune, serve and status, use it; the rest go through Cases.
+	Store string
+	// Cases is the store commands read and write cases through. When nil it
+	// is the directory at Store.
+	Cases  store.Store
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -131,7 +136,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
+	deps := &Deps{Store: cli.Store, Cases: store.NewDir(cli.Store), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
 	if err := ctx.Run(deps); err != nil {
 		os.Exit(report(os.Stderr, err))
 	}
@@ -154,30 +159,32 @@ func report(w io.Writer, err error) int {
 	return 1
 }
 
-// caseDir resolves a case id to its directory in the store.
-func (d *Deps) caseDir(id string) (string, error) {
-	return store.CaseDir(d.Store, id)
+// cases returns the store commands read and write through.
+func (d *Deps) cases() store.Store {
+	if d.Cases == nil {
+		return store.NewDir(d.Store)
+	}
+	return d.Cases
 }
 
-// findCase resolves a case id typed by the human to its directory: the case
+// findCase resolves a case id typed by the human to a case id in the store: the case
 // with that exact id, or else the one case whose id contains it. No match, or
 // more than one, is an error. An id that is whole, a timestamp and a slug, is
 // taken exactly: a pruned case must not resolve to a sibling such as id-2.
-// Agent commands and wait use caseDir, which takes the exact id only.
+// Agent commands and wait take the exact id only.
 func (d *Deps) findCase(id string) (string, error) {
-	dir, err := store.CaseDir(d.Store, id)
-	if err != nil {
+	if err := store.ValidID(id); err != nil {
 		return "", err
 	}
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return dir, nil
+	ids, err := d.cases().IDs(context.Background())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if slices.Contains(ids, id) {
+		return id, nil
 	}
 	if store.IsWholeID(id) {
 		return "", fmt.Errorf("no case %q", id)
-	}
-	ids, err := store.CaseIDs(d.Store)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", err
 	}
 	var matches []string
 	for _, name := range ids {
@@ -189,7 +196,7 @@ func (d *Deps) findCase(id string) (string, error) {
 	case 0:
 		return "", fmt.Errorf("no case id contains %q", id)
 	case 1:
-		return filepath.Join(d.Store, matches[0]), nil
+		return matches[0], nil
 	}
 	return "", fmt.Errorf("%q matches %d cases:\n  %s", id, len(matches), strings.Join(matches, "\n  "))
 }

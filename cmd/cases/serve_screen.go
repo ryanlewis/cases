@@ -212,13 +212,14 @@ type statusScreen struct {
 	log   []string
 	part  []byte // a log write not yet ended by a newline
 
-	poller *store.Poller
+	poller store.CasePoller
 	drawn  int    // lines on screen from the last frame
 	frame  string // the last frame, to skip identical redraws
 }
 
-func newStatusScreen(root, url string, out io.Writer, color bool) *statusScreen {
-	return &statusScreen{root: root, url: url, out: out, color: color, since: time.Now(), poller: store.NewPoller(root)}
+// newStatusScreen shows root, the store's path, and counts the cases in cases.
+func newStatusScreen(root string, cases store.Store, url string, out io.Writer, color bool) *statusScreen {
+	return &statusScreen{root: root, url: url, out: out, color: color, since: time.Now(), poller: cases.NewPoller()}
 }
 
 // logWriter returns the writer for the request log. Lines are kept for the

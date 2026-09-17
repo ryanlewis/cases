@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ryanlewis/cases/internal/store"
@@ -15,7 +16,7 @@ type CloseCmd struct {
 }
 
 func (c *CloseCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
+	err := store.ValidID(c.ID)
 	if err != nil {
 		return err
 	}
@@ -28,7 +29,7 @@ func (c *CloseCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}
-	cs, err := store.Close(dir, store.CloseRecord{Outcome: outcome, Links: c.Link}, atRevision(c.Revision)...)
+	cs, err := d.cases().Close(context.Background(), c.ID, store.CloseRecord{Outcome: outcome, Links: c.Link}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

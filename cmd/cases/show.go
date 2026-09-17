@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,11 +21,11 @@ type ShowCmd struct {
 }
 
 func (c *ShowCmd) Run(d *Deps) error {
-	dir, err := d.findCase(c.ID)
+	id, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}
-	cs, err := store.Load(dir)
+	cs, err := d.cases().Get(context.Background(), id)
 	if err != nil {
 		return err
 	}

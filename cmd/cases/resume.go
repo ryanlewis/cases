@@ -1,6 +1,10 @@
 package main
 
-import "github.com/ryanlewis/cases/internal/store"
+import (
+	"context"
+
+	"github.com/ryanlewis/cases/internal/store"
+)
 
 type ResumeCmd struct {
 	ID       string `arg:"" help:"Case id, or any part of it that names one case."`
@@ -9,7 +13,7 @@ type ResumeCmd struct {
 }
 
 func (c *ResumeCmd) Run(d *Deps) error {
-	dir, err := d.findCase(c.ID)
+	id, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}
@@ -17,7 +21,7 @@ func (c *ResumeCmd) Run(d *Deps) error {
 	if c.Agent {
 		author = store.AuthorAgent
 	}
-	cs, err := store.Resume(dir, author, store.ResumeRecord{}, atRevision(c.Revision)...)
+	cs, err := d.cases().Resume(context.Background(), id, author, store.ResumeRecord{}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

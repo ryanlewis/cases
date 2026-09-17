@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -176,5 +178,35 @@ func TestSweepByKind(t *testing.T) {
 		if got := loadCase(t, root, id).State; got != want {
 			t.Errorf("%s state = %s, want %s", id, got, want)
 		}
+	}
+}
+
+// failWithdraw is the directory store with Withdraw refused for one case.
+type failWithdraw struct {
+	store.Store
+	id string
+}
+
+func (f failWithdraw) Withdraw(ctx context.Context, id string, rec store.WithdrawRecord, pre ...store.Precondition) (*store.Case, error) {
+	if id == f.id {
+		return nil, errors.New("store unavailable")
+	}
+	return f.Store.Withdraw(ctx, id, rec, pre...)
+}
+
+func TestSweepWithdrawsThroughTheStore(t *testing.T) {
+	root := t.TempDir()
+	failing := openDecision(t, root)
+	fine := openDecision(t, root)
+
+	r := runCasesWith(t, failWithdraw{store.NewDir(root), failing}, "", "--store", root, "sweep", "--yes")
+	if r.err == nil || !strings.Contains(r.err.Error(), failing+": store unavailable") {
+		t.Errorf("err = %v", r.err)
+	}
+	if !strings.Contains(r.stdout, fine+" withdrawn\n") {
+		t.Errorf("stdout = %q", r.stdout)
+	}
+	if got := loadCase(t, root, failing).State; got != store.StateOpen {
+		t.Errorf("failed case state = %s", got)
 	}
 }
