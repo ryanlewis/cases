@@ -114,6 +114,11 @@ to any case but a stuck one: it lists the file as a problem and shows the case
 as still open. Update `cases` on every machine that uses the store before an
 agent amends a case or opens a question, or a human drops a case.
 
+An unknown event, kind or urgency is reported as possibly written by a newer
+`cases`, with the `go install` command that updates it. The same message comes
+from a file that `cases` did not write, such as an event file name with a typo
+in it, so check the name before updating.
+
 A case's state is worked out by reading its files in name order. It is never
 stored. Files are never edited or deleted, and closed cases are kept as the
 decision log until `cases prune` moves them to the [archive](#archive).
