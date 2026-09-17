@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+
+	"github.com/ryanlewis/cases/internal/store"
 )
 
 // result is what one CLI invocation produced.
@@ -143,5 +146,43 @@ func TestVersionString(t *testing.T) {
 	_, _ = parser.Parse([]string{"--version"})
 	if exited != 0 || !strings.HasPrefix(stdout.String(), "cases dev") {
 		t.Errorf("exit %d, output %q", exited, stdout.String())
+	}
+}
+
+func TestReportExitStatus(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	status := func(r result) (int, string) {
+		t.Helper()
+		if r.err == nil {
+			t.Fatal("command succeeded, want an error")
+		}
+		var buf bytes.Buffer
+		code := report(&buf, r.err)
+		return code, buf.String()
+	}
+
+	code, stderr := status(runCases(t, "", "--store", root, "pickup", id))
+	if code != exitTransition || stderr != "Error: cannot pickup a case that is open\n" {
+		t.Errorf("pickup of an open case: exit %d, stderr %q; want exit 3", code, stderr)
+	}
+
+	stale := runCases(t, "", "--store", root, "answer", id, "--option", "1", "--revision", "5")
+	if !errors.Is(stale.err, store.ErrStale) {
+		t.Fatalf("answer at an old revision: err = %v, want ErrStale", stale.err)
+	}
+	code, stderr = status(stale)
+	if code != 1 || !strings.HasPrefix(stderr, "Error: ") {
+		t.Errorf("stale answer: exit %d, stderr %q; want exit 1", code, stderr)
+	}
+
+	code, stderr = status(runCases(t, "", "--store", root, "show", "nope"))
+	if code != 1 || !strings.HasPrefix(stderr, "Error: ") {
+		t.Errorf("missing case: exit %d, stderr %q; want exit 1", code, stderr)
+	}
+
+	code, stderr = status(runCases(t, "", "--store", root, "wait", "--id", id, "--timeout", "10ms"))
+	if code != exitTimeout || strings.HasPrefix(stderr, "Error: ") {
+		t.Errorf("wait timeout: exit %d, stderr %q; want exit 2 with no Error: line", code, stderr)
 	}
 }

@@ -25,6 +25,10 @@ var (
 // nothing for the agent. It differs from 1, which every other failure uses.
 const exitTimeout = 2
 
+// exitTransition is the status a command on one case exits with when the
+// case's state does not allow the event, a store.TransitionError.
+const exitTransition = 3
+
 type CLI struct {
 	Store   string           `help:"Case store directory (default ${default})." env:"CASES_STORE" default:"${store}" placeholder:"DIR"`
 	Config  string           `help:"TOML config file that supplies flag defaults (default ${config})." placeholder:"PATH"`
@@ -127,16 +131,25 @@ func main() {
 
 	deps := &Deps{Store: cli.Store, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
 	if err := ctx.Run(deps); err != nil {
-		var ee *exitError
-		if errors.As(err, &ee) {
-			if ee.msg != "" {
-				fmt.Fprintln(os.Stderr, ee.msg)
-			}
-			os.Exit(ee.code)
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(report(os.Stderr, err))
 	}
+}
+
+// report prints a command's error to w and returns the status to exit with.
+func report(w io.Writer, err error) int {
+	var ee *exitError
+	if errors.As(err, &ee) {
+		if ee.msg != "" {
+			fmt.Fprintln(w, ee.msg)
+		}
+		return ee.code
+	}
+	fmt.Fprintf(w, "Error: %v\n", err)
+	var te *store.TransitionError
+	if errors.As(err, &te) {
+		return exitTransition
+	}
+	return 1
 }
 
 // caseDir resolves a case id to its directory in the store.

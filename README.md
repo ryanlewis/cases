@@ -282,6 +282,13 @@ cases skill check     [AGENT]
 `open` prints the new case id. The other write commands print the id and the
 new state.
 
+A command on one case exits 3 when the case's state does not allow it, such as
+`pickup` on a case that is not answered or `close` on one that is not picked
+up; the `Error:` line says which. Exit 3 means the store refused the event, not
+that it was already done, so read the case to see where it is. Other errors
+exit 1, and `wait` exits 2 on timeout. `sweep` and `prune` exit 1 when any case
+fails.
+
 `cases show` prints the case's revision, the number of event files it has, and
 `show --json` has it as `revision`. Pass it to `answer`, `resume`, `amend`,
 `pickup`, `note`, `close` or `withdraw` as `--revision N` and the write is refused, with nothing written, if an event has
