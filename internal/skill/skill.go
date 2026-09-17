@@ -8,6 +8,7 @@
 package skill
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"os"
@@ -151,14 +152,65 @@ func InstalledFiles(a Agent, dir string) []string {
 	return found
 }
 
-// Install writes the agent's rendered files to dir, creating it if needed,
-// and overwrites any existing files.
+// Status says how the skill under a directory compares with what this binary
+// renders.
+type Status int
+
+const (
+	// NotInstalled means none of the agent's files are present.
+	NotInstalled Status = iota
+	// Installed means every file is present and matches byte for byte.
+	Installed
+	// Stale means some file is present but at least one is missing or
+	// differs, as after upgrading cases without reinstalling the skill.
+	Stale
+)
+
+func (s Status) String() string {
+	switch s {
+	case Installed:
+		return "installed"
+	case Stale:
+		return "stale"
+	default:
+		return "not installed"
+	}
+}
+
+// Check compares the agent's files under dir with the bundled rendering.
+func Check(a Agent, dir string) Status {
+	present, same := 0, 0
+	for name, content := range a.Files() {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		present++
+		if bytes.Equal(got, content) {
+			same++
+		}
+	}
+	switch {
+	case present == 0:
+		return NotInstalled
+	case same == len(a.Files()):
+		return Installed
+	default:
+		return Stale
+	}
+}
+
+// Install writes the agent's rendered files to dir, creating it if needed.
+// A file that already matches is left alone; any other is overwritten.
 func Install(a Agent, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for name, content := range a.Files() {
 		path := filepath.Join(dir, name)
+		if got, err := os.ReadFile(path); err == nil && bytes.Equal(got, content) {
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}

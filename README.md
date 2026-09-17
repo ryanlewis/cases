@@ -266,6 +266,7 @@ cases skill install   AGENT [--path DIR] [-y]
 cases skill uninstall AGENT [--path DIR] [-y]
 cases skill show      [AGENT]
 cases skill list
+cases skill check     [AGENT]
 ```
 
 `open` prints the new case id. The other write commands print the id and the
@@ -471,6 +472,7 @@ cases skill install claude   # write SKILL.md into the agent's skills directory
 cases skill uninstall claude # remove it (and the directory, if empty)
 cases skill show             # print the skill
 cases skill list             # each agent, where the skill goes, and whether it is installed
+cases skill check            # exit 1 if an installed skill differs from this binary
 ```
 
 | Agent | Directory | Relocated by |
@@ -479,10 +481,21 @@ cases skill list             # each agent, where the skill goes, and whether it 
 | `codex` | `~/.codex/skills/cases` | `$CODEX_HOME` |
 | `pi` | `~/.pi/agent/skills/cases` | `$PI_CODING_AGENT_DIR` (a leading `~` is expanded) |
 
-`--path DIR` installs to or uninstalls from another directory. `install`
-overwrites an installed skill only after asking, or with `-y`; `uninstall`
-lists the files and asks, or needs `-y`. When stdin is not a terminal
-neither command asks: without `-y` they refuse.
+`skill list` compares the files in each agent's directory byte for byte with
+what this binary renders and reports one of three states: `installed` (they
+match), `stale` (a file is there but differs or is missing, as after
+upgrading cases without reinstalling the skill) or `not installed`.
+
+`--path DIR` installs to or uninstalls from another directory. When the
+installed skill already matches, `install` says it is already up to date and
+writes nothing. It overwrites a stale skill only after asking, or with `-y`;
+`uninstall` lists the files and asks, or needs `-y`. When stdin is not a
+terminal neither command asks: without `-y` they refuse.
+
+`skill check [agent]` looks at each agent's default directory, or only the
+named agent's, prints a line for each stale skill and exits 1 if there is
+one. A skill that is not installed does not count. It is for scripts and
+Makefiles; it reports drift but does not fix it.
 
 ## Development
 

@@ -17,7 +17,8 @@ type SkillCmd struct {
 	Install   SkillInstallCmd   `cmd:"" help:"Install the bundled agent skill for an AI coding agent."`
 	Uninstall SkillUninstallCmd `cmd:"" help:"Remove the bundled agent skill for an AI coding agent."`
 	Show      SkillShowCmd      `cmd:"" help:"Print the skill's SKILL.md, or the files rendered for an agent."`
-	List      SkillListCmd      `cmd:"" help:"List supported agents, where the skill goes and whether it is installed."`
+	List      SkillListCmd      `cmd:"" help:"List supported agents, where the skill goes and whether it is installed, stale or not installed."`
+	Check     SkillCheckCmd     `cmd:"" help:"Exit 1 when an installed skill differs from the one in this binary."`
 }
 
 type SkillInstallCmd struct {
@@ -31,11 +32,18 @@ func (c *SkillInstallCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	if skill.Exists(agent, dir) && !c.Yes {
-		if !d.interactive() {
-			return fmt.Errorf("skill already installed at %s; pass -y to overwrite", dir)
+	switch skill.Check(agent, dir) {
+	case skill.Installed:
+		fmt.Fprintf(d.Stdout, "%s skill at %s is already up to date\n", agent.Name(), dir)
+		return nil
+	case skill.Stale:
+		if c.Yes {
+			break
 		}
-		if !d.confirm(fmt.Sprintf("Skill already installed at %s. Overwrite?", dir)) {
+		if !d.interactive() {
+			return fmt.Errorf("a different skill is installed at %s; pass -y to overwrite", dir)
+		}
+		if !d.confirm(fmt.Sprintf("A different skill is installed at %s. Overwrite?", dir)) {
 			return errors.New("cancelled")
 		}
 	}
@@ -108,13 +116,41 @@ func (c *SkillListCmd) Run(d *Deps) error {
 			fmt.Fprintf(d.Stdout, "%-10s (path unresolved: %v)\n", a.Name(), err)
 			continue
 		}
-		status := "not installed"
-		if skill.Exists(a, dir) {
-			status = "installed"
-		}
-		fmt.Fprintf(d.Stdout, "%-10s %s  (%s)\n", a.Name(), dir, status)
+		fmt.Fprintf(d.Stdout, "%-10s %s  (%s)\n", a.Name(), dir, skill.Check(a, dir))
 	}
 	fmt.Fprintf(d.Stdout, "\nUse `cases skill install <agent>` (agents: %s)\n", skill.AgentNames())
+	return nil
+}
+
+type SkillCheckCmd struct {
+	Agent string `arg:"" optional:"" help:"Check only this agent (claude, codex or pi); by default check every agent."`
+}
+
+// Run prints each stale skill and exits 1 if there is one. A skill that is
+// not installed is not a failure.
+func (c *SkillCheckCmd) Run(d *Deps) error {
+	agents := skill.Agents()
+	if c.Agent != "" {
+		a, err := skill.Lookup(c.Agent)
+		if err != nil {
+			return err
+		}
+		agents = []skill.Agent{a}
+	}
+	stale := 0
+	for _, a := range agents {
+		dir, err := a.DefaultDir()
+		if err != nil {
+			return err
+		}
+		if skill.Check(a, dir) == skill.Stale {
+			stale++
+			fmt.Fprintf(d.Stdout, "%s skill at %s differs from this binary; run `cases skill install %s`\n", a.Name(), dir, a.Name())
+		}
+	}
+	if stale > 0 {
+		return &exitError{code: 1}
+	}
 	return nil
 }
 

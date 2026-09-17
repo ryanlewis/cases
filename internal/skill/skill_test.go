@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // allAgents is the set of registered agent names exercised by the table-driven
@@ -267,6 +268,10 @@ func TestInstallExistsUninstall(t *testing.T) {
 				t.Errorf("InstalledFiles = %v, want [SKILL.md]", got)
 			}
 
+			if got := Check(a, dir); got != Installed {
+				t.Errorf("after Install, Check = %v, want installed", got)
+			}
+
 			// Install is idempotent (overwrites)
 			if err := Install(a, dir); err != nil {
 				t.Fatalf("re-Install: %v", err)
@@ -283,6 +288,58 @@ func TestInstallExistsUninstall(t *testing.T) {
 				t.Errorf("expected dir removed, stat err = %v", err)
 			}
 		})
+	}
+}
+
+func TestCheckAndInstallCompareBytes(t *testing.T) {
+	for _, name := range allAgents {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			a, _ := Lookup(name)
+			path := filepath.Join(dir, "SKILL.md")
+
+			if got := Check(a, dir); got != NotInstalled {
+				t.Errorf("empty dir: Check = %v, want not installed", got)
+			}
+
+			if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := Check(a, dir); got != Stale {
+				t.Errorf("different SKILL.md: Check = %v, want stale", got)
+			}
+
+			if err := Install(a, dir); err != nil {
+				t.Fatalf("Install: %v", err)
+			}
+			if got := Check(a, dir); got != Installed {
+				t.Errorf("after Install: Check = %v, want installed", got)
+			}
+
+			// A matching file is not written again, so its mtime stays put.
+			old := time.Now().Add(-time.Hour).Truncate(time.Second)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			if err := Install(a, dir); err != nil {
+				t.Fatalf("re-Install: %v", err)
+			}
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fi.ModTime().Equal(old) {
+				t.Errorf("identical Install rewrote SKILL.md: mtime %v, want %v", fi.ModTime(), old)
+			}
+		})
+	}
+}
+
+func TestStatusString(t *testing.T) {
+	for s, want := range map[Status]string{NotInstalled: "not installed", Installed: "installed", Stale: "stale"} {
+		if got := s.String(); got != want {
+			t.Errorf("Status(%d) = %q, want %q", s, got, want)
+		}
 	}
 }
 
