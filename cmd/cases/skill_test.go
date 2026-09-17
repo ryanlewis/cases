@@ -134,6 +134,22 @@ func TestSkillCheck(t *testing.T) {
 	if r.err == nil || !strings.Contains(r.err.Error(), "supported") {
 		t.Errorf("check bogus: err = %v, want the supported agents listed", r.err)
 	}
+
+	// An agent whose directory cannot be located does not stop the others
+	// being checked, unless it is the one named.
+	t.Setenv("HOME", "")
+	t.Setenv("CODEX_HOME", "")
+	r = runCases(t, "", "skill", "check")
+	var ee *exitError
+	if !errors.As(r.err, &ee) || ee.code != 1 {
+		t.Errorf("check with codex unresolved: err = %v, want exit 1 for the stale claude skill", r.err)
+	}
+	if !strings.Contains(r.stderr, "codex: path unresolved") {
+		t.Errorf("check with codex unresolved: stderr = %q, want codex reported", r.stderr)
+	}
+	if r = runCases(t, "", "skill", "check", "codex"); r.err == nil || errors.As(r.err, &ee) {
+		t.Errorf("check codex unresolved: err = %v, want a plain error", r.err)
+	}
 }
 
 func TestSkillUnknownAgent(t *testing.T) {

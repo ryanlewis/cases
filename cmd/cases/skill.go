@@ -141,7 +141,13 @@ func (c *SkillCheckCmd) Run(d *Deps) error {
 	for _, a := range agents {
 		dir, err := a.DefaultDir()
 		if err != nil {
-			return err
+			if c.Agent != "" {
+				return err
+			}
+			// As in `skill list`: an agent whose directory cannot be
+			// located has nothing installed that we can find.
+			fmt.Fprintf(d.Stderr, "%s: path unresolved: %v\n", a.Name(), err)
+			continue
 		}
 		if skill.Check(a, dir) == skill.Stale {
 			stale++
