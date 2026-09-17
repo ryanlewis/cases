@@ -161,8 +161,9 @@ func (d *Deps) caseDir(id string) (string, error) {
 
 // findCase resolves a case id typed by the human to its directory: the case
 // with that exact id, or else the one case whose id contains it. No match, or
-// more than one, is an error. Agent commands and wait use caseDir, which takes
-// the exact id only.
+// more than one, is an error. An id that is whole, a timestamp and a slug, is
+// taken exactly: a pruned case must not resolve to a sibling such as id-2.
+// Agent commands and wait use caseDir, which takes the exact id only.
 func (d *Deps) findCase(id string) (string, error) {
 	dir, err := store.CaseDir(d.Store, id)
 	if err != nil {
@@ -170,6 +171,9 @@ func (d *Deps) findCase(id string) (string, error) {
 	}
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
 		return dir, nil
+	}
+	if store.IsWholeID(id) {
+		return "", fmt.Errorf("no case %q", id)
 	}
 	ids, err := store.CaseIDs(d.Store)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -12,7 +12,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
 - `serve`, `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked.
-- **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case id contains "<id>"`.
+- **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case "<id>"`.
 
 ## The store
 
