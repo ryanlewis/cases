@@ -482,6 +482,11 @@ Serve refuses to start while a live serve holds the file for the same store,
 and names that serve's URL and pid. If the file cannot be read or parsed,
 `cases status` prints an `Error:` line naming it and exits 1.
 
+`cases show` uses the same file to print a `url` line, the case's page in the
+running inbox, and `show --json` has it as `url`. With no serve running there
+is no `url` line and the field is empty. A file that cannot be read leaves it
+empty too, with a warning on stderr.
+
 The check has three limits. It cannot tell a hung serve from a healthy one. A
 store reached by two different paths (a symlink) gets two files. Two serves
 started at the same moment on one store can both pass the check.

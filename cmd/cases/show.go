@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ryanlewis/cases/internal/instance"
 	"github.com/ryanlewis/cases/internal/store"
 )
 
@@ -26,24 +28,42 @@ func (c *ShowCmd) Run(d *Deps) error {
 		return err
 	}
 	d.warn(cs, nil)
+	link := d.inboxLink(cs.ID)
 	if c.JSON {
 		enc := json.NewEncoder(d.Stdout)
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)
-		return enc.Encode(shownCase{cs, cs.Revision()})
+		return enc.Encode(shownCase{cs, cs.Revision(), link})
 	}
-	printCase(d.Stdout, cs)
+	printCase(d.Stdout, cs, link)
 	return nil
 }
 
-// shownCase is the case as show --json prints it: the case's own JSON with its
-// revision beside it, which answer and resume take as --revision.
-type shownCase struct {
-	*store.Case
-	Revision int `json:"revision"`
+// inboxLink is the case's page in the web inbox running for the store, or ""
+// when none is. A state file that cannot be read is a warning, not a reason
+// to fail show.
+func (d *Deps) inboxLink(id string) string {
+	info, err := instance.Running(d.Store)
+	if err != nil {
+		fmt.Fprintf(d.Stderr, "warning: %v\n", err)
+		return ""
+	}
+	if info == nil {
+		return ""
+	}
+	return strings.TrimSuffix(info.URL, "/") + "/cases/" + url.PathEscape(id)
 }
 
-func printCase(w io.Writer, c *store.Case) {
+// shownCase is the case as show --json prints it: the case's own JSON with its
+// revision beside it, which answer and resume take as --revision, and its link
+// in the running web inbox.
+type shownCase struct {
+	*store.Case
+	Revision int    `json:"revision"`
+	URL      string `json:"url"`
+}
+
+func printCase(w io.Writer, c *store.Case, link string) {
 	fmt.Fprintf(w, "%s\n\n", c.Title)
 	field := func(name, value string) {
 		if value != "" {
@@ -51,6 +71,7 @@ func printCase(w io.Writer, c *store.Case) {
 		}
 	}
 	field("id", c.ID)
+	field("url", link)
 	field("state", string(c.State))
 	field("kind", string(c.Kind))
 	field("urgency", string(c.Urgency))

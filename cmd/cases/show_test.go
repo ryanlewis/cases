@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ryanlewis/cases/internal/instance"
 )
 
 func TestShow(t *testing.T) {
@@ -116,6 +118,68 @@ func TestShowReportsAnUnknownEventAsVersionSkew(t *testing.T) {
 		t.Errorf("stdout missing the problem:\n%s", r.stdout)
 	}
 	if r.stderr != "warning: "+id+": "+problem+"\n" {
+		t.Errorf("stderr = %q", r.stderr)
+	}
+}
+
+func TestShowURLOfTheRunningInbox(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	showURL := func() string {
+		t.Helper()
+		var c struct {
+			URL *string `json:"url"`
+		}
+		if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &c); err != nil {
+			t.Fatal(err)
+		}
+		if c.URL == nil {
+			t.Fatal("show --json has no url field")
+		}
+		return *c.URL
+	}
+
+	if got := showURL(); got != "" {
+		t.Errorf("url with no inbox running = %q, want empty", got)
+	}
+	if out := mustRun(t, "--store", root, "show", id); strings.Contains(out, "url:") {
+		t.Errorf("url line with no inbox running:\n%s", out)
+	}
+
+	base, stop := startServe(t, root)
+	want := base + "cases/" + id
+	if got := showURL(); got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "url:      "+want+"\n") {
+		t.Errorf("show missing the url line %q:\n%s", want, out)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if got := showURL(); got != "" {
+		t.Errorf("url after the inbox stopped = %q, want empty", got)
+	}
+}
+
+func TestShowWarnsOnADamagedInstanceFile(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	path, err := instance.Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := runCases(t, "", "--store", root, "show", id)
+	if r.err != nil || !strings.Contains(r.stdout, "id:       "+id) || strings.Contains(r.stdout, "url:") {
+		t.Errorf("show with a damaged instance file: err %v\n%s", r.err, r.stdout)
+	}
+	if !strings.HasPrefix(r.stderr, "warning: read "+path+": ") {
 		t.Errorf("stderr = %q", r.stderr)
 	}
 }
