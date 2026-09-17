@@ -7,8 +7,9 @@
 // still counts. The first poll only records what is there.
 //
 // The rule is fixed for now: a case that is open because the agent opened it,
-// followed up on an answer (a note that reopens the case), or resumed it after
-// a park. Every urgency matches; the tab filters by urgency itself.
+// followed up on an answer (a note that reopens the case), resumed it after a
+// park, or replied with a note after the human resumed it. Every urgency
+// matches; the tab filters by urgency itself.
 package notify
 
 import (
@@ -27,6 +28,9 @@ const (
 	EventOpen   = "open"
 	EventReopen = "reopen"
 	EventResume = "resume"
+	// EventReply is the agent's first note after the human resumed a parked
+	// case: the case was already open, but the human is waiting on it.
+	EventReply = "reply"
 )
 
 // SinkBrowser is the only sink there is.
@@ -169,22 +173,28 @@ func (e *Engine) Observe(cases []*store.Case) int {
 // Landed reports whether the case is on the human because of one of the
 // fixed rule's events, and which: the case is open, and the latest event
 // that put it there, looking past amends and notes on the open case, is the
-// agent opening it, reopening it with a note, or resuming it.
+// agent opening it, reopening it with a note, or resuming it. When that
+// event is the human resuming it, the agent's first note after the resume
+// is the one that put it on the human, as for `cases wait --for human`.
 func Landed(c *store.Case) (store.Event, string, bool) {
 	n := len(c.Events)
 	if c.State != store.StateOpen || n == 0 {
 		return store.Event{}, "", false
 	}
-	i := n - 1
+	i, note := n-1, -1
 	for i > 0 {
 		ev := c.Events[i]
-		if ev.Type != store.EventAmend && (ev.Type != store.EventNote || ev.From() != store.StateOpen) {
+		if ev.Type == store.EventNote && ev.From() == store.StateOpen {
+			note = i
+		} else if ev.Type != store.EventAmend {
 			break
 		}
 		i--
 	}
 	ev := c.Events[i]
 	switch {
+	case ev.Type == store.EventResume && ev.Author == store.AuthorHuman && note >= 0:
+		return c.Events[note], EventReply, true
 	case ev.Type == store.EventOpen:
 		return ev, EventOpen, true
 	case ev.Type == store.EventNote:
@@ -206,6 +216,8 @@ func item(c *store.Case, ev store.Event, name string, now time.Time) Item {
 		body = append(body, "the agent followed up")
 	case EventResume:
 		body = append(body, "back in the inbox")
+	case EventReply:
+		body = append(body, "the agent replied")
 	}
 	return Item{
 		Sink:     SinkBrowser,

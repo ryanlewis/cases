@@ -622,10 +622,11 @@ A notification fires when a case becomes open because the agent:
 
 - opened it,
 - followed up an answered or picked-up case with a note, which reopens it, or
-- resumed it after it was parked.
+- resumed it after it was parked, or
+- wrote its first note after you resumed a parked case yourself.
 
-It does not fire for a note or an amend on a case that is already open, for a
-case you resumed yourself, for a case that was answered or withdrawn before
+It does not fire for any other note or amend on a case that is already open,
+for your own resume, for a case that was answered or withdrawn before
 serve saw it, or for cases already in the store when serve started. Clicking
 it opens the case in that tab.
 

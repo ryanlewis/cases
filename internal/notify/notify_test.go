@@ -130,6 +130,22 @@ func TestWhatLandsOnTheHuman(t *testing.T) {
 			t.Errorf("feed %q has %s", got, not)
 		}
 	}
+
+	// The agent's reply to the human's resume lands the case on the human;
+	// its next note, or an amend, does not fire again.
+	must(t)(store.Amend(parkedByHuman.Dir, store.AmendRecord{Context: "Looking."}))
+	must(t)(store.Note(parkedByHuman.Dir, note))
+	if n := e.Observe(poll(t, root)); n != 1 {
+		t.Errorf("reply: added %d, want 1", n)
+	}
+	last := feed.After(4).Items
+	if len(last) != 1 || last[0].Event.Name != EventReply || last[0].Event.File != "0005-agent-note.json" || last[0].Body != "whenever stuck · the agent replied" {
+		t.Errorf("reply items = %+v", last)
+	}
+	must(t)(store.Note(parkedByHuman.Dir, note))
+	if n := e.Observe(poll(t, root)); n != 0 {
+		t.Errorf("second note after the reply: added %d, want 0", n)
+	}
 }
 
 func TestACaseOpenedAndFollowedUpBetweenPollsFiresOnce(t *testing.T) {
