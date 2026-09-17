@@ -767,6 +767,34 @@ func TestCasePageShowsTheBrief(t *testing.T) {
 	}
 }
 
+func TestTimestampsAreLocalWithAnAge(t *testing.T) {
+	old := zone
+	zone = time.FixedZone("XST", -5*60*60)
+	t.Cleanup(func() { zone = old })
+
+	a := newApp(t)
+	opened := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
+	c := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "Stuck", OpenedAt: opened})
+	if _, err := store.Park(c.Dir, store.ParkRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	page := a.get(t, "/cases/"+c.ID)
+	for _, want := range []*regexp.Regexp{
+		// The header: the day before in XST, and days old.
+		regexp.MustCompile(`<span class="age">opened 2026-01-01 22:04 XST, \d+d ago</span>`),
+		// The thread: the open event, and the park just written.
+		regexp.MustCompile(`<span>open</span> <span class="age">2026-01-01 22:04 XST, \d+d ago</span>`),
+		regexp.MustCompile(`<span>park</span> <span class="age">\d{4}-\d\d-\d\d \d\d:\d\d XST, now</span>`),
+	} {
+		if !want.MatchString(page) {
+			t.Errorf("page does not match %s:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "UTC") {
+		t.Error("page still shows a UTC stamp")
+	}
+}
+
 func TestApprovalRowNote(t *testing.T) {
 	a := newApp(t)
 	rows := slices.Clone(approvalRows)

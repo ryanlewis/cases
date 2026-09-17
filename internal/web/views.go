@@ -116,6 +116,10 @@ func isWebLink(s string) bool {
 	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
+// zone is the time zone pages show timestamps in: the serve process's local
+// zone. The store keeps them in UTC. Tests pin it.
+var zone = time.Local
+
 var funcs = template.FuncMap{
 	"markdown":   renderMarkdown,
 	"pathEscape": url.PathEscape,
@@ -125,7 +129,17 @@ var funcs = template.FuncMap{
 		if t.IsZero() {
 			return ""
 		}
-		return t.UTC().Format("2006-01-02 15:04 UTC")
+		return t.In(zone).Format("2006-01-02 15:04 MST")
+	},
+	// age is how long ago t was, as a phrase: "5m ago", or "now".
+	"age": func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		if a := Age(t, time.Now()); a != "now" {
+			return a + " ago"
+		}
+		return "now"
 	},
 	// checked reports whether a re-rendered form had value selected for name.
 	"checked": func(form url.Values, name, value string) bool {
