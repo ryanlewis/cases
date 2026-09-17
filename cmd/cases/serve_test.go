@@ -18,6 +18,7 @@ import (
 
 	"github.com/ryanlewis/cases/internal/instance"
 	"github.com/ryanlewis/cases/internal/store"
+	"github.com/ryanlewis/cases/internal/web"
 )
 
 func TestServeRefusesNonLoopback(t *testing.T) {
@@ -160,6 +161,7 @@ func TestServeScreenStats(t *testing.T) {
 		Stats:    countCases(cases, start, now),
 		Uptime:   now.Sub(start),
 		Requests: 1,
+		Notified: 1,
 		Log:      []string{"GET / 200 1ms"},
 		Keys:     true,
 		Now:      now,
@@ -172,7 +174,7 @@ func TestServeScreenStats(t *testing.T) {
 		"parked        1",
 		"with agent    1   1 answered · 0 picked up",
 		"closed        1   today · 1 in all",
-		"since start 1 request · 1 answer · 1 park · 0 resumes",
+		"since start 1 request · 1 answer · 1 park · 0 resumes · 1 notification",
 		"last event  4m ago",
 		"  GET / 200 1ms",
 		agentHint[0],
@@ -254,4 +256,36 @@ func waitForURL(t *testing.T, stdout *syncBuffer) string {
 	}
 	t.Fatalf("serve printed no URL: %q", stdout.String())
 	return ""
+}
+
+func TestServeQueuesNotificationsWithNoTabOpen(t *testing.T) {
+	root := t.TempDir()
+	srv, err := web.New(store.NewDir(root), "127.0.0.1:8765", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first read records the store as it is.
+	if err := srv.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pollForNotifications(ctx, srv, 10*time.Millisecond)
+	}()
+
+	openDecision(t, root)
+	for deadline := time.Now().Add(5 * time.Second); srv.Notified() == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if n := srv.Notified(); n != 1 {
+		t.Errorf("notified = %d, want 1 without any request", n)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the poll did not stop")
+	}
 }

@@ -95,6 +95,7 @@ type screenView struct {
 	Stats    serveStats
 	Uptime   time.Duration
 	Requests int64
+	Notified int64 // notifications queued for the browser since start
 	Log      []string
 	Keys     bool // q is read from the keyboard
 	Color    bool
@@ -142,9 +143,10 @@ func render(v screenView) []string {
 			fmt.Sprintf("   %d answered", s.Answered)+st(dim, " · ")+fmt.Sprintf("%d picked up", s.PickedUp),
 		label("closed")+count(s.ClosedToday)+"   today"+st(dim, " · ")+fmt.Sprintf("%d in all", s.Closed),
 		"",
-		label("since start")+fmt.Sprintf("%s · %s · %s · %s",
+		label("since start")+fmt.Sprintf("%s · %s · %s · %s · %s",
 			plural(int(v.Requests), "request"), plural(s.Answers, "answer"),
-			plural(s.Parks, "park"), plural(s.Resumes, "resume")),
+			plural(s.Parks, "park"), plural(s.Resumes, "resume"),
+			plural(int(v.Notified), "notification")),
 		label("last event")+ago(s.LastEvent, v.Now),
 		"",
 		st(dim, "log"),
@@ -213,8 +215,10 @@ type statusScreen struct {
 	part  []byte // a log write not yet ended by a newline
 
 	poller store.CasePoller
-	drawn  int    // lines on screen from the last frame
-	frame  string // the last frame, to skip identical redraws
+	// notified counts the notifications serve has queued; nil counts none.
+	notified func() int64
+	drawn    int    // lines on screen from the last frame
+	frame    string // the last frame, to skip identical redraws
 }
 
 // newStatusScreen shows root, the store's path, and counts the cases in cases.
@@ -317,6 +321,10 @@ func readKeys(r io.Reader, quit func()) {
 }
 
 func (s *statusScreen) draw(keys bool, requests int64) {
+	var notified int64
+	if s.notified != nil {
+		notified = s.notified()
+	}
 	now := time.Now()
 	cases, _, err := s.poller.Poll()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -331,6 +339,7 @@ func (s *statusScreen) draw(keys bool, requests int64) {
 		Stats:    withErr(countCases(cases, s.since, now), err),
 		Uptime:   now.Sub(s.since),
 		Requests: requests,
+		Notified: notified,
 		Log:      log,
 		Keys:     keys,
 		Color:    s.color,

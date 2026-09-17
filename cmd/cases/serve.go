@@ -71,6 +71,9 @@ func (c *ServeCmd) Run(d *Deps) error {
 		return err
 	}
 	srv.Actor = humanActor(c.As)
+	if screen != nil {
+		screen.notified = srv.Notified
+	}
 	ctx := d.Context
 	if ctx == nil {
 		var stop context.CancelFunc
@@ -86,8 +89,8 @@ func (c *ServeCmd) Run(d *Deps) error {
 	var requests atomic.Int64
 	handler := srv.Handler()
 	counted := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Leave out the refreshes an open tab makes every two seconds.
-		if r.Header.Get("HX-Request") != "true" {
+		// Leave out the refreshes and notification checks an open tab makes.
+		if !web.IsPoll(r) {
 			requests.Add(1)
 		}
 		handler.ServeHTTP(w, r)
@@ -105,7 +108,39 @@ func (c *ServeCmd) Run(d *Deps) error {
 		restore := screen.run(ctx, quit, d.Stdin, &requests)
 		defer restore()
 	}
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		pollForNotifications(ctx, srv, notifyPoll)
+	}()
+	// Serve returns before ctx ends when the listener fails; stop the poll
+	// and wait for it either way.
+	defer func() {
+		quit()
+		<-polled
+	}()
 	return web.Serve(ctx, ln, counted)
+}
+
+// notifyPoll is how often serve reads the store for notifications when no tab
+// is asking.
+const notifyPoll = 2 * time.Second
+
+// pollForNotifications reads the store through the server every interval
+// until ctx ends, so cases that land on the human are queued for the browser
+// while no tab is open. A failed read is left to the requests and the status
+// screen to report.
+func pollForNotifications(ctx context.Context, srv *web.Server, interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		_ = srv.Poll()
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // openBrowser opens url with the desktop's handler and does not wait for it.
