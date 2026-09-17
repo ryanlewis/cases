@@ -12,12 +12,12 @@ import (
 )
 
 type ShowCmd struct {
-	ID   string `arg:"" help:"Case id."`
+	ID   string `arg:"" help:"Case id, or any part of it that names one case."`
 	JSON bool   `help:"Print JSON, including every event file as written." short:"j"`
 }
 
 func (c *ShowCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
+	dir, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}

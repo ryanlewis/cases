@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,5 +185,43 @@ func TestReportExitStatus(t *testing.T) {
 	code, stderr = status(runCases(t, "", "--store", root, "wait", "--id", id, "--timeout", "10ms"))
 	if code != exitTimeout || strings.HasPrefix(stderr, "Error: ") {
 		t.Errorf("wait timeout: exit %d, stderr %q; want exit 2 with no Error: line", code, stderr)
+	}
+}
+
+func TestFindCaseTakesPartOfAnID(t *testing.T) {
+	root := t.TempDir()
+	pin := openDecision(t, root)
+	float := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "whenever", "--title", "Float bun"))
+	d := &Deps{Store: root}
+
+	for part, want := range map[string]string{pin: pin, "pin-bun": pin, "float": float} {
+		dir, err := d.findCase(part)
+		if err != nil || dir != filepath.Join(root, want) {
+			t.Errorf("findCase(%q) = %q, %v; want %s", part, dir, err, want)
+		}
+	}
+
+	both := []string{pin, float}
+	slices.Sort(both)
+	_, err := d.findCase("bun")
+	if err == nil || err.Error() != "\"bun\" matches 2 cases:\n  "+strings.Join(both, "\n  ") {
+		t.Errorf("ambiguous: err = %v", err)
+	}
+	if _, err := d.findCase("mirror"); err == nil || err.Error() != `no case id contains "mirror"` {
+		t.Errorf("no match: err = %v", err)
+	}
+	if _, err := d.findCase("../etc"); err == nil || !strings.Contains(err.Error(), "invalid case id") {
+		t.Errorf("path: err = %v", err)
+	}
+	if _, err := (&Deps{Store: filepath.Join(root, "missing")}).findCase("bun"); err == nil || err.Error() != `no case id contains "bun"` {
+		t.Errorf("missing store: err = %v", err)
+	}
+
+	// An exact id wins over the longer ids that contain it.
+	if err := os.Mkdir(filepath.Join(root, pin+"-2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := d.findCase(pin); err != nil || dir != filepath.Join(root, pin) {
+		t.Errorf("exact id beside a longer one: %q, %v", dir, err)
 	}
 }

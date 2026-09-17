@@ -9,7 +9,7 @@ import (
 )
 
 type AnswerCmd struct {
-	ID string `arg:"" help:"Case id."`
+	ID string `arg:"" help:"Case id, or any part of it that names one case."`
 
 	Option   int      `help:"decision: choose option N (1-based)." xor:"response" placeholder:"N"`
 	Other    bool     `help:"decision: Other, see note (needs --note)." xor:"response"`
@@ -27,7 +27,7 @@ type AnswerCmd struct {
 }
 
 func (c *AnswerCmd) Run(d *Deps) error {
-	dir, err := d.caseDir(c.ID)
+	dir, err := d.findCase(c.ID)
 	if err != nil {
 		return err
 	}

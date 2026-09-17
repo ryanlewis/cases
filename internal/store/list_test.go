@@ -270,3 +270,17 @@ func TestPollerSeesEntriesAddedWithinOneMtimeStep(t *testing.T) {
 		t.Error("settled case was reloaded")
 	}
 }
+
+func TestCaseIDs(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"b-case", "a-case", ".archive"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, "stray.json", "{}")
+	ids, err := CaseIDs(root)
+	if err != nil || strings.Join(ids, ",") != "a-case,b-case" {
+		t.Errorf("CaseIDs = %v, %v", ids, err)
+	}
+}

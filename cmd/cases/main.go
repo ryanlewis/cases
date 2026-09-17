@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -155,6 +157,37 @@ func report(w io.Writer, err error) int {
 // caseDir resolves a case id to its directory in the store.
 func (d *Deps) caseDir(id string) (string, error) {
 	return store.CaseDir(d.Store, id)
+}
+
+// findCase resolves a case id typed by the human to its directory: the case
+// with that exact id, or else the one case whose id contains it. No match, or
+// more than one, is an error. Agent commands and wait use caseDir, which takes
+// the exact id only.
+func (d *Deps) findCase(id string) (string, error) {
+	dir, err := store.CaseDir(d.Store, id)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		return dir, nil
+	}
+	ids, err := store.CaseIDs(d.Store)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	var matches []string
+	for _, name := range ids {
+		if strings.Contains(name, id) {
+			matches = append(matches, name)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no case id contains %q", id)
+	case 1:
+		return filepath.Join(d.Store, matches[0]), nil
+	}
+	return "", fmt.Errorf("%q matches %d cases:\n  %s", id, len(matches), strings.Join(matches, "\n  "))
 }
 
 // readText reads a flag's file argument; "-" means stdin.
