@@ -39,9 +39,10 @@ func frameLines(t *testing.T, out string) []string {
 }
 
 func TestScreenDrawRedrawsInPlace(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
+	db := openStore(t, storePath)
 	var out bytes.Buffer
-	s := newStatusScreen(root, store.NewDir(root), "http://127.0.0.1:8765/", &out, false)
+	s := newStatusScreen(storePath, db, "http://127.0.0.1:8765/", &out, false)
 
 	s.draw(false, 0)
 	first := out.String()
@@ -52,7 +53,7 @@ func TestScreenDrawRedrawsInPlace(t *testing.T) {
 	got := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"inbox       http://127.0.0.1:8765/",
-		"store       " + root,
+		"store       " + storePath,
 		"open          0   0 blocking · 0 today · 0 whenever",
 		"since start 0 requests · 0 answers · 0 parks · 0 resumes · 0 notifications",
 		"last event  none",
@@ -78,7 +79,7 @@ func TestScreenDrawRedrawsInPlace(t *testing.T) {
 	}
 
 	// A new case and a request: move up over the last frame and draw again.
-	if _, err := store.Create(root, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "Look"}); err != nil {
+	if _, err := db.Create(t.Context(), store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "Look"}); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -103,19 +104,19 @@ func TestScreenDrawRedrawsInPlace(t *testing.T) {
 func TestScreenDrawStoreStates(t *testing.T) {
 	t.Run("missing store is empty", func(t *testing.T) {
 		var out bytes.Buffer
-		absent := filepath.Join(t.TempDir(), "absent")
-		newStatusScreen(absent, store.NewDir(absent), "u", &out, false).draw(false, 0)
+		absent := filepath.Join(t.TempDir(), "absent.db")
+		newStatusScreen(absent, openStore(t, absent), "u", &out, false).draw(false, 0)
 		if got := out.String(); strings.Contains(got, "cannot read the store") || !strings.Contains(got, "open          0") {
 			t.Errorf("frame = %q, want an empty store and no error", got)
 		}
 	})
 	t.Run("unreadable store is reported", func(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "store")
-		if err := os.WriteFile(file, nil, 0o600); err != nil {
+		if err := os.WriteFile(file, []byte("not a database\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
-		newStatusScreen(file, store.NewDir(file), "u", &out, true).draw(false, 0)
+		newStatusScreen(file, openStore(t, file), "u", &out, true).draw(false, 0)
 		if got := out.String(); !strings.Contains(got, "\x1b[1;31mcannot read the store: ") {
 			t.Errorf("frame = %q, want the error in red", got)
 		}
@@ -271,9 +272,9 @@ func TestUptimeAndAgo(t *testing.T) {
 	}
 }
 
-// newScreenAt is a status screen over an empty store in a scratch directory.
+// newScreenAt is a status screen over a store that does not exist yet.
 func newScreenAt(t *testing.T, url string, out io.Writer, color bool) *statusScreen {
 	t.Helper()
-	root := t.TempDir()
-	return newStatusScreen(root, store.NewDir(root), url, out, color)
+	storePath := newStore(t)
+	return newStatusScreen(storePath, openStore(t, storePath), url, out, color)
 }

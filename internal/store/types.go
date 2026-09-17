@@ -1,7 +1,8 @@
-// Package store reads and writes the case store: one directory per case, one
-// JSON file per event, named NNNN-<author>-<event>.json. A case's state is the
-// fold of its event files in filename order. Files are only ever added, never
-// edited in place.
+// Package store reads and writes the case store: one SQLite file holding a
+// row per case and a row per event, the event's JSON record as written. Each
+// event is numbered within its case and keeps the name it had as a file,
+// NNNN-<author>-<event>.json. A case's state is the fold of its events in
+// number order. Events are only ever added, never changed.
 package store
 
 import (
@@ -48,7 +49,7 @@ func (u Urgency) Rank() int {
 }
 
 // State is where a case is in its lifecycle. It is never stored; it is derived
-// by folding the event files.
+// by folding the events.
 type State string
 
 const (
@@ -63,7 +64,7 @@ const (
 // States lists every state.
 var States = []State{StateOpen, StateAnswered, StatePickedUp, StateClosed, StateWithdrawn, StateParked}
 
-// Author is who wrote an event. It is part of the file name.
+// Author is who wrote an event. It is part of the event's file name.
 type Author string
 
 const (
@@ -71,7 +72,7 @@ const (
 	AuthorHuman Author = "human"
 )
 
-// EventType is the event a file records. It is part of the file name.
+// EventType is the event a record is. It is part of the event's file name.
 type EventType string
 
 const (
@@ -114,7 +115,7 @@ type Row struct {
 	Link   string `json:"link"`
 }
 
-// OpenRecord is the body of NNNN-agent-open.json.
+// OpenRecord is the record of an open event, NNNN-agent-open.json.
 type OpenRecord struct {
 	Kind    Kind     `json:"kind"`
 	Urgency Urgency  `json:"urgency"`
@@ -134,7 +135,8 @@ type OpenRecord struct {
 	OpenedAt time.Time `json:"opened_at"`
 }
 
-// AmendRecord is the body of NNNN-agent-amend.json: a change to an open case.
+// AmendRecord is the record of an amend event, NNNN-agent-amend.json: a
+// change to an open case.
 // Options, rows, links and labels are added after the case's own; a body or
 // context replaces the case's. A field left empty leaves the case's as it was.
 type AmendRecord struct {
@@ -155,8 +157,8 @@ type RowAnswer struct {
 	Note    string `json:"note,omitempty"`
 }
 
-// AnswerRecord is the body of NNNN-human-answer.json. Which fields may be set
-// depends on the case kind:
+// AnswerRecord is the record of an answer event, NNNN-human-answer.json.
+// Which fields may be set depends on the case kind:
 //
 //   - decision: Choice (1-based index into the options) or Other with a Note
 //   - approval: Rows, one verdict per row of the case
@@ -180,21 +182,22 @@ type AnswerRecord struct {
 	AnsweredAt time.Time   `json:"answered_at"`
 }
 
-// PickupRecord is the body of NNNN-agent-pickup.json.
+// PickupRecord is the record of a pickup event, NNNN-agent-pickup.json.
 type PickupRecord struct {
 	By         string    `json:"by,omitempty"`
 	Actor      *Actor    `json:"actor,omitempty"`
 	PickedUpAt time.Time `json:"picked_up_at"`
 }
 
-// NoteRecord is the body of NNNN-agent-note.json: a follow-up in the thread.
+// NoteRecord is the record of a note event, NNNN-agent-note.json: a
+// follow-up in the thread.
 type NoteRecord struct {
 	Body    string    `json:"body"`
 	Actor   *Actor    `json:"actor,omitempty"`
 	NotedAt time.Time `json:"noted_at"`
 }
 
-// CloseRecord is the body of NNNN-agent-close.json.
+// CloseRecord is the record of a close event, NNNN-agent-close.json.
 type CloseRecord struct {
 	Outcome  string    `json:"outcome"`
 	Links    []string  `json:"links,omitempty"`
@@ -202,21 +205,21 @@ type CloseRecord struct {
 	ClosedAt time.Time `json:"closed_at"`
 }
 
-// WithdrawRecord is the body of NNNN-agent-withdraw.json.
+// WithdrawRecord is the record of a withdraw event, NNNN-agent-withdraw.json.
 type WithdrawRecord struct {
 	Reason      string    `json:"reason,omitempty"`
 	Actor       *Actor    `json:"actor,omitempty"`
 	WithdrawnAt time.Time `json:"withdrawn_at"`
 }
 
-// ParkRecord is the body of NNNN-human-park.json.
+// ParkRecord is the record of a park event, NNNN-human-park.json.
 type ParkRecord struct {
 	Note     string    `json:"note,omitempty"`
 	Actor    *Actor    `json:"actor,omitempty"`
 	ParkedAt time.Time `json:"parked_at"`
 }
 
-// ResumeRecord is the body of NNNN-<author>-resume.json.
+// ResumeRecord is the record of a resume event, NNNN-<author>-resume.json.
 type ResumeRecord struct {
 	Actor     *Actor    `json:"actor,omitempty"`
 	ResumedAt time.Time `json:"resumed_at"`
@@ -224,7 +227,7 @@ type ResumeRecord struct {
 
 // Actor is who wrote an event: the human's name, or the agent session's. It is
 // optional and recorded as given; the store does not check it against the
-// author in the file name or decide who may write what.
+// event's author or decide who may write what.
 type Actor struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`

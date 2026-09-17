@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,18 +10,18 @@ import (
 	"github.com/ryanlewis/cases/internal/store"
 )
 
-func openApproval(t *testing.T, root string) string {
+func openApproval(t *testing.T, storePath string) string {
 	t.Helper()
-	out := mustRun(t, "--store", root, "open", "--kind", "approval", "--urgency", "today", "--title", "Scripts",
+	out := mustRun(t, "--store", storePath, "open", "--kind", "approval", "--urgency", "today", "--title", "Scripts",
 		"--context", "Release 1.4", "--label", "release", "--row", `{"id":"deps","label":"Install deps","script":"npm ci","link":"https://example.com/deps"}`)
 	return strings.TrimSpace(out)
 }
 
 func TestAmendRoundTrip(t *testing.T) {
-	root := t.TempDir()
-	id := openApproval(t, root)
+	storePath := newStore(t)
+	id := openApproval(t, storePath)
 
-	r := runCases(t, "Two scripts now.\n", "--store", root, "amend", id, "--body-file", "-",
+	r := runCases(t, "Two scripts now.\n", "--store", storePath, "amend", id, "--body-file", "-",
 		"--row", `{"id":"mig","label":"Migrate","script":"make migrate","link":"https://example.com/mig"}`,
 		"--link", "https://example.com/a,b", "--context", "Release 1.4, then 1.4.1")
 	if r.err != nil {
@@ -45,7 +44,7 @@ func TestAmendRoundTrip(t *testing.T) {
 			Data json.RawMessage `json:"data"`
 		} `json:"events"`
 	}
-	if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &shown); err != nil {
+	if err := json.Unmarshal([]byte(mustRun(t, "--store", storePath, "show", id, "--json")), &shown); err != nil {
 		t.Fatal(err)
 	}
 	if shown.State != "open" || shown.Body != "Two scripts now.\n" || shown.Context != "Release 1.4, then 1.4.1" ||
@@ -63,7 +62,7 @@ func TestAmendRoundTrip(t *testing.T) {
 		t.Errorf("open event = %+v", opened)
 	}
 
-	out := mustRun(t, "--store", root, "show", id)
+	out := mustRun(t, "--store", storePath, "show", id)
 	for _, want := range []string{"Two scripts now.", "[mig] Migrate", "0002 agent amend", "replaced the body", "added row [mig] Migrate",
 		"added link: https://example.com/a,b", "replaced the context: Release 1.4, then 1.4.1"} {
 		if !strings.Contains(out, want) {
@@ -72,8 +71,8 @@ func TestAmendRoundTrip(t *testing.T) {
 	}
 
 	// The answer needs a verdict on the added row too.
-	mustRun(t, "--store", root, "answer", id, "--row", "deps=approve", "--row", "mig=hold")
-	r = runCases(t, "", "--store", root, "amend", id, "--link", "https://example.com/late")
+	mustRun(t, "--store", storePath, "answer", id, "--row", "deps=approve", "--row", "mig=hold")
+	r = runCases(t, "", "--store", storePath, "amend", id, "--link", "https://example.com/late")
 	if r.err == nil || !strings.Contains(r.err.Error(), "cannot amend a case that is answered") {
 		t.Errorf("amend after the answer: err = %v", r.err)
 	}
@@ -82,15 +81,15 @@ func TestAmendRoundTrip(t *testing.T) {
 // show prints the body and context an amend replaced, in full, under the line
 // saying so. The first amend replaced no body, so it has none to print.
 func TestShowPrintsWhatAnAmendReplaced(t *testing.T) {
-	root := t.TempDir()
-	id := openApproval(t, root)
-	if r := runCases(t, "# Scripts\n\nTwo scripts now.\n", "--store", root, "amend", id, "--body-file", "-"); r.err != nil {
+	storePath := newStore(t)
+	id := openApproval(t, storePath)
+	if r := runCases(t, "# Scripts\n\nTwo scripts now.\n", "--store", storePath, "amend", id, "--body-file", "-"); r.err != nil {
 		t.Fatal(r.err)
 	}
-	if r := runCases(t, "Three scripts now.\n", "--store", root, "amend", id, "--body-file", "-", "--context", "Release 1.4.1"); r.err != nil {
+	if r := runCases(t, "Three scripts now.\n", "--store", storePath, "amend", id, "--body-file", "-", "--context", "Release 1.4.1"); r.err != nil {
 		t.Fatal(r.err)
 	}
-	out := mustRun(t, "--store", root, "show", id)
+	out := mustRun(t, "--store", storePath, "show", id)
 	want := "       replaced the body\n" +
 		"         previous body:\n" +
 		"         | # Scripts\n" +
@@ -105,49 +104,49 @@ func TestShowPrintsWhatAnAmendReplaced(t *testing.T) {
 }
 
 func TestAmendAtRevision(t *testing.T) {
-	root := t.TempDir()
-	id := openApproval(t, root)
-	mustRun(t, "--store", root, "amend", id, "--link", "https://example.com/a")
-	refusedAsStale(t, root, id, 1, 2, "amend", id, "--body", "Replaced.", "--revision", "1")
-	if out := mustRun(t, "--store", root, "amend", id, "--body", "Replaced.", "--revision", "2"); out != id+" open\n" {
+	storePath := newStore(t)
+	id := openApproval(t, storePath)
+	mustRun(t, "--store", storePath, "amend", id, "--link", "https://example.com/a")
+	refusedAsStale(t, storePath, id, 1, 2, "amend", id, "--body", "Replaced.", "--revision", "1")
+	if out := mustRun(t, "--store", storePath, "amend", id, "--body", "Replaced.", "--revision", "2"); out != id+" open\n" {
 		t.Errorf("stdout = %q", out)
 	}
 }
 
 func TestAmendInlineBody(t *testing.T) {
-	root := t.TempDir()
-	id := openApproval(t, root)
-	if out := mustRun(t, "--store", root, "amend", id, "--body", "One script."); out != id+" open\n" {
+	storePath := newStore(t)
+	id := openApproval(t, storePath)
+	if out := mustRun(t, "--store", storePath, "amend", id, "--body", "One script."); out != id+" open\n" {
 		t.Errorf("stdout = %q", out)
 	}
-	if got := loadCase(t, root, id).Body; got != "One script." {
+	if got := loadCase(t, storePath, id).Body; got != "One script." {
 		t.Errorf("body = %q", got)
 	}
 }
 
 func TestAmendAddsOptions(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	mustRun(t, "--store", root, "amend", id, "--option", "Vendor it, for now")
-	if got, want := loadCase(t, root, id).Options, []string{"Pin to 1.2.3", "Float, with renovate", "Vendor it, for now"}; !slices.Equal(got, want) {
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	mustRun(t, "--store", storePath, "amend", id, "--option", "Vendor it, for now")
+	if got, want := loadCase(t, storePath, id).Options, []string{"Pin to 1.2.3", "Float, with renovate", "Vendor it, for now"}; !slices.Equal(got, want) {
 		t.Errorf("options = %q, want %q", got, want)
 	}
-	if out := mustRun(t, "--store", root, "answer", id, "--option", "3"); out != id+" answered\n" {
+	if out := mustRun(t, "--store", storePath, "answer", id, "--option", "3"); out != id+" answered\n" {
 		t.Errorf("answer = %q", out)
 	}
-	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "added option: Vendor it, for now") || !strings.Contains(out, "chose 3. Vendor it, for now") {
+	if out := mustRun(t, "--store", storePath, "show", id); !strings.Contains(out, "added option: Vendor it, for now") || !strings.Contains(out, "chose 3. Vendor it, for now") {
 		t.Errorf("show output:\n%s", out)
 	}
 }
 
 func TestAmendAddsLabels(t *testing.T) {
-	root := t.TempDir()
-	id := openApproval(t, root)
-	mustRun(t, "--store", root, "amend", id, "--label", "round 3", "--label", "a,b")
-	if c := loadCase(t, root, id); !slices.Equal(c.Labels, []string{"release", "round 3", "a,b"}) {
+	storePath := newStore(t)
+	id := openApproval(t, storePath)
+	mustRun(t, "--store", storePath, "amend", id, "--label", "round 3", "--label", "a,b")
+	if c := loadCase(t, storePath, id); !slices.Equal(c.Labels, []string{"release", "round 3", "a,b"}) {
 		t.Errorf("labels = %q", c.Labels)
 	}
-	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "added label: round 3") {
+	if out := mustRun(t, "--store", storePath, "show", id); !strings.Contains(out, "added label: round 3") {
 		t.Errorf("show:\n%s", out)
 	}
 }
@@ -184,22 +183,22 @@ func TestAmendRefusals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			id := openApproval(t, root)
-			r := runCases(t, tt.stdin, append([]string{"--store", root, "amend", id}, tt.args...)...)
+			storePath := newStore(t)
+			id := openApproval(t, storePath)
+			r := runCases(t, tt.stdin, append([]string{"--store", storePath, "amend", id}, tt.args...)...)
 			if r.err == nil || !strings.Contains(r.err.Error(), tt.wantErr) {
 				t.Fatalf("err = %v, want %q", r.err, tt.wantErr)
 			}
-			if entries, _ := os.ReadDir(filepath.Join(root, id)); len(entries) != 1 {
-				t.Errorf("case has %d files after a refused amend", len(entries))
+			if files := eventFiles(t, storePath, id); len(files) != 1 {
+				t.Errorf("case has %v after a refused amend", files)
 			}
 		})
 	}
-	root := t.TempDir()
-	if r := runCases(t, "", "--store", root, "amend", "../etc", "--context", "x"); r.err == nil || !strings.Contains(r.err.Error(), "invalid case id") {
+	storePath := newStore(t)
+	if r := runCases(t, "", "--store", storePath, "amend", "../etc", "--context", "x"); r.err == nil || !strings.Contains(r.err.Error(), "invalid case id") {
 		t.Errorf("amend ../etc: err = %v", r.err)
 	}
-	if r := runCases(t, "", "--store", root, "amend", "nope", "--context", "x"); r.err == nil {
+	if r := runCases(t, "", "--store", storePath, "amend", "nope", "--context", "x"); r.err == nil {
 		t.Error("amend of a missing case succeeded")
 	}
 }

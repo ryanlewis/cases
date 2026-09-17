@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -35,7 +34,7 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 }
 
 type testApp struct {
-	root    string
+	db      *store.DB
 	server  *Server
 	handler http.Handler
 	log     *lockedBuffer
@@ -47,17 +46,25 @@ func newApp(t *testing.T) *testApp {
 }
 
 // newAppWith is newApp with the server's store wrapped by wrap, such as to
-// make one method fail. Test helpers such as open still write to the
-// directory.
+// make one method fail. Test helpers such as open still write to the store
+// itself.
 func newAppWith(t *testing.T, wrap func(store.Store) store.Store) *testApp {
 	t.Helper()
-	root := t.TempDir()
+	db := newDB(t, filepath.Join(t.TempDir(), "cases.db"))
 	log := &lockedBuffer{}
-	s, err := New(wrap(store.NewDir(root)), testAddr, log)
+	s, err := New(wrap(db), testAddr, log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testApp{root: root, server: s, handler: s.Handler(), log: log}
+	return &testApp{db: db, server: s, handler: s.Handler(), log: log}
+}
+
+// newDB returns the store at path, disconnected when the test ends.
+func newDB(t *testing.T, path string) *store.DB {
+	t.Helper()
+	db := store.NewDB(path)
+	t.Cleanup(func() { _ = db.Disconnect() })
+	return db
 }
 
 // do sends a request addressed to the server's own host unless headers say
@@ -95,7 +102,7 @@ func (a *testApp) get(t *testing.T, target string) string {
 
 func (a *testApp) open(t *testing.T, rec store.OpenRecord) *store.Case {
 	t.Helper()
-	c, err := store.Create(a.root, rec)
+	c, err := a.db.Create(t.Context(), rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,15 +135,21 @@ func pageRevision(t *testing.T, page string) int {
 	return rev
 }
 
-func eventFiles(t *testing.T, dir string) []string {
+// eventFiles names the case's events by the file names they keep. It fails
+// the test when the case has an event the fold skipped, which would not be
+// named.
+func (a *testApp) eventFiles(t *testing.T, id string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+	c, err := a.db.Get(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
+	for _, ev := range c.Events {
+		names = append(names, ev.File)
+	}
+	if c.Revision() != len(names) {
+		t.Fatalf("case %s has %d events and %d folded: %q", id, c.Revision(), len(names), c.Problems)
 	}
 	return names
 }
@@ -152,7 +165,7 @@ func TestCheckLoopback(t *testing.T) {
 			t.Errorf("%s accepted", bad)
 		}
 	}
-	if _, err := New(store.NewDir(t.TempDir()), "0.0.0.0:8765", io.Discard); err == nil {
+	if _, err := New(newDB(t, filepath.Join(t.TempDir(), "cases.db")), "0.0.0.0:8765", io.Discard); err == nil {
 		t.Error("New accepted a non-loopback address")
 	}
 }
@@ -163,7 +176,7 @@ func TestHostSpellings(t *testing.T) {
 		{"[::1]:80", "[::1]"},
 		{"[0:0:0:0:0:0:0:1]:8765", "[::1]:8765"},
 	} {
-		s, err := New(store.NewDir(t.TempDir()), tc.listen, io.Discard)
+		s, err := New(newDB(t, filepath.Join(t.TempDir(), "cases.db")), tc.listen, io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +233,7 @@ func TestCrossSitePostsAreRejected(t *testing.T) {
 			t.Errorf("%s: status %d", name, w.Code)
 		}
 	}
-	if files := eventFiles(t, c.Dir); len(files) != 1 {
+	if files := a.eventFiles(t, c.ID); len(files) != 1 {
 		t.Fatalf("rejected posts wrote files: %v", files)
 	}
 
@@ -359,7 +372,7 @@ func TestLabelsAreShownAsText(t *testing.T) {
 		}
 	}
 
-	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{}); err != nil {
+	if _, err := a.db.Withdraw(t.Context(), c.ID, store.WithdrawRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	body := a.get(t, "/done")
@@ -389,7 +402,7 @@ func TestRequestsAreLogged(t *testing.T) {
 }
 
 func TestMissingStoreShowsAnEmptyInbox(t *testing.T) {
-	s, err := New(store.NewDir(filepath.Join(t.TempDir(), "not-yet")), testAddr, io.Discard)
+	s, err := New(newDB(t, filepath.Join(t.TempDir(), "not-yet", "cases.db")), testAddr, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

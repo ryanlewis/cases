@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -113,8 +114,8 @@ func TestNotificationsRefusals(t *testing.T) {
 
 func TestNotificationsWhenTheStoreArrivesLater(t *testing.T) {
 	a := newApp(t)
-	a.root += "/later"
-	s, err := New(store.NewDir(a.root), testAddr, a.log)
+	a.db = newDB(t, filepath.Join(t.TempDir(), "later", "cases.db"))
+	s, err := New(a.db, testAddr, a.log)
 	if err != nil {
 		t.Fatal(err)
 	}

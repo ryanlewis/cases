@@ -56,7 +56,7 @@ func (c *ListCmd) Run(d *Deps) error {
 	if len(want) == 0 && !c.All {
 		want = []store.State{store.StateOpen, store.StateParked}
 	}
-	cases, bad, err := d.cases().List(context.Background())
+	cases, bad, err := d.Cases.List(context.Background())
 	if errors.Is(err, fs.ErrNotExist) {
 		// A store nobody has written to yet reads as empty.
 		cases, bad, err = nil, nil, nil

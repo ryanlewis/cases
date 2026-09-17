@@ -56,7 +56,7 @@ func (c *AmendCmd) Run(d *Deps) error {
 		}
 		rec.Context = *c.Context
 	}
-	cs, err := d.cases().Amend(context.Background(), c.ID, rec, atRevision(c.Revision)...)
+	cs, err := d.Cases.Amend(context.Background(), c.ID, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

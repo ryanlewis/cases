@@ -107,7 +107,7 @@
 <section id="thread" hx-get="/cases/{{.Case.ID | pathEscape}}/thread?state={{.Case.State}}{{if .Home}}&amp;home=1{{end}}" hx-trigger="every 2s" hx-swap="outerHTML">
   <h2 class="section">thread</h2>
   <ol class="thread">
-  {{/* The poll replaces the thread; hx-preserve keeps a details the human opened as it is. The id holds a hash of the text, so a details whose text changes, as when an earlier amend syncs in late, is replaced. */}}
+  {{/* The poll replaces the thread; hx-preserve keeps a details the human opened as it is. The id holds a hash of the text, so a details whose text changes, as when an amend is stored before a later one's number, is replaced. */}}
   {{range .Thread}}{{$seq := .Seq}}
     <li class="event author-{{.Author}}">
       <div class="meta"><span class="who">[{{.Author}}]</span> <span>{{.Type}}</span> <span class="age">{{stamp .At}}, {{age .At}}</span></div>

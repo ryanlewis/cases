@@ -31,7 +31,7 @@ func TestLoadMissingFileIsEmpty(t *testing.T) {
 func TestLoadValues(t *testing.T) {
 	t.Setenv("HOME", "/home/x")
 	t.Setenv("CASES_STORE", "")
-	f, err := Load(write(t, "store = \"~/notes/cases\"\nlisten = \"localhost:9000\"\n"))
+	f, err := Load(write(t, "store = \"~/notes/cases.db\"\nlisten = \"localhost:9000\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestLoadValues(t *testing.T) {
 	for _, s := range f.Settings() {
 		got[s.Key] = s
 	}
-	if s := got["store"]; s.Value != "/home/x/notes/cases" || s.Source != "config" {
+	if s := got["store"]; s.Value != "/home/x/notes/cases.db" || s.Source != "config" {
 		t.Errorf("store = %+v", s)
 	}
 	if s := got["listen"]; s.Value != "localhost:9000" || s.Source != "config" {
@@ -86,7 +86,7 @@ func TestPaths(t *testing.T) {
 	if p, _ := DefaultPath(); p != "/xdg/cases/config.toml" {
 		t.Errorf("DefaultPath = %s", p)
 	}
-	if p := DefaultStore(); p != "/xdgdata/cases" {
+	if p := DefaultStore(); p != "/xdgdata/cases/cases.db" {
 		t.Errorf("DefaultStore = %s", p)
 	}
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -94,7 +94,7 @@ func TestPaths(t *testing.T) {
 	if p, _ := DefaultPath(); p != "/home/x/.config/cases/config.toml" {
 		t.Errorf("DefaultPath = %s", p)
 	}
-	if p := DefaultStore(); p != "/home/x/.local/share/cases" {
+	if p := DefaultStore(); p != "/home/x/.local/share/cases/cases.db" {
 		t.Errorf("DefaultStore = %s", p)
 	}
 	if p, src, _ := ResolvePath(""); p != "/home/x/.config/cases/config.toml" || src != SourceDefault {

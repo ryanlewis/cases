@@ -4,25 +4,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// Event is one event file as read from disk.
+// Event is one event as read from the store.
 type Event struct {
 	Seq    int       `json:"seq"`
 	Author Author    `json:"author"`
 	Type   EventType `json:"event"`
-	File   string    `json:"file"`
-	At     time.Time `json:"at"`
+	// File is the name the event had as a file, NNNN-<author>-<event>.json.
+	// It is unique within the case, and wait and the notifier key on it.
+	File string    `json:"file"`
+	At   time.Time `json:"at"`
 	// Actor is who the event says wrote it, or nil when it does not say.
 	Actor *Actor `json:"actor,omitempty"`
-	// Data is the file exactly as written, so fields this version does not
+	// Data is the record exactly as written, so fields this version does not
 	// know about survive a read.
 	Data json.RawMessage `json:"data"`
 
@@ -39,10 +37,9 @@ type Event struct {
 // open event and for an event that did not come from a fold.
 func (ev Event) From() State { return ev.from }
 
-// Case is the fold of a case directory.
+// Case is the fold of a case's events.
 type Case struct {
 	ID    string `json:"id"`
-	Dir   string `json:"dir"`
 	State State  `json:"state"`
 	OpenRecord
 	UpdatedAt time.Time `json:"updated_at"`
@@ -56,12 +53,13 @@ type Case struct {
 
 	// Events are the events that folded cleanly, in order.
 	Events []Event `json:"events"`
-	// Problems name files that were skipped: unreadable, malformed, or an
-	// event the case was not in a state to accept.
+	// Problems name events that were skipped: malformed, or an event the
+	// case was not in a state to accept, such as one written by a newer
+	// cases.
 	Problems []string `json:"problems,omitempty"`
 
 	lastSeq int
-	files   int
+	events  int
 	// amendSeq is the sequence number of the last amend a later answer must
 	// have seen. Every amend counts except one that only adds labels: an
 	// answer is never checked against labels, and they do not change the
@@ -74,18 +72,12 @@ type Case struct {
 	amendSeq int
 }
 
-// Revision is the number of event files in the case, counting any the fold
-// skipped. Every event added raises it: one written here, and one a sync
-// brings in with a sequence number the case already has or below its latest.
-// A caller that keeps the revision it read can have a later write refused if
-// the case has changed since; see AtRevision. For a case whose events were
-// all written on one machine it is also the sequence number of the latest.
-func (c *Case) Revision() int { return c.files }
-
-// ErrNoEvents is a case directory with no event files in it yet. Create makes
-// the directory a moment before it writes the open event, so a listing can
-// catch one in between; List and Poller skip such a directory silently.
-var ErrNoEvents = errors.New("no open event")
+// Revision is the number of events stored for the case, counting any the
+// fold skipped. Every event written raises it. A caller that keeps the
+// revision it read can have a later write refused if the case has changed
+// since; see AtRevision. Writes number events one after another, so for a
+// case only cases has written it is also the latest event's sequence number.
+func (c *Case) Revision() int { return c.events }
 
 // TransitionError is an event the case's current state does not allow.
 type TransitionError struct {
@@ -105,15 +97,17 @@ func (e *TransitionError) Error() string {
 }
 
 // unknown is the error for an event, kind or urgency this build does not
-// know. The likely cause is a newer cases writing to a shared store, but a
-// file name with a typo in it reads the same, so the update is offered as a
+// know. The likely cause is a newer cases writing to the same store, but a
+// row that cases did not write reads the same, so the update is offered as a
 // guess.
 func unknown(what, value string) error {
 	return fmt.Errorf("unknown %s %q: perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest", what, value)
 }
 
-// eventFile matches an event file name: sequence, author, event.
-var eventFile = regexp.MustCompile(`^(\d{4,})-(agent|human)-([a-z]+)\.json$`)
+// fileName is the name an event had as a file, which Event.File keeps.
+func fileName(seq int, author Author, typ EventType) string {
+	return fmt.Sprintf("%04d-%s-%s.json", seq, author, typ)
+}
 
 // authors says who may write each event. An event missing from the map is
 // unknown to this version.
@@ -154,76 +148,40 @@ func newRecord(t EventType) record {
 	return nil
 }
 
-// Load folds the case directory dir. Files that cannot be read or folded are
-// skipped and listed in Problems rather than failing the load; Load fails only
-// when the directory cannot be read or holds no valid open event.
-func Load(dir string) (*Case, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	c := &Case{ID: filepath.Base(dir), Dir: dir}
+// row is one stored event, as read from the events table.
+type row struct {
+	seq    int
+	author Author
+	event  EventType
+	data   []byte
+}
 
-	type file struct {
-		seq    int
-		author Author
-		event  EventType
-		name   string
-	}
-	var files []file
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || e.IsDir() {
-			continue
-		}
-		m := eventFile.FindStringSubmatch(name)
-		if m == nil {
-			c.Problems = append(c.Problems, name+": not an event file name")
-			continue
-		}
-		seq, err := strconv.Atoi(m[1])
-		if err != nil {
-			c.Problems = append(c.Problems, name+": "+err.Error())
-			continue
-		}
-		files = append(files, file{seq, Author(m[2]), EventType(m[3]), name})
-	}
-	slices.SortFunc(files, func(a, b file) int {
-		if a.seq != b.seq {
-			return a.seq - b.seq
-		}
-		return strings.Compare(a.name, b.name)
-	})
-	c.files = len(files)
-
-	for i, f := range files {
-		c.lastSeq = max(c.lastSeq, f.seq)
-		if i > 0 && files[i-1].seq == f.seq {
-			c.Problems = append(c.Problems, fmt.Sprintf("%s: sequence %04d is used by more than one file", f.name, f.seq))
-		}
-		data, err := os.ReadFile(filepath.Join(dir, f.name))
-		if err != nil {
-			c.Problems = append(c.Problems, f.name+": "+err.Error())
-			continue
-		}
-		ev := Event{Seq: f.seq, Author: f.author, Type: f.event, File: f.name, Data: data}
+// foldRows folds the case id from its event rows, in sequence order. An event
+// that cannot be folded is skipped and listed in Problems rather than
+// failing the fold; foldRows fails only when no row is a valid open event.
+func foldRows(id string, rows []row) (*Case, error) {
+	c := &Case{ID: id, events: len(rows)}
+	for _, r := range rows {
+		c.lastSeq = max(c.lastSeq, r.seq)
+		name := fileName(r.seq, r.author, r.event)
+		ev := Event{Seq: r.seq, Author: r.author, Type: r.event, File: name, Data: r.data}
 		if err := c.apply(ev); err != nil {
-			c.Problems = append(c.Problems, f.name+": "+err.Error())
+			c.Problems = append(c.Problems, name+": "+err.Error())
 		}
 	}
 	if c.State == "" {
 		if len(c.Problems) > 0 {
 			return nil, fmt.Errorf("no valid open event (%s)", strings.Join(c.Problems, "; "))
 		}
-		return nil, ErrNoEvents
+		return nil, errors.New("no open event")
 	}
 	return c, nil
 }
 
 // apply folds one event into the case. It checks everything before changing
 // anything, so an event it refuses leaves the case as it was. The writer runs
-// the same check before a file is written, so a refused event never reaches
-// disk through this package.
+// the same check before an event is stored, so a refused event never reaches
+// the store through this package.
 func (c *Case) apply(ev Event) error {
 	allowed, known := authors[ev.Type]
 	if !known {
@@ -287,7 +245,9 @@ func (c *Case) apply(ev Event) error {
 		}
 		// Every writer numbers its event after the latest one it has read, so
 		// an answer numbered at or below amendSeq was written without that
-		// amend, such as on a machine the amend had not synced to yet.
+		// amend. The store gives each event of a case its own number, in
+		// order, so it holds no such answer; the check is from the directory
+		// store, where a sync could bring in a file with an amend's number.
 		if c.amendSeq > 0 && ev.Seq <= c.amendSeq {
 			return fmt.Errorf("the answer was written without seeing amend %04d", c.amendSeq)
 		}

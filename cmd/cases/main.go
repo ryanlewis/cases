@@ -32,7 +32,7 @@ const exitTimeout = 2
 const exitTransition = 3
 
 type CLI struct {
-	Store   string           `help:"Case store directory (default ${default})." env:"CASES_STORE" default:"${store}" placeholder:"DIR"`
+	Store   string           `help:"Case store file, a SQLite database (default ${default})." env:"CASES_STORE" default:"${store}" placeholder:"FILE"`
 	Config  string           `help:"TOML config file that supplies flag defaults (default ${config})." placeholder:"PATH"`
 	Version kong.VersionFlag `help:"Print version and exit." short:"v"`
 
@@ -48,7 +48,7 @@ type CLI struct {
 	Answer   AnswerCmd   `cmd:"" help:"Answer an open case (human)."`
 	Resume   ResumeCmd   `cmd:"" help:"Reopen a parked case (human, or agent with --agent)."`
 	Sweep    SweepCmd    `cmd:"" help:"Withdraw the open cases that match, to clear the inbox (human). Prints what it would do unless --yes."`
-	Prune    PruneCmd    `cmd:"" help:"Move closed and withdrawn cases older than --age into the store's .archive directory (human). Prints what it would do unless --yes."`
+	Prune    PruneCmd    `cmd:"" help:"Move closed and withdrawn cases older than --age into the store's archive (human). Prints what it would do unless --yes."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 	Status   StatusCmd   `cmd:"" help:"Print where cases serve is running for the store; exits 1 when it is not."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
@@ -64,7 +64,7 @@ func (c *CLI) AfterApply(vars kong.Vars) error {
 		c.Store = vars["store"]
 	}
 	if c.Store == "" {
-		return errors.New("--store or CASES_STORE must name the case store directory")
+		return errors.New("--store or CASES_STORE must name the case store file")
 	}
 	c.Store = config.ExpandHome(c.Store)
 	return nil
@@ -72,11 +72,11 @@ func (c *CLI) AfterApply(vars kong.Vars) error {
 
 // Deps carries what every command needs, so tests can swap the streams.
 type Deps struct {
-	// Store is the store's directory. Commands that need the path itself,
-	// such as prune, serve and status, use it; the rest go through Cases.
+	// Store is the store's file. Commands that need the path itself, such
+	// as serve and status, use it; the rest go through Cases.
 	Store string
-	// Cases is the store commands read and write cases through. When nil it
-	// is the directory at Store.
+	// Cases is the store commands read and write cases through: main opens
+	// the database at Store and disconnects it when the command returns.
 	Cases  store.Store
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -108,7 +108,7 @@ func newParser(cli *CLI, cfg *config.File, opts ...kong.Option) (*kong.Kong, err
 	configPath, _ := config.DefaultPath()
 	return kong.New(cli, append([]kong.Option{
 		kong.Name("cases"),
-		kong.Description("Raise, answer, pick up and close cases in a file-per-event store."),
+		kong.Description("Raise, answer, pick up and close cases in a SQLite store of events."),
 		kong.UsageOnError(),
 		kong.Vars{
 			"version": fmt.Sprintf("cases %s (commit %s, built %s)", version, commit, date),
@@ -136,8 +136,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	deps := &Deps{Store: cli.Store, Cases: store.NewDir(cli.Store), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
-	if err := ctx.Run(deps); err != nil {
+	db := store.NewDB(cli.Store)
+	deps := &Deps{Store: cli.Store, Cases: db, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
+	err = ctx.Run(deps)
+	// Closing the last connection checkpoints the write-ahead log into the
+	// database file.
+	_ = db.Disconnect()
+	if err != nil {
 		os.Exit(report(os.Stderr, err))
 	}
 }
@@ -159,14 +164,6 @@ func report(w io.Writer, err error) int {
 	return 1
 }
 
-// cases returns the store commands read and write through.
-func (d *Deps) cases() store.Store {
-	if d.Cases == nil {
-		return store.NewDir(d.Store)
-	}
-	return d.Cases
-}
-
 // humanActor is the actor for a human event written as name, or nil when no
 // name is set.
 func humanActor(name string) *store.Actor {
@@ -180,7 +177,7 @@ func humanActor(name string) *store.Actor {
 // was opened with, or nil when it has none. A case that cannot be read gets
 // nil too, and the write reports the problem.
 func (d *Deps) workerActor(id string) *store.Actor {
-	cs, err := d.cases().Get(context.Background(), id)
+	cs, err := d.Cases.Get(context.Background(), id)
 	if err != nil {
 		return nil
 	}
@@ -206,7 +203,7 @@ func (d *Deps) findCase(id string) (string, error) {
 	if err := store.ValidID(id); err != nil {
 		return "", err
 	}
-	ids, err := d.cases().IDs(context.Background())
+	ids, err := d.Cases.IDs(context.Background())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}

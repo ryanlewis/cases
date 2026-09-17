@@ -204,7 +204,7 @@ func ago(t, now time.Time) string {
 
 // statusScreen redraws the status block in place on a terminal.
 type statusScreen struct {
-	root  string
+	store string
 	url   string
 	out   io.Writer
 	color bool
@@ -221,9 +221,9 @@ type statusScreen struct {
 	frame    string // the last frame, to skip identical redraws
 }
 
-// newStatusScreen shows root, the store's path, and counts the cases in cases.
-func newStatusScreen(root string, cases store.Store, url string, out io.Writer, color bool) *statusScreen {
-	return &statusScreen{root: root, url: url, out: out, color: color, since: time.Now(), poller: cases.NewPoller()}
+// newStatusScreen shows path, the store's file, and counts the cases in cases.
+func newStatusScreen(path string, cases store.Store, url string, out io.Writer, color bool) *statusScreen {
+	return &statusScreen{store: path, url: url, out: out, color: color, since: time.Now(), poller: cases.NewPoller()}
 }
 
 // logWriter returns the writer for the request log. Lines are kept for the
@@ -334,7 +334,7 @@ func (s *statusScreen) draw(keys bool, requests int64) {
 	log := append([]string(nil), s.log...)
 	s.logMu.Unlock()
 	lines := render(screenView{
-		Store:    s.root,
+		Store:    s.store,
 		URL:      s.url,
 		Stats:    withErr(countCases(cases, s.since, now), err),
 		Uptime:   now.Sub(s.since),

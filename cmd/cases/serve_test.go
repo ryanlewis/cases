@@ -23,7 +23,7 @@ import (
 
 func TestServeRefusesNonLoopback(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:8765", ":8765", "192.168.1.10:8765"} {
-		r := runCases(t, "", "--store", t.TempDir(), "serve", "--listen", addr)
+		r := runCases(t, "", "--store", newStore(t), "serve", "--listen", addr)
 		if r.err == nil || !strings.Contains(r.err.Error(), "loopback") {
 			t.Errorf("--listen %s: err = %v", addr, r.err)
 		}
@@ -49,15 +49,15 @@ func (b *syncBuffer) String() string {
 }
 
 func TestServeAnswersAndStops(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	done := make(chan error, 1)
 	go func() {
 		cmd := &ServeCmd{Listen: "127.0.0.1:0"}
-		done <- cmd.Run(&Deps{Store: root, Stdout: stdout, Stderr: stderr, Context: ctx})
+		done <- cmd.Run(&Deps{Store: storePath, Cases: openStore(t, storePath), Stdout: stdout, Stderr: stderr, Context: ctx})
 	}()
 
 	urlPattern := regexp.MustCompile(`http://127\.0\.0\.1:\d+/`)
@@ -100,7 +100,8 @@ func TestServeWithoutTerminalPrintsURLAndOpensNothing(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		cmd := &ServeCmd{Listen: "127.0.0.1:0"}
-		done <- cmd.Run(&Deps{Store: t.TempDir(), Stdout: stdout, Stderr: io.Discard, Context: ctx,
+		storePath := newStore(t)
+		done <- cmd.Run(&Deps{Store: storePath, Cases: openStore(t, storePath), Stdout: stdout, Stderr: io.Discard, Context: ctx,
 			OpenURL: func(string) error { opened.Add(1); return nil }})
 	}()
 
@@ -120,12 +121,14 @@ func TestServeWithoutTerminalPrintsURLAndOpensNothing(t *testing.T) {
 }
 
 func TestServeScreenStats(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
+	db := openStore(t, storePath)
+	ctx := t.Context()
 	start := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
 	before, after := start.Add(-time.Hour), start.Add(time.Minute)
 	open := func(kind store.Kind, urgency store.Urgency, options ...string) *store.Case {
 		t.Helper()
-		c, err := store.Create(root, store.OpenRecord{Kind: kind, Urgency: urgency, Title: string(kind) + " " + string(urgency), Options: options, OpenedAt: before})
+		c, err := db.Create(ctx, store.OpenRecord{Kind: kind, Urgency: urgency, Title: string(kind) + " " + string(urgency), Options: options, OpenedAt: before})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,21 +145,21 @@ func TestServeScreenStats(t *testing.T) {
 	open(store.KindFYI, store.UrgencyBlocking)
 	open(store.KindFYI, store.UrgencyToday)
 	parked := open(store.KindStuck, store.UrgencyWhenever)
-	must(store.Park(parked.Dir, store.ParkRecord{ParkedAt: after}))
+	must(db.Park(ctx, parked.ID, store.ParkRecord{ParkedAt: after}))
 	answered := open(store.KindDecision, store.UrgencyToday, "a", "b")
-	must(store.Answer(answered.Dir, store.AnswerRecord{Choice: 1, AnsweredAt: before}))
+	must(db.Answer(ctx, answered.ID, store.AnswerRecord{Choice: 1, AnsweredAt: before}))
 	closed := open(store.KindFYI, store.UrgencyWhenever)
-	must(store.Answer(closed.Dir, store.AnswerRecord{Ack: true, AnsweredAt: after}))
-	must(store.Pickup(closed.Dir, store.PickupRecord{PickedUpAt: after}))
-	must(store.Close(closed.Dir, store.CloseRecord{Outcome: "done", ClosedAt: after.Add(time.Minute)}))
+	must(db.Answer(ctx, closed.ID, store.AnswerRecord{Ack: true, AnsweredAt: after}))
+	must(db.Pickup(ctx, closed.ID, store.PickupRecord{PickedUpAt: after}))
+	must(db.Close(ctx, closed.ID, store.CloseRecord{Outcome: "done", ClosedAt: after.Add(time.Minute)}))
 
-	cases, bad, err := store.List(root)
+	cases, bad, err := db.List(ctx)
 	if err != nil || len(bad) > 0 {
 		t.Fatalf("list: %v %v", err, bad)
 	}
 	now := after.Add(5 * time.Minute)
 	lines := render(screenView{
-		Store:    root,
+		Store:    storePath,
 		URL:      "http://127.0.0.1:8765/",
 		Stats:    countCases(cases, start, now),
 		Uptime:   now.Sub(start),
@@ -198,8 +201,8 @@ func TestServeFailsWhenAddressIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	root := t.TempDir()
-	r := runCases(t, "", "--store", root, "serve", "--listen", ln.Addr().String())
+	storePath := newStore(t)
+	r := runCases(t, "", "--store", storePath, "serve", "--listen", ln.Addr().String())
 	if r.err == nil || !strings.Contains(r.err.Error(), "address already in use") {
 		t.Errorf("err = %v, want address already in use", r.err)
 	}
@@ -207,7 +210,7 @@ func TestServeFailsWhenAddressIsTaken(t *testing.T) {
 		t.Errorf("stdout = %q, want nothing", r.stdout)
 	}
 	// Nothing was recorded for cases status.
-	path, _ := instance.Path(root)
+	path, _ := instance.Path(storePath)
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("state file after a failed listen: %v", err)
 	}
@@ -225,7 +228,8 @@ func TestServeWithoutStateDirectoryStillServes(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		cmd := &ServeCmd{Listen: "127.0.0.1:0"}
-		done <- cmd.Run(&Deps{Store: t.TempDir(), Stdout: stdout, Stderr: stderr, Context: ctx})
+		storePath := newStore(t)
+		done <- cmd.Run(&Deps{Store: storePath, Cases: openStore(t, storePath), Stdout: stdout, Stderr: stderr, Context: ctx})
 	}()
 	base := waitForURL(t, stdout)
 	resp, err := http.Get(base)
@@ -259,8 +263,8 @@ func waitForURL(t *testing.T, stdout *syncBuffer) string {
 }
 
 func TestServeQueuesNotificationsWithNoTabOpen(t *testing.T) {
-	root := t.TempDir()
-	srv, err := web.New(store.NewDir(root), "127.0.0.1:8765", io.Discard)
+	storePath := newStore(t)
+	srv, err := web.New(openStore(t, storePath), "127.0.0.1:8765", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +279,7 @@ func TestServeQueuesNotificationsWithNoTabOpen(t *testing.T) {
 		pollForNotifications(ctx, srv, 10*time.Millisecond)
 	}()
 
-	openDecision(t, root)
+	openDecision(t, storePath)
 	for deadline := time.Now().Add(5 * time.Second); srv.Notified() == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 	}
 	if n := srv.Notified(); n != 1 {

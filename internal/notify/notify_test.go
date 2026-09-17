@@ -2,6 +2,9 @@ package notify
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,10 +24,22 @@ func openRec(kind store.Kind, urgency store.Urgency, title string) store.OpenRec
 	return rec
 }
 
-// poll lists the store the way serve's poller would.
-func poll(t *testing.T, root string) []*store.Case {
+// newDB returns a store in a file of its own that does not exist yet.
+func newDB(t *testing.T) *store.DB {
 	t.Helper()
-	cases, bad, err := store.List(root)
+	db := store.NewDB(filepath.Join(t.TempDir(), "cases.db"))
+	t.Cleanup(func() { _ = db.Disconnect() })
+	return db
+}
+
+// poll lists the store the way serve's poller would: a store nothing has
+// been written to yet has no cases.
+func poll(t *testing.T, db *store.DB) []*store.Case {
+	t.Helper()
+	cases, bad, err := db.List(t.Context())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,16 +49,16 @@ func poll(t *testing.T, root string) []*store.Case {
 	return cases
 }
 
-func create(t *testing.T, root string, rec store.OpenRecord) *store.Case {
+func create(t *testing.T, db *store.DB, rec store.OpenRecord) *store.Case {
 	t.Helper()
-	c, err := store.Create(root, rec)
+	c, err := db.Create(t.Context(), rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
 }
 
-// must fails the test when a store write does: must(t)(store.Note(...)).
+// must fails the test when a store write does: must(t)(db.Note(...)).
 func must(t *testing.T) func(*store.Case, error) {
 	return func(_ *store.Case, err error) {
 		t.Helper()
@@ -62,14 +77,14 @@ func names(p Page) []string {
 }
 
 func TestFirstPollOnlyRecordsTheStore(t *testing.T) {
-	root := t.TempDir()
-	create(t, root, openRec(store.KindFYI, store.UrgencyBlocking, "Already here"))
+	db := newDB(t)
+	create(t, db, openRec(store.KindFYI, store.UrgencyBlocking, "Already here"))
 	feed := NewFeed()
 	e := New(feed, fixedNow)
-	if n := e.Observe(poll(t, root)); n != 0 {
+	if n := e.Observe(poll(t, db)); n != 0 {
 		t.Errorf("first poll added %d, want 0", n)
 	}
-	if n := e.Observe(poll(t, root)); n != 0 {
+	if n := e.Observe(poll(t, db)); n != 0 {
 		t.Errorf("unchanged poll added %d, want 0", n)
 	}
 	if p := feed.After(0); p.Latest != 0 || len(p.Items) != 0 {
@@ -78,45 +93,45 @@ func TestFirstPollOnlyRecordsTheStore(t *testing.T) {
 }
 
 func TestEmptyFirstPollStillBaselines(t *testing.T) {
-	root := t.TempDir()
+	db := newDB(t)
 	feed := NewFeed()
 	e := New(feed, fixedNow)
 	e.Observe(nil) // the store does not exist yet
-	create(t, root, openRec(store.KindFYI, store.UrgencyToday, "First"))
-	if n := e.Observe(poll(t, root)); n != 1 {
+	create(t, db, openRec(store.KindFYI, store.UrgencyToday, "First"))
+	if n := e.Observe(poll(t, db)); n != 1 {
 		t.Errorf("added %d, want 1 for a case opened after an empty first poll", n)
 	}
 }
 
 func TestWhatLandsOnTheHuman(t *testing.T) {
-	root := t.TempDir()
-	answered := create(t, root, openRec(store.KindDecision, store.UrgencyToday, "Answered"))
-	pickedUp := create(t, root, openRec(store.KindDecision, store.UrgencyToday, "Picked up"))
-	stuck := create(t, root, openRec(store.KindStuck, store.UrgencyBlocking, "Stuck"))
-	parkedByHuman := create(t, root, openRec(store.KindStuck, store.UrgencyWhenever, "Human resumes"))
-	openNote := create(t, root, openRec(store.KindQuestion, store.UrgencyToday, "Noted while open"))
-	withdrawn := create(t, root, openRec(store.KindFYI, store.UrgencyToday, "Withdrawn"))
-	must(t)(store.Answer(answered.Dir, store.AnswerRecord{Choice: 1}))
-	must(t)(store.Answer(pickedUp.Dir, store.AnswerRecord{Choice: 1}))
-	must(t)(store.Pickup(pickedUp.Dir, store.PickupRecord{}))
-	must(t)(store.Park(stuck.Dir, store.ParkRecord{}))
-	must(t)(store.Park(parkedByHuman.Dir, store.ParkRecord{}))
+	db := newDB(t)
+	answered := create(t, db, openRec(store.KindDecision, store.UrgencyToday, "Answered"))
+	pickedUp := create(t, db, openRec(store.KindDecision, store.UrgencyToday, "Picked up"))
+	stuck := create(t, db, openRec(store.KindStuck, store.UrgencyBlocking, "Stuck"))
+	parkedByHuman := create(t, db, openRec(store.KindStuck, store.UrgencyWhenever, "Human resumes"))
+	openNote := create(t, db, openRec(store.KindQuestion, store.UrgencyToday, "Noted while open"))
+	withdrawn := create(t, db, openRec(store.KindFYI, store.UrgencyToday, "Withdrawn"))
+	must(t)(db.Answer(t.Context(), answered.ID, store.AnswerRecord{Choice: 1}))
+	must(t)(db.Answer(t.Context(), pickedUp.ID, store.AnswerRecord{Choice: 1}))
+	must(t)(db.Pickup(t.Context(), pickedUp.ID, store.PickupRecord{}))
+	must(t)(db.Park(t.Context(), stuck.ID, store.ParkRecord{}))
+	must(t)(db.Park(t.Context(), parkedByHuman.ID, store.ParkRecord{}))
 
 	feed := NewFeed()
 	e := New(feed, fixedNow)
-	e.Observe(poll(t, root))
+	e.Observe(poll(t, db))
 
 	note := store.NoteRecord{Body: "One more thing?"}
-	must(t)(store.Note(answered.Dir, note))
-	must(t)(store.Note(pickedUp.Dir, note))
-	must(t)(store.Resume(stuck.Dir, store.AuthorAgent, store.ResumeRecord{}))
-	must(t)(store.Resume(parkedByHuman.Dir, store.AuthorHuman, store.ResumeRecord{}))
-	must(t)(store.Note(openNote.Dir, note))
-	must(t)(store.Amend(openNote.Dir, store.AmendRecord{Context: "More."}))
-	must(t)(store.Withdraw(withdrawn.Dir, store.WithdrawRecord{}))
-	create(t, root, openRec(store.KindFYI, store.UrgencyWhenever, "New"))
+	must(t)(db.Note(t.Context(), answered.ID, note))
+	must(t)(db.Note(t.Context(), pickedUp.ID, note))
+	must(t)(db.Resume(t.Context(), stuck.ID, store.AuthorAgent, store.ResumeRecord{}))
+	must(t)(db.Resume(t.Context(), parkedByHuman.ID, store.AuthorHuman, store.ResumeRecord{}))
+	must(t)(db.Note(t.Context(), openNote.ID, note))
+	must(t)(db.Amend(t.Context(), openNote.ID, store.AmendRecord{Context: "More."}))
+	must(t)(db.Withdraw(t.Context(), withdrawn.ID, store.WithdrawRecord{}))
+	create(t, db, openRec(store.KindFYI, store.UrgencyWhenever, "New"))
 
-	if n := e.Observe(poll(t, root)); n != 4 {
+	if n := e.Observe(poll(t, db)); n != 4 {
 		t.Errorf("added %d, want 4", n)
 	}
 	got := strings.Join(names(feed.After(0)), ", ")
@@ -133,29 +148,29 @@ func TestWhatLandsOnTheHuman(t *testing.T) {
 
 	// The agent's reply to the human's resume lands the case on the human;
 	// its next note, or an amend, does not fire again.
-	must(t)(store.Amend(parkedByHuman.Dir, store.AmendRecord{Context: "Looking."}))
-	must(t)(store.Note(parkedByHuman.Dir, note))
-	if n := e.Observe(poll(t, root)); n != 1 {
+	must(t)(db.Amend(t.Context(), parkedByHuman.ID, store.AmendRecord{Context: "Looking."}))
+	must(t)(db.Note(t.Context(), parkedByHuman.ID, note))
+	if n := e.Observe(poll(t, db)); n != 1 {
 		t.Errorf("reply: added %d, want 1", n)
 	}
 	last := feed.After(4).Items
 	if len(last) != 1 || last[0].Event.Name != EventReply || last[0].Event.File != "0005-agent-note.json" || last[0].Body != "whenever stuck · the agent replied" {
 		t.Errorf("reply items = %+v", last)
 	}
-	must(t)(store.Note(parkedByHuman.Dir, note))
-	if n := e.Observe(poll(t, root)); n != 0 {
+	must(t)(db.Note(t.Context(), parkedByHuman.ID, note))
+	if n := e.Observe(poll(t, db)); n != 0 {
 		t.Errorf("second note after the reply: added %d, want 0", n)
 	}
 }
 
 func TestACaseOpenedAndFollowedUpBetweenPollsFiresOnce(t *testing.T) {
-	root := t.TempDir()
+	db := newDB(t)
 	e := New(NewFeed(), fixedNow)
-	e.Observe(poll(t, root))
-	c := create(t, root, openRec(store.KindQuestion, store.UrgencyBlocking, "Quick"))
-	must(t)(store.Amend(c.Dir, store.AmendRecord{Context: "Seen on the mirror."}))
-	must(t)(store.Note(c.Dir, store.NoteRecord{Body: "Still there?"}))
-	if n := e.Observe(poll(t, root)); n != 1 {
+	e.Observe(poll(t, db))
+	c := create(t, db, openRec(store.KindQuestion, store.UrgencyBlocking, "Quick"))
+	must(t)(db.Amend(t.Context(), c.ID, store.AmendRecord{Context: "Seen on the mirror."}))
+	must(t)(db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Still there?"}))
+	if n := e.Observe(poll(t, db)); n != 1 {
 		t.Fatalf("added %d, want 1", n)
 	}
 	p := e.feed.After(0)
@@ -165,23 +180,23 @@ func TestACaseOpenedAndFollowedUpBetweenPollsFiresOnce(t *testing.T) {
 }
 
 func TestACaseAlreadyAnsweredWhenSeenDoesNotFire(t *testing.T) {
-	root := t.TempDir()
+	db := newDB(t)
 	e := New(NewFeed(), fixedNow)
-	e.Observe(poll(t, root))
-	c := create(t, root, openRec(store.KindFYI, store.UrgencyBlocking, "Gone by"))
-	must(t)(store.Answer(c.Dir, store.AnswerRecord{Ack: true}))
-	if n := e.Observe(poll(t, root)); n != 0 {
+	e.Observe(poll(t, db))
+	c := create(t, db, openRec(store.KindFYI, store.UrgencyBlocking, "Gone by"))
+	must(t)(db.Answer(t.Context(), c.ID, store.AnswerRecord{Ack: true}))
+	if n := e.Observe(poll(t, db)); n != 0 {
 		t.Errorf("added %d, want 0 for a case the human answered before the poll", n)
 	}
 }
 
 func TestItemPayload(t *testing.T) {
-	root := t.TempDir()
+	db := newDB(t)
 	feed := NewFeed()
 	e := New(feed, fixedNow)
 	e.Observe(nil)
-	c := create(t, root, openRec(store.KindDecision, store.UrgencyBlocking, "Pin bun?"))
-	e.Observe(poll(t, root))
+	c := create(t, db, openRec(store.KindDecision, store.UrgencyBlocking, "Pin bun?"))
+	e.Observe(poll(t, db))
 
 	p := feed.After(0)
 	if len(p.Items) != 1 {

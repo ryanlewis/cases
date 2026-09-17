@@ -5,10 +5,10 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 ## Safety
 
 - **Safe to run freely**: `list`, `show`, `wait`, `status`, `config path`, `config show`, `skill list`, `skill show`. They only read.
-- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event file to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. Other errors exit 1.
+- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. `Error: database is locked` means other writes, such as a long `cases sweep`, kept the store busy for more than 5 seconds; nothing was written, so run the command again. Other errors exit 1.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
-- **Never edit, rename or delete files in the store.** The state is worked out from the files, so a hand edit corrupts the record. Use the commands.
-- **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is plain JSON on disk, may be synced, and is shown in a browser. Name the secret or say where it lives instead.
+- **Never open or edit the database file; use the commands.** The state is worked out from the events stored in it, so a change made any other way corrupts the record. Do not run `sqlite3` on it, and do not move, copy over or delete it or the `-wal` and `-shm` files beside it.
+- **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is a file on disk that keeps every event, and is shown in a browser. Name the secret or say where it lives instead.
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
 - `serve`, `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked.
@@ -16,9 +16,9 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 
 ## The store
 
-Every command reads and writes one store directory. Leave it alone unless told otherwise: the default comes from `CASES_STORE`, the config file (`cases config show` prints what is in use) or `~/.local/share/cases`. If you were told to use a store, pass `--store DIR` to every command, because the human and you must be looking at the same one.
+Every command reads and writes one store: a SQLite database file. Leave it alone unless told otherwise: the default comes from `CASES_STORE`, the config file (`cases config show` prints what is in use) or `~/.local/share/cases/cases.db`. If you were told to use a store, pass `--store FILE` to every command, because the human and you must be looking at the same one.
 
-A case id is the name of its directory, such as `2026-09-15T09-12-03Z-pin-bun-or-float`. `cases open` prints it on stdout. Keep it and pass it whole; every other command takes it.
+A case id is the time the case was opened and a slug of its title, such as `2026-09-15T09-12-03Z-pin-bun-or-float`. `cases open` prints it on stdout. Keep it and pass it whole; every other command takes it.
 
 ## Lifecycle
 
@@ -77,7 +77,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
   [--context TEXT] [--for NAME]
 ```
 
-- `--title` is one line; it also names the case directory.
+- `--title` is one line; it also names the case id.
 - The body is markdown, so it usually goes in `--body-file`; `-` reads stdin. Write it for someone reading on a phone with no other context: what you are doing, what the question is, what each option costs, and what you recommend and why.
 - `--option` is for `decision` only and `--row` for `approval` only; they are refused on any other kind.
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
@@ -111,7 +111,7 @@ cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID].
 ```
 
 - Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision` and `url`. Each line also has `fresh` and `next_since`.
-- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer synced in late from another machine, so do not skip a case on `fresh` alone: an `answered` case you have not picked up still needs you.
+- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer that records an earlier time than the `--since` you passed, so do not skip a case on `fresh` alone: an `answered` case you have not picked up still needs you.
 - `next_since` is the same on every line: pass it as `--since` when you run `wait` again.
 - Run it in the background; it can take hours.
 - `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.
@@ -129,14 +129,14 @@ cases list [--state STATE,...|--all] [--urgency URGENCY]... \
   [--worker NAME]... [--count|--json]
 ```
 
-- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, `revision`, the number of event files including any that were skipped, and `url`, the case's page in the human's web inbox, empty when no inbox is running.
+- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event as written, `revision`, the number of events including any that were skipped, and `url`, the case's page in the human's web inbox, empty when no inbox is running.
 - `show --answer` prints only `state`, `kind`, `revision` and `answer`, as JSON. `answer` is `null` when the case has none (open, parked, or reopened by a note); it exits 0 either way. Read the answer from here, not from the plain-text output.
 - Without `--state`, `list` shows open and parked cases only. `--all` shows every state.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated, and wins over `--all`.
 - `list --kind KIND`, `--urgency URGENCY`, `--label TEXT` and `--worker NAME` (each repeatable) show cases with any of those kinds, urgencies or labels, or from any of those workers. A case must match every filter given.
 - `list --older-than DURATION` (`30m`, `2h`) shows cases whose last event is older than that, not their open time.
 - `list --count` prints only the number of matching cases, `0` when none match.
-- A damaged event file is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not fix the file.
+- A damaged event is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not try to fix the store.
 
 ### `cases status`
 
