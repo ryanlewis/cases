@@ -29,7 +29,15 @@ type Event struct {
 	// replacedBody and replacedContext are the body and context an amend
 	// replaced, as the fold found them, for Describe.
 	replacedBody, replacedContext string
+	// from is the state the case was in before the event, as the fold found
+	// it. It is empty for the open event.
+	from State
 }
+
+// From is the state the case was in before the event. It tells a note that
+// reopened an answered case from a note on an open one. It is empty for the
+// open event and for an event that did not come from a fold.
+func (ev Event) From() State { return ev.from }
 
 // Case is the fold of a case directory.
 type Case struct {
@@ -234,7 +242,8 @@ func (c *Case) apply(ev Event) error {
 	if c.State == "" && ev.Type != EventOpen {
 		return &TransitionError{Event: ev.Type}
 	}
-	refuse := &TransitionError{Event: ev.Type, From: c.State, Kind: c.Kind}
+	from := c.State
+	refuse := &TransitionError{Event: ev.Type, From: from, Kind: c.Kind}
 
 	switch r := rec.(type) {
 	case *OpenRecord:
@@ -342,6 +351,7 @@ func (c *Case) apply(ev Event) error {
 
 	ev.At = rec.at()
 	ev.Actor = rec.actor()
+	ev.from = from
 	c.Events = append(c.Events, ev)
 	if ev.At.After(c.UpdatedAt) {
 		c.UpdatedAt = ev.At
