@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -46,12 +47,14 @@ func configErr(path string, format string, args ...any) *Error {
 
 // Key describes one setting: the TOML key, the flag it seeds, the
 // environment variable that beats it, and the value that applies when
-// nothing sets it. Every key is a string.
+// nothing sets it. Every value is held as a string; a Bool key also takes
+// an unquoted true or false.
 type Key struct {
 	Name     string        // TOML key
 	Flag     string        // flag it seeds, when not the same as Name
 	Env      string        // environment variable that wins over the file, if any
 	Default  func() string // built-in default
+	Bool     bool          // also accepts a TOML boolean
 	Commands []string      // commands whose flags this key may seed; empty means all
 	Comment  []string      // template comment, one line per entry
 	Example  string        // template assignment, written commented out
@@ -83,12 +86,13 @@ var Keys = []Key{
 	{
 		Name:     "no-open",
 		Default:  func() string { return "false" },
+		Bool:     true,
 		Commands: []string{"serve"},
 		Comment: []string{
-			"Set to \"true\" to stop cases serve opening the inbox in the browser.",
+			"Set to true to stop cases serve opening the inbox in the browser.",
 			"Same as --no-open.",
 		},
-		Example: `no-open = "true"`,
+		Example: `no-open = true`,
 	},
 	{
 		Name:     "prune-age",
@@ -236,11 +240,20 @@ func Load(path string) (*File, error) {
 		if !ok {
 			return fail(configErr(path, "unknown key %q (valid keys: %s)", name, strings.Join(KeyNames(), ", ")))
 		}
-		s, ok := value.(string)
-		if !ok {
+		switch v := value.(type) {
+		case string:
+			f.values[key.Name] = v
+		case bool:
+			if !key.Bool {
+				return fail(configErr(path, "key %q must be a string, got boolean", key.Name))
+			}
+			f.values[key.Name] = strconv.FormatBool(v)
+		default:
+			if key.Bool {
+				return fail(configErr(path, "key %q must be a boolean or a string, got %s", key.Name, typeName(value)))
+			}
 			return fail(configErr(path, "key %q must be a string, got %s", key.Name, typeName(value)))
 		}
-		f.values[key.Name] = s
 	}
 	return f, nil
 }
