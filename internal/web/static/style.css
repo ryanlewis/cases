@@ -123,6 +123,10 @@ header.top {
 .chips a.on { background: var(--fg); color: var(--bg); }
 /* The filters on /done: the same chip group, as wide as its chips. */
 .chips.filters { width: fit-content; max-width: 100%; flex-wrap: wrap; margin: 0 0 1rem; }
+/* Beside a done case, the filters sit inside the list column's gutter, a
+   little tighter so the three fit on one line in the column. */
+.list .chips.filters { margin: 1rem; }
+.list .chips.filters a { padding: .25rem .5rem; }
 
 /* The options overlay: a square ruled panel over a dimmed page. The form
    fills the dialog, so a click on the dialog itself is on the backdrop. */
@@ -169,7 +173,8 @@ header.top { view-transition-name: masthead; }
   .split { display: grid; grid-template-columns: clamp(20rem, 28%, 27.5rem) minmax(0, 1fr); height: 100%; }
   .split > * { overflow-y: auto; }
   .split > .list { padding: 0; border-right: 1px solid var(--rule); }
-  /* Moving between cases keeps the list column still; only the case fades. */
+  /* Moving between cases keeps the list column still; only the case fades.
+     The done list beside a done case takes the same name: a page has one. */
   .split > .list { view-transition-name: inbox-list; }
 }
 
@@ -191,7 +196,7 @@ header.top { view-transition-name: masthead; }
 .card h2 { margin: .25rem 0; }
 .excerpt { margin: 0; font-size: .8125rem; line-height: 1.25rem; color: var(--fg-2); }
 main > .card { padding: .75rem 1rem; margin: 0 0 .5rem; border: 1px solid var(--rule); border-left-width: 2px; }
-main > .card h2 a { text-decoration: none; }
+.card h2 a { text-decoration: none; }
 
 /* Outline badges, so exactly one thing is loud: a blocking case's urgency. */
 .badge {

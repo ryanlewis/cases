@@ -6,9 +6,11 @@
 </section>
 {{else}}
 <div class="split{{if .Home}} home{{end}}">
-<aside class="list" aria-label="inbox">
+{{with .Done}}<aside class="list" aria-label="done">
+{{template "done-list" .}}
+</aside>{{else}}<aside class="list" aria-label="inbox">
 {{template "inbox-list" .Inbox}}
-</aside>
+</aside>{{end}}
 <div class="work">
 {{if .Case}}{{template "case" .}}{{else}}<p class="empty">no open cases.</p>{{end}}
 </div>

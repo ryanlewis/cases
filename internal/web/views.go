@@ -157,8 +157,8 @@ var funcs = template.FuncMap{
 var pages = map[string]*template.Template{}
 
 func init() {
-	pages["case"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/inbox.html", "templates/case.html"))
-	pages["done"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/done.html"))
+	pages["case"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/inbox.html", "templates/done-list.html", "templates/case.html"))
+	pages["done"] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/done-list.html", "templates/done.html"))
 }
 
 // page is what every full page carries for the layout.
@@ -495,22 +495,28 @@ func newFlightCard(c *store.Case, now time.Time) flightCard {
 	return f
 }
 
-// done lists the cases the human is through with. show picks a filter:
-// inflight (answered or picked up), closed-today, or all, which is the
-// default and what an unknown value gets.
-func (s *Server) done(w http.ResponseWriter, r *http.Request) {
-	cases, err := s.cases()
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
+// doneData is the done list: the filter chips and the cards under the one
+// chosen. Selected is the id of the case beside the list on a case page, and
+// is empty on /done.
+type doneData struct {
+	page
+	Show     string
+	Filters  []doneFilter
+	Cards    []doneCard
+	Flight   []flightCard
+	Selected string
+}
+
+// newDone builds the done list. show picks a filter: inflight (answered or
+// picked up), closed-today, or all, which is the default and what an unknown
+// value gets.
+func newDone(cases []*store.Case, show, selected string) doneData {
 	now := clock()
 	day := startOfDay(now)
 	var all, closedToday []*store.Case
 	var flight []flightCard
 	for _, c := range cases {
-		switch c.State {
-		case store.StateAnswered, store.StatePickedUp, store.StateClosed, store.StateWithdrawn:
+		if isDone(c) {
 			all = append(all, c)
 		}
 		if inFlight(c) {
@@ -520,20 +526,14 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 			closedToday = append(closedToday, c)
 		}
 	}
-	show := r.URL.Query().Get("show")
-	d := struct {
-		page
-		Show    string
-		Filters []doneFilter
-		Cards   []doneCard
-		Flight  []flightCard
-	}{
+	d := doneData{
 		page: page{Title: "done", tally: countTally(cases), Nav: "done"},
 		Filters: []doneFilter{
 			{"inflight", "in flight", len(flight)},
 			{"closed-today", "closed today", len(closedToday)},
 			{"all", "all", len(all)},
 		},
+		Selected: selected,
 	}
 	shown := all
 	switch show {
@@ -554,7 +554,27 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request) {
 			d.Cards = append(d.Cards, doneCard{Case: c, Age: Age(c.UpdatedAt, now)})
 		}
 	}
-	s.render(w, http.StatusOK, "done", "layout.html", d)
+	return d
+}
+
+// isDone reports whether c is one the human is through with: answered, picked
+// up, closed or withdrawn.
+func isDone(c *store.Case) bool {
+	switch c.State {
+	case store.StateAnswered, store.StatePickedUp, store.StateClosed, store.StateWithdrawn:
+		return true
+	}
+	return false
+}
+
+// done lists the cases the human is through with, filtered by show.
+func (s *Server) done(w http.ResponseWriter, r *http.Request) {
+	cases, err := s.cases()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.render(w, http.StatusOK, "done", "layout.html", newDone(cases, r.URL.Query().Get("show"), ""))
 }
 
 type threadEntry struct {
@@ -565,9 +585,12 @@ type threadEntry struct {
 
 // caseData is the list column and the working area. Case is nil when the
 // inbox is empty. Home is set on /, where a stale thread reloads / instead.
+// Done is set in place of Inbox when the case is done: the done list is
+// beside it.
 type caseData struct {
 	page
 	Inbox inboxData
+	Done  *doneData
 	Home  bool
 	// Recorded is set when the page is where a post went after writing.
 	Recorded *recorded
@@ -621,17 +644,31 @@ func (s *Server) casePage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, rec *recorded, msg string, form url.Values) {
 	d := caseData{Home: home, Recorded: rec, Error: msg, Form: form}
-	if c != nil {
+	switch {
+	case c != nil && isDone(c):
+		// A done case sits beside the done list, under the filter it is on.
+		// The list does not poll, as on /done; the thread poll reloads the
+		// page when the case changes state, which picks the list again.
+		show := "all"
+		if inFlight(c) {
+			show = "inflight"
+		}
+		done := newDone(cases, show, c.ID)
+		done.Title = c.Title + " · done"
+		d.Case, d.Thread, d.Done = c, thread(c), &done
+		d.page = done.page
+	case c != nil:
 		d.Case, d.Thread = c, thread(c)
 		d.Inbox = newInbox(cases, c.ID)
 		d.Inbox.Title = c.Title
-	} else {
+		d.page = d.Inbox.page
+	default:
 		d.Inbox = newInbox(cases, "")
 		if home {
 			d.Inbox.setEmpty(cases)
 		}
+		d.page = d.Inbox.page
 	}
-	d.page = d.Inbox.page
 	s.render(w, status, "case", "layout.html", d)
 }
 
