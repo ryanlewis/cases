@@ -476,6 +476,11 @@ selected case, and its card is highlighted in the list. The two columns scroll
 separately. On a window narrower than 56rem there is one column: `/` shows the
 list and `/cases/ID` shows the case, with Inbox in the header to go back.
 
+Where the browser supports cross-document view transitions, moving between
+pages cross-fades, with the header held still, and the list column too on a
+wide window. With reduced motion set in the system, or in other browsers,
+pages change at once.
+
 The header counts open cases by urgency and parked cases, as in
 `3 blocking · 5 today · 12 whenever · 1 parked`. A count of zero is left out,
 and only the blocking count is red. The page title starts with the blocking

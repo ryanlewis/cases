@@ -138,6 +138,17 @@ main:has(> .split) { max-width: none; padding: 0; }
 .split > * { padding: 0 1rem 3rem; }
 .work > * { max-width: 47.5rem; }
 
+/* Page changes cross-fade where the browser has cross-document view
+   transitions, and change at once elsewhere or under reduced motion. The
+   masthead is named so it holds still instead of fading with the page. A card
+   does not morph into the case header: a name must be unique on the page, and
+   without an inline style no card can carry its own. */
+@view-transition { navigation: auto; }
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+}
+header.top { view-transition-name: masthead; }
+
 /* Narrow screens show one column: the list on /, the case on /cases/ID. */
 @media (width < 56rem) {
   .split.home .work, .split:not(.home) .list { display: none; }
@@ -153,6 +164,8 @@ main:has(> .split) { max-width: none; padding: 0; }
   .split { display: grid; grid-template-columns: clamp(20rem, 28%, 27.5rem) minmax(0, 1fr); height: 100%; }
   .split > * { overflow-y: auto; }
   .split > .list { padding: 0; border-right: 1px solid var(--rule); }
+  /* Moving between cases keeps the list column still; only the case fades. */
+  .split > .list { view-transition-name: inbox-list; }
 }
 
 /* Cards. In the list they are rows with a permanent left gutter, so the `>`

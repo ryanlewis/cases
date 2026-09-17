@@ -237,6 +237,23 @@ func TestStaticHTMXIsTheRecordedRelease(t *testing.T) {
 	}
 }
 
+// TestStyleHasViewTransitions checks that page changes opt in to cross-document
+// view transitions and that reduced motion turns them off again.
+func TestStyleHasViewTransitions(t *testing.T) {
+	a := newApp(t)
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	on := strings.Index(css, "@view-transition { navigation: auto; }")
+	off := strings.Index(css, "@media (prefers-reduced-motion: reduce) {\n  @view-transition { navigation: none; }\n}")
+	if on < 0 || off < 0 || off < on {
+		t.Errorf("style.css lacks the view transition rule, or the reduced-motion guard after it (at %d and %d)", on, off)
+	}
+	for _, want := range []string{"header.top { view-transition-name: masthead; }", ".split > .list { view-transition-name: inbox-list; }"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css lacks %s", want)
+		}
+	}
+}
+
 // TestStyleScalesWithTextSize keeps lengths in rem, so the size option, which
 // sets the root size, scales the whole page. Hairline rules, offsets and media
 // query breakpoints (which the root size does not move) may stay in px.
