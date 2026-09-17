@@ -391,6 +391,13 @@ func TestOptionsOverlayAndPrefsScript(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `{ name: "size", values: ["medium", "small", "large"] }`) {
 		t.Error("prefs.js lacks the size option with medium as its default")
 	}
+	// Notifications are off until the human turns them on, and the page
+	// asks the feed, not an address of its own making.
+	for _, want := range []string{`{ name: "notify", values: ["off", "blocking", "all"] }`, `fetch("/notifications"`, `new Notification(`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("prefs.js lacks %s", want)
+		}
+	}
 
 	for _, target := range []string{"/", "/done", "/cases/" + c.ID} {
 		w := a.do("GET", target, nil, nil)
@@ -405,6 +412,9 @@ func TestOptionsOverlayAndPrefsScript(t *testing.T) {
 			`name="face" value="mono" checked`, `name="face" value="sans"`, `name="face" value="serif"`,
 			`name="size" value="small"`, `name="size" value="medium" checked`, `name="size" value="large"`,
 			`name="links" value="new" checked`, `name="links" value="same"`,
+			`name="notify" value="off" checked`, `name="notify" value="blocking"`, `name="notify" value="all"`,
+			`<p class="label" id="notify-status" role="status"></p>`,
+			`<button type="button" id="notify-allow" hidden>allow notifications</button>`,
 			`<button type="button" id="options-reset">reset</button>`,
 			`<button type="submit">close</button>`,
 		} {
