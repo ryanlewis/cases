@@ -104,7 +104,7 @@ func TestPruneArchives(t *testing.T) {
 		}
 	}
 
-	list := mustRun(t, "--store", s.root, "list")
+	list := mustRun(t, "--store", s.root, "list", "--all")
 	if strings.Contains(list, s.closed) || strings.Contains(list, s.withdrawn) || !strings.Contains(list, s.open) || !strings.Contains(list, s.recent) {
 		t.Errorf("list after prune:\n%s", list)
 	}

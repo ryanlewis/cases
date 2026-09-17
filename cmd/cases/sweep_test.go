@@ -165,3 +165,16 @@ func TestSweepContinuesPastARefusal(t *testing.T) {
 		t.Errorf("other case state = %s", got)
 	}
 }
+
+func TestSweepByKind(t *testing.T) {
+	root := t.TempDir()
+	notice := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "whenever", "--title", "Notice"))
+	decision := openDecision(t, root)
+
+	mustRun(t, "--store", root, "sweep", "--kind", "fyi", "--yes")
+	for id, want := range map[string]store.State{notice: store.StateWithdrawn, decision: store.StateOpen} {
+		if got := loadCase(t, root, id).State; got != want {
+			t.Errorf("%s state = %s, want %s", id, got, want)
+		}
+	}
+}
