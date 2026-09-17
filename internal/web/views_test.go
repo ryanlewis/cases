@@ -1165,3 +1165,35 @@ func TestInboxZeroHidesZeroLines(t *testing.T) {
 		t.Errorf("/ with an open case:\n%s", body)
 	}
 }
+
+func TestThreadShowsActorAndFor(t *testing.T) {
+	a := newApp(t)
+	a.server.Actor = &store.Actor{Name: "Ryan", Kind: "human"}
+	rec := openRecords[store.KindFYI]
+	rec.For = "Ryan"
+	rec.Worker = "bun-pins"
+	rec.Actor = &store.Actor{Name: "bun-pins", Kind: "agent"}
+	c := a.open(t, rec)
+
+	for _, page := range []string{a.get(t, "/"), a.get(t, "/cases/"+c.ID)} {
+		if !strings.Contains(page, "<span>for Ryan</span>") {
+			t.Errorf("page missing for:\n%s", page)
+		}
+	}
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, c.Revision()), nil); w.Code != http.StatusSeeOther {
+		t.Fatalf("answer: %d %s", w.Code, w.Body.String())
+	}
+	loaded, err := store.Load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Events[1].Actor; got == nil || *got != *a.server.Actor {
+		t.Errorf("answer actor = %+v", got)
+	}
+	page := a.get(t, "/cases/"+c.ID)
+	for _, want := range []string{"<p>by bun-pins</p>", "<p>by Ryan</p>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("thread missing %s:\n%s", want, page)
+		}
+	}
+}

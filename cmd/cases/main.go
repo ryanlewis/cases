@@ -167,6 +167,26 @@ func (d *Deps) cases() store.Store {
 	return d.Cases
 }
 
+// humanActor is the actor for a human event written as name, or nil when no
+// name is set.
+func humanActor(name string) *store.Actor {
+	if name == "" {
+		return nil
+	}
+	return &store.Actor{Name: name, Kind: string(store.AuthorHuman)}
+}
+
+// workerActor is the actor for an agent event on case id: the worker the case
+// was opened with, or nil when it has none. A case that cannot be read gets
+// nil too, and the write reports the problem.
+func (d *Deps) workerActor(id string) *store.Actor {
+	cs, err := d.cases().Get(context.Background(), id)
+	if err != nil || cs.Worker == "" {
+		return nil
+	}
+	return &store.Actor{Name: cs.Worker, Kind: string(store.AuthorAgent)}
+}
+
 // findCase resolves a case id typed by the human to a case id in the store: the case
 // with that exact id, or else the one case whose id contains it. No match, or
 // more than one, is an error. An id that is whole, a timestamp and a slug, is

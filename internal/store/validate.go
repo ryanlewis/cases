@@ -39,7 +39,25 @@ func (r *OpenRecord) validate() error {
 			return err
 		}
 	}
+	if r.For != "" && strings.TrimSpace(r.For) == "" {
+		return errors.New("for is empty")
+	}
 	return checkLabels(r.Labels, nil)
+}
+
+// checkActor refuses an actor that is present but names no one. Its kind is
+// any text: a later cases may record kinds this one does not know.
+func checkActor(a *Actor) error {
+	if a == nil {
+		return nil
+	}
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("actor name is empty")
+	}
+	if strings.TrimSpace(a.Kind) == "" {
+		return errors.New("actor kind is empty")
+	}
+	return nil
 }
 
 // validate checks the amend against cur, the case as it stands: the open

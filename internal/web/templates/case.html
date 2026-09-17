@@ -23,6 +23,7 @@
     <span class="badge urgency">{{$c.Urgency}}</span>
     <span>{{$c.Kind}}</span>
     <span class="badge state{{if eq $c.State "parked"}} parked{{end}}">{{$c.State}}</span>
+    {{with $c.For}}<span>for {{.}}</span>{{end}}
     {{with $c.Worker}}<span>{{.}}</span>{{end}}
     {{range $c.Labels}}<span class="tag">{{.}}</span>{{end}}
     <span class="age">opened {{stamp $c.OpenedAt}}, {{age $c.OpenedAt}}</span>

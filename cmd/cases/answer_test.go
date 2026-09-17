@@ -233,3 +233,39 @@ func TestAnswerTakesPartOfAnID(t *testing.T) {
 		t.Error("pickup took part of an id")
 	}
 }
+
+func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, "name = \"Ryan\"\n")
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "decision", "--urgency", "today",
+		"--title", "Pin bun?", "--option", "Pin", "--worker", "bun-pins", "--for", "Ryan"))
+	mustRun(t, "--store", root, "answer", id, "--option", "1")
+	mustRun(t, "--store", root, "pickup", id)
+
+	c := loadCase(t, root, id)
+	if c.For != "Ryan" {
+		t.Errorf("for = %q", c.For)
+	}
+	for i, want := range []store.Actor{{Name: "bun-pins", Kind: "agent"}, {Name: "Ryan", Kind: "human"}, {Name: "bun-pins", Kind: "agent"}} {
+		if got := c.Events[i].Actor; got == nil || *got != want {
+			t.Errorf("event %d actor = %+v, want %+v", i+1, got, want)
+		}
+	}
+	out := mustRun(t, "--store", root, "show", id)
+	for _, want := range []string{"for:      Ryan", "by Ryan"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show missing %q:\n%s", want, out)
+		}
+	}
+
+	// --as beats the config file; without a worker an agent event records no actor.
+	other := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Heads up"))
+	mustRun(t, "--store", root, "answer", other, "--ack", "--as", "Sam")
+	c = loadCase(t, root, other)
+	if c.Events[0].Actor != nil {
+		t.Errorf("open without a worker has actor %+v", c.Events[0].Actor)
+	}
+	if got := c.Events[1].Actor; got == nil || got.Name != "Sam" {
+		t.Errorf("answer --as actor = %+v", got)
+	}
+}

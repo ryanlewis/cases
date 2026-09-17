@@ -116,17 +116,21 @@ type Row struct {
 
 // OpenRecord is the body of NNNN-agent-open.json.
 type OpenRecord struct {
-	Kind     Kind      `json:"kind"`
-	Urgency  Urgency   `json:"urgency"`
-	Title    string    `json:"title"`
-	Body     string    `json:"body,omitempty"`
-	Options  []string  `json:"options,omitempty"`
-	Rows     []Row     `json:"rows,omitempty"`
-	Links    []string  `json:"links,omitempty"`
-	Labels   []string  `json:"labels,omitempty"`
-	Worker   string    `json:"worker,omitempty"`
-	Brief    string    `json:"brief,omitempty"`
-	Context  string    `json:"context,omitempty"`
+	Kind    Kind     `json:"kind"`
+	Urgency Urgency  `json:"urgency"`
+	Title   string   `json:"title"`
+	Body    string   `json:"body,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Rows    []Row    `json:"rows,omitempty"`
+	Links   []string `json:"links,omitempty"`
+	Labels  []string `json:"labels,omitempty"`
+	Worker  string   `json:"worker,omitempty"`
+	Brief   string   `json:"brief,omitempty"`
+	Context string   `json:"context,omitempty"`
+	// For names who the case is addressed to, such as the human expected to
+	// answer it. Nothing checks it against who does.
+	For      string    `json:"for,omitempty"`
+	Actor    *Actor    `json:"actor,omitempty"`
 	OpenedAt time.Time `json:"opened_at"`
 }
 
@@ -140,6 +144,7 @@ type AmendRecord struct {
 	Links     []string  `json:"links,omitempty"`
 	Labels    []string  `json:"labels,omitempty"`
 	Context   string    `json:"context,omitempty"`
+	Actor     *Actor    `json:"actor,omitempty"`
 	AmendedAt time.Time `json:"amended_at"`
 }
 
@@ -171,18 +176,21 @@ type AnswerRecord struct {
 	Drop       bool        `json:"drop,omitempty"`
 	Ack        bool        `json:"ack,omitempty"`
 	Note       string      `json:"note,omitempty"`
+	Actor      *Actor      `json:"actor,omitempty"`
 	AnsweredAt time.Time   `json:"answered_at"`
 }
 
 // PickupRecord is the body of NNNN-agent-pickup.json.
 type PickupRecord struct {
 	By         string    `json:"by,omitempty"`
+	Actor      *Actor    `json:"actor,omitempty"`
 	PickedUpAt time.Time `json:"picked_up_at"`
 }
 
 // NoteRecord is the body of NNNN-agent-note.json: a follow-up in the thread.
 type NoteRecord struct {
 	Body    string    `json:"body"`
+	Actor   *Actor    `json:"actor,omitempty"`
 	NotedAt time.Time `json:"noted_at"`
 }
 
@@ -190,31 +198,44 @@ type NoteRecord struct {
 type CloseRecord struct {
 	Outcome  string    `json:"outcome"`
 	Links    []string  `json:"links,omitempty"`
+	Actor    *Actor    `json:"actor,omitempty"`
 	ClosedAt time.Time `json:"closed_at"`
 }
 
 // WithdrawRecord is the body of NNNN-agent-withdraw.json.
 type WithdrawRecord struct {
 	Reason      string    `json:"reason,omitempty"`
+	Actor       *Actor    `json:"actor,omitempty"`
 	WithdrawnAt time.Time `json:"withdrawn_at"`
 }
 
 // ParkRecord is the body of NNNN-human-park.json.
 type ParkRecord struct {
 	Note     string    `json:"note,omitempty"`
+	Actor    *Actor    `json:"actor,omitempty"`
 	ParkedAt time.Time `json:"parked_at"`
 }
 
 // ResumeRecord is the body of NNNN-<author>-resume.json.
 type ResumeRecord struct {
+	Actor     *Actor    `json:"actor,omitempty"`
 	ResumedAt time.Time `json:"resumed_at"`
 }
 
+// Actor is who wrote an event: the human's name, or the agent session's. It is
+// optional and recorded as given; the store does not check it against the
+// author in the file name or decide who may write what.
+type Actor struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
 // record is implemented by every event body so the fold and the writer can
-// read and set its timestamp without a type switch.
+// read and set its timestamp and actor without a type switch.
 type record interface {
 	at() time.Time
 	stamp(t time.Time)
+	actor() *Actor
 }
 
 func (r *OpenRecord) at() time.Time     { return r.OpenedAt }
@@ -236,6 +257,16 @@ func (r *CloseRecord) stamp(t time.Time)    { r.ClosedAt = stampTime(r.ClosedAt,
 func (r *WithdrawRecord) stamp(t time.Time) { r.WithdrawnAt = stampTime(r.WithdrawnAt, t) }
 func (r *ParkRecord) stamp(t time.Time)     { r.ParkedAt = stampTime(r.ParkedAt, t) }
 func (r *ResumeRecord) stamp(t time.Time)   { r.ResumedAt = stampTime(r.ResumedAt, t) }
+
+func (r *OpenRecord) actor() *Actor     { return r.Actor }
+func (r *AmendRecord) actor() *Actor    { return r.Actor }
+func (r *AnswerRecord) actor() *Actor   { return r.Actor }
+func (r *PickupRecord) actor() *Actor   { return r.Actor }
+func (r *NoteRecord) actor() *Actor     { return r.Actor }
+func (r *CloseRecord) actor() *Actor    { return r.Actor }
+func (r *WithdrawRecord) actor() *Actor { return r.Actor }
+func (r *ParkRecord) actor() *Actor     { return r.Actor }
+func (r *ResumeRecord) actor() *Actor   { return r.Actor }
 
 // stampTime keeps a timestamp the caller set, in UTC, and fills in t otherwise.
 func stampTime(have, t time.Time) time.Time {

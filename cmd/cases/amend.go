@@ -30,7 +30,7 @@ func (c *AmendCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	rec := store.AmendRecord{Options: c.Option, Rows: rows, Links: c.Link, Labels: c.Label}
+	rec := store.AmendRecord{Options: c.Option, Rows: rows, Links: c.Link, Labels: c.Label, Actor: d.workerActor(c.ID)}
 	// The store reads an empty body or context as no change, which is not
 	// what an empty --body, --body-file or --context asks for. The store
 	// refuses one that is only whitespace.

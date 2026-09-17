@@ -76,7 +76,7 @@ Each write adds a new file:
 ```
 cases/
   2026-09-15T09-12-03Z-pin-bun-or-float/
-    0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], labels[], worker, brief, context
+    0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], labels[], worker, brief, context, for
     0002-agent-amend.json      # options[], rows[], links[], labels[] to add; body, context to replace; amended_at
     0003-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
     0004-agent-pickup.json     # picked_up_at, by
@@ -95,7 +95,20 @@ and help the human act on a case. `labels` group cases, such as the ones one
 piece of work opened; a label may not be blank or appear twice on a case.
 `worker` names the agent session waiting on it. `brief` says where to restart
 the work from if the case is parked: a brief, a ledger or a note, as a path or
-a short line. `context` is free text shown with the case.
+a short line. `context` is free text shown with the case. `for` names who the
+case is addressed to, such as the human expected to answer it; nothing checks
+it against who answers. An amend cannot change it.
+
+Every event may carry an optional `actor`, the name and kind of whoever wrote
+it, such as `{"name": "Ryan", "kind": "human"}`. `show` and the web thread
+print it as `by NAME`, and `show --json` has it on each event (the open
+event's `actor` and `for` also appear at the top level with the other open
+fields). The CLI records the human's name from `--as` or the `name` config key
+on `answer`, `resume` and the inbox, and the case's `worker` on the agent's
+events; when neither is set it records no actor. The store checks only that an
+actor it is given has a name and a kind, and never who may write what. A
+`cases` from before `actor` and `for` reads events carrying them as before and
+ignores both fields.
 
 An `amend` changes a case that is still open. Its `options`, `rows`,
 `links` and `labels` are added after the ones the case has, and its `body` or `context`
@@ -221,6 +234,7 @@ cases config show    # print the defaults the environment and the file establish
 | `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
 | `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
 | `no-open` | `--no-open` on `serve` | nothing | `false` (`true` or `false`, quoted or not) |
+| `name` | `--as` on `answer`, `resume` and `serve` | nothing | none: no actor is recorded |
 | `prune-age` | `--age` on `prune` | nothing | `720h` |
 
 ```toml
@@ -247,6 +261,7 @@ cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
                [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--row JSON]... [--link URL]... [--label TEXT]...
                [--worker NAME] [--brief TEXT] [--context TEXT]
+               [--for NAME]
 cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--row JSON]... [--link URL]... [--label TEXT]...
                [--context TEXT] [--revision N]
@@ -266,8 +281,8 @@ Human side:
 cases answer ID --option N | --other | --row ID=VERDICT[:NOTE]... |
                 --accept | --changes | --text TEXT | --text-file FILE|- |
                 --park | --drop | --ack
-                [--note TEXT] [--revision N]
-cases resume ID [--agent] [--revision N]
+                [--note TEXT] [--revision N] [--as NAME]
+cases resume ID [--agent] [--revision N] [--as NAME]
 cases sweep  [--reason TEXT] [--older-than DURATION] [--kind KIND]...
              [--label TEXT]... [--worker NAME]... [--yes]
 cases prune  [--age DURATION] [--state closed,withdrawn] [--delete] [--yes]
@@ -280,7 +295,7 @@ cases list   [--state STATE,...|--all] [--urgency URGENCY]...
              [--older-than DURATION] [--kind KIND]... [--label TEXT]...
              [--worker NAME]... [--count|--json]
 cases show   ID [--json | --answer]
-cases serve  [--listen 127.0.0.1:8765] [--no-open]
+cases serve  [--listen 127.0.0.1:8765] [--no-open] [--as NAME]
 cases status [--json]
 ```
 
@@ -336,7 +351,7 @@ exits 0 either way.
 `--row '{"id":"deps","label":"Install deps","script":"npm ci","link":"https://…"}'`.
 Add `"note":"…"` to show a line under the row's label.
 
-`--label`, `--worker`, `--brief` and `--context` on `open` set the fields described in
+`--label`, `--worker`, `--brief`, `--context` and `--for` on `open` set the fields described in
 [store format](#store-format). `open` takes the worker from `CASES_WORKER` and
 one label from `CASES_LABEL` when the flags are not given, so a session can
 export them once. `CASES_LABEL` is always exactly one label: the whole value,

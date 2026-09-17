@@ -16,7 +16,7 @@ func (c *WithdrawCmd) Run(d *Deps) error {
 	if err := store.ValidID(c.ID); err != nil {
 		return err
 	}
-	cs, err := d.cases().Withdraw(context.Background(), c.ID, store.WithdrawRecord{Reason: c.Reason}, atRevision(c.Revision)...)
+	cs, err := d.cases().Withdraw(context.Background(), c.ID, store.WithdrawRecord{Reason: c.Reason, Actor: d.workerActor(c.ID)}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

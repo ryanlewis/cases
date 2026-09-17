@@ -29,7 +29,7 @@ func (c *CloseCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}
-	cs, err := d.cases().Close(context.Background(), c.ID, store.CloseRecord{Outcome: outcome, Links: c.Link}, atRevision(c.Revision)...)
+	cs, err := d.cases().Close(context.Background(), c.ID, store.CloseRecord{Outcome: outcome, Links: c.Link, Actor: d.workerActor(c.ID)}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

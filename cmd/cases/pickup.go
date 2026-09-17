@@ -16,7 +16,7 @@ func (c *PickupCmd) Run(d *Deps) error {
 	if err := store.ValidID(c.ID); err != nil {
 		return err
 	}
-	cs, err := d.cases().Pickup(context.Background(), c.ID, store.PickupRecord{By: c.By}, atRevision(c.Revision)...)
+	cs, err := d.cases().Pickup(context.Background(), c.ID, store.PickupRecord{By: c.By, Actor: d.workerActor(c.ID)}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}
