@@ -109,7 +109,7 @@ cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID].
   [--kind KIND]... [--label TEXT]... [--worker NAME]...
 ```
 
-- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision`. Each line also has `fresh` and `next_since`.
+- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision` and `url`. Each line also has `fresh` and `next_since`.
 - `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer synced in late from another machine, so do not skip a case on `fresh` alone: an `answered` case you have not picked up still needs you.
 - `next_since` is the same on every line: pass it as `--since` when you run `wait` again.
 - Run it in the background; it can take hours.
@@ -128,7 +128,7 @@ cases list [--state STATE,...|--all] [--urgency URGENCY]... \
   [--worker NAME]... [--count|--json]
 ```
 
-- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, and `revision`, the number of event files including any that were skipped. Read the answer from here, not from the plain-text output.
+- `show --json` is the case: `state`, `kind`, `urgency`, `title`, `options`, `rows`, the current `answer`, `pickup`, `close`, `events`, which holds every event file as written, `revision`, the number of event files including any that were skipped, and `url`, the case's page in the human's web inbox, empty when no inbox is running. Read the answer from here, not from the plain-text output.
 - Without `--state`, `list` shows open and parked cases only. `--all` shows every state.
 - `list --state` takes `open`, `answered`, `pickedup`, `closed`, `withdrawn` or `parked`, comma-separated or repeated, and wins over `--all`.
 - `list --kind KIND`, `--urgency URGENCY`, `--label TEXT` and `--worker NAME` (each repeatable) show cases with any of those kinds, urgencies or labels, or from any of those workers. A case must match every filter given.
@@ -144,7 +144,7 @@ cases status [--json]
 
 - Prints where the human's web inbox (`cases serve`) is running for the store: its URL and pid. `--json` prints `pid`, `url`, `addr`, `store`, `started_at` and `version`.
 - Read the result:
-  - Exit 0 with the URL: the inbox is running. Give the human a link to the case: the URL followed by `cases/ID`.
+  - Exit 0 with the URL: the inbox is running. For a link to a case, use `url` from `cases show ID --json`.
   - Exit 1 with `not running` on stderr: no inbox is running, including one that crashed. Do not start one; tell the human they can answer from `cases serve` or the terminal.
   - Exit 1 with an `Error:` line: the check failed, usually because the inbox's state file is damaged or unreadable (the message names it). Report it to the human; do not fix or delete the file.
 - Running means the process is alive and accepts connections. It cannot tell a hung inbox from a healthy one.
@@ -186,10 +186,10 @@ cases pickup "$id" --by bun-pins --revision "$rev"
 cases close "$id" --outcome "Pinned bun to 1.2.3 in abc123." --revision "$((rev + 1))" --link https://github.com/o/r/pull/12
 ```
 
-Check the inbox with `cases status` at two points:
+Check the inbox at two points:
 
-- Right after `cases open`: if it is running, give the human the link to the case; if not, tell them the case id and that they can answer from `cases serve` or the terminal.
-- When `wait` times out twice in a row: if the inbox is not running, tell the human, so they can start it or answer from the terminal, then wait again.
+- Right after `cases open`, run `cases show ID --json`: if `url` is set, give the human that link to the case; if it is empty, no inbox is running, so tell them the case id and that they can answer from `cases serve` or the terminal.
+- When `wait` times out twice in a row, run `cases status`: if the inbox is not running, tell the human, so they can start it or answer from the terminal, then wait again.
 
 When `wait` returns, read the case's `state` and act on it:
 
