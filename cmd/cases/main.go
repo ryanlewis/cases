@@ -170,7 +170,7 @@ func (d *Deps) cases() store.Store {
 // humanActor is the actor for a human event written as name, or nil when no
 // name is set.
 func humanActor(name string) *store.Actor {
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		return nil
 	}
 	return &store.Actor{Name: name, Kind: string(store.AuthorHuman)}
@@ -181,10 +181,20 @@ func humanActor(name string) *store.Actor {
 // nil too, and the write reports the problem.
 func (d *Deps) workerActor(id string) *store.Actor {
 	cs, err := d.cases().Get(context.Background(), id)
-	if err != nil || cs.Worker == "" {
+	if err != nil {
 		return nil
 	}
-	return &store.Actor{Name: cs.Worker, Kind: string(store.AuthorAgent)}
+	return agentActor(cs.Worker)
+}
+
+// agentActor is the actor for an agent event written by worker, or nil when
+// worker names no one. The store accepts a blank worker on open but refuses a
+// blank actor, so a blank worker must not become one.
+func agentActor(worker string) *store.Actor {
+	if strings.TrimSpace(worker) == "" {
+		return nil
+	}
+	return &store.Actor{Name: worker, Kind: string(store.AuthorAgent)}
 }
 
 // findCase resolves a case id typed by the human to a case id in the store: the case

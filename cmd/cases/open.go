@@ -37,9 +37,7 @@ func (c *OpenCmd) Run(d *Deps) error {
 		Brief:   c.Brief,
 		Context: c.Context,
 		For:     c.For,
-	}
-	if c.Worker != "" {
-		rec.Actor = &store.Actor{Name: c.Worker, Kind: string(store.AuthorAgent)}
+		Actor:   agentActor(c.Worker),
 	}
 	if c.Body != "" {
 		body, err := inlineText("body", c.Body)
