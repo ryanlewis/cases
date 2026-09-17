@@ -65,9 +65,9 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Errorf("inbox order = %v\nwant %v", got, want)
 	}
 	// / shows the first case beside the list, selected, and titled after it.
-	// One open blocking case: the parked one and the answered one do not count.
-	if !strings.Contains(body, "<title>(1) Old blocker · cases</title>") {
-		t.Errorf("title missing blocking count or case title:\n%s", body)
+	// Three open cases: the parked one and the answered one do not count.
+	if !strings.Contains(body, "<title>(3) Old blocker · cases</title>") {
+		t.Errorf("title missing the waiting count or case title:\n%s", body)
 	}
 	if !strings.Contains(body, `<div class="split home">`) || !strings.Contains(body, `action="/cases/`+oldBlocking.ID+`/resume"`) ||
 		!strings.Contains(body, `hx-get="/cases/`+oldBlocking.ID+`/thread?state=parked&amp;home=1"`) {
@@ -85,7 +85,7 @@ func TestInboxOrderAndContent(t *testing.T) {
 	if frag.Code != http.StatusOK || !slices.Equal(idsInOrder(list), want) {
 		t.Errorf("fragment %d, ids %v", frag.Code, idsInOrder(list))
 	}
-	if !strings.Contains(list, "<title>(1) inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
+	if !strings.Contains(list, "<title>(3) inbox · cases</title>") || strings.Contains(list, "<html") || strings.Contains(list, "selected") {
 		t.Errorf("fragment is not a bare list with a title and no selection:\n%s", list)
 	}
 	// The header tally is swapped out of band, so it keeps up with the title.
@@ -111,7 +111,7 @@ func TestInboxOrderAndContent(t *testing.T) {
 	sel := a.get(t, "/fragments/inbox?selected="+today.ID)
 	if !strings.Contains(sel, `class="card urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) ||
 		strings.Count(sel, "selected") != 2 || !strings.Contains(sel, `hx-get="/fragments/inbox?selected=`+today.ID+`"`) ||
-		!strings.Contains(sel, "<title>(1) Today · cases</title>") {
+		!strings.Contains(sel, "<title>(3) Today · cases</title>") {
 		t.Errorf("fragment lost the selection:\n%s", sel)
 	}
 
@@ -998,8 +998,8 @@ func TestTallyHidesZeros(t *testing.T) {
 	if !strings.Contains(body, `<span id="tally" class="label tally"><span><strong>2</strong> whenever</span></span>`) {
 		t.Errorf("tally is not just the whenever count:\n%s", body)
 	}
-	// The title counts only blocking cases, so it has no number here.
-	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>done · cases</title>") {
+	// The title counts the open cases, so it leads with the two here.
+	if strings.Contains(body, `class="hot"`) || !strings.Contains(body, "<title>(2) done · cases</title>") {
 		t.Errorf("a tally without blocking cases is red or titled with a count:\n%s", body)
 	}
 }
@@ -1195,5 +1195,60 @@ func TestThreadShowsActorAndFor(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("thread missing %s:\n%s", want, page)
 		}
+	}
+}
+
+func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
+	a := newApp(t)
+	first := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "First"})
+	second := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Second"})
+	parked := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "Parked"})
+	if _, err := store.Park(parked.Dir, store.ParkRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	hx := map[string]string{"HX-Request": "true"}
+	// Two open cases of any urgency; the parked one waits on nobody.
+	for path, want := range map[string]string{
+		"/":                   "<title>(2) First · cases</title>",
+		"/done":               "<title>(2) done · cases</title>",
+		"/cases/" + parked.ID: "<title>(2) Parked · cases</title>",
+		"/fragments/inbox":    "<title>(2) inbox · cases</title>",
+	} {
+		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, want) {
+			t.Errorf("%s lacks %s", path, want)
+		}
+	}
+
+	// The poll carries the new count once a case is answered, and a bare
+	// title once none is waiting.
+	if _, err := store.Answer(first.Dir, store.AnswerRecord{Ack: true}); err != nil {
+		t.Fatal(err)
+	}
+	if body := a.do("GET", "/fragments/inbox", nil, hx).Body.String(); !strings.HasPrefix(body, "<title>(1) inbox · cases</title>") {
+		t.Errorf("fragment after an answer:\n%s", body)
+	}
+	if _, err := store.Answer(second.Dir, store.AnswerRecord{Ack: true}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"/":                  "<title>Parked · cases</title>",
+		"/done":              "<title>done · cases</title>",
+		"/cases/" + first.ID: "<title>First · cases</title>",
+		"/fragments/inbox":   "<title>inbox · cases</title>",
+	} {
+		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, want) {
+			t.Errorf("%s at zero lacks %s", path, want)
+		}
+	}
+	// With the parked case resumed and answered too, / is the inbox zero
+	// page, titled bare.
+	if _, err := store.Resume(parked.Dir, store.AuthorHuman, store.ResumeRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Answer(parked.Dir, store.AnswerRecord{Text: "go on"}); err != nil {
+		t.Fatal(err)
+	}
+	if body := a.get(t, "/"); !strings.Contains(body, "<title>inbox · cases</title>") || !strings.Contains(body, "inbox zero.") {
+		t.Errorf("inbox zero title:\n%s", body)
 	}
 }

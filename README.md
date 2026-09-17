@@ -540,8 +540,10 @@ pages change at once.
 
 The header counts open cases by urgency and parked cases, as in
 `3 blocking · 5 today · 12 whenever · 1 parked`. A count of zero is left out,
-and only the blocking count is red. The page title starts with the blocking
-count when there is one.
+and only the blocking count is red. The page title starts with the number of
+open cases, of any urgency, as in `(4) inbox · cases`, so a browser tab shows
+what is waiting; parked cases are not counted, and with none open there is no
+number. The inbox poll keeps it current.
 
 - `/` selects the first case in the inbox. With no open or parked cases it
   shows one inbox zero panel instead of the columns: the cases you answered,

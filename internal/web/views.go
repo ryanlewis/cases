@@ -173,6 +173,12 @@ type tally struct {
 	Blocking, Today, Whenever, Parked int
 }
 
+// Waiting counts the open cases, of any urgency: the ones waiting on the
+// human. Parked cases wait on nobody. The page title leads with it.
+func (t tally) Waiting() int {
+	return t.Blocking + t.Today + t.Whenever
+}
+
 // tallyItem is one figure on the header line.
 type tallyItem struct {
 	N     int
