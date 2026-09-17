@@ -246,3 +246,71 @@ func TestWaitWarnsOnceAboutAMalformedAnswer(t *testing.T) {
 		t.Errorf("stderr has %d warnings, want 1:\n%s", n, r.stderr)
 	}
 }
+
+func TestWaitForHuman(t *testing.T) {
+	root := t.TempDir()
+	answered := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", answered, "--option", "1")
+	waiting := openDecision(t, root)
+
+	// A case already waiting on the human when wait starts does not wake it.
+	assertTimedOut(t, runCases(t, "", "--store", root, "wait", "--for", "human", "--timeout", "100ms"))
+
+	// A new case does, and every case waiting on the human is printed; the
+	// answered one is not.
+	ch := startWait(t, root, "--for", "human", "--timeout", "5s")
+	opened := openDecision(t, root)
+	if got := waited(t, <-ch); len(got) != 2 || got[0].ID != waiting || got[1].ID != opened {
+		t.Errorf("wait --for human printed %+v, want %s then %s", got, waiting, opened)
+	}
+
+	// A note after an answer hands the case back to the human.
+	ch = startWait(t, root, "--for", "human", "--id", answered, "--timeout", "5s")
+	mustRun(t, "--store", root, "pickup", answered)
+	if r := runCases(t, "Which version?\n", "--store", root, "note", answered, "--body-file", "-"); r.err != nil {
+		t.Fatal(r.err)
+	}
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != answered || got[0].State != "open" {
+		t.Errorf("after note: %+v", got)
+	}
+}
+
+func TestWaitForHumanAmendAndResume(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
+
+	// An amend changes a case already waiting on the human; it does not
+	// announce it again.
+	ch := startWait(t, root, "--for", "human", "--timeout", "300ms")
+	mustRun(t, "--store", root, "amend", id, "--context", "Seen on the mirror too.")
+	assertTimedOut(t, <-ch)
+
+	// Human events never wake it, and a parked case is not waiting on anyone.
+	ch = startWait(t, root, "--for", "human", "--timeout", "300ms")
+	mustRun(t, "--store", root, "answer", id, "--park")
+	assertTimedOut(t, <-ch)
+
+	// The agent resuming a parked case hands it back to the human.
+	ch = startWait(t, root, "--for", "human", "--timeout", "5s")
+	mustRun(t, "--store", root, "resume", id, "--agent")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != id || got[0].State != "open" {
+		t.Errorf("after agent resume: %+v", got)
+	}
+
+	// A human resume leaves the case with the agent, until the agent amends it.
+	mustRun(t, "--store", root, "answer", id, "--park")
+	mustRun(t, "--store", root, "resume", id)
+	ch = startWait(t, root, "--for", "human", "--timeout", "5s")
+	mustRun(t, "--store", root, "amend", id, "--context", "Tried the mirror.")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].ID != id {
+		t.Errorf("after human resume and amend: %+v", got)
+	}
+
+	if r := runCases(t, "", "--store", root, "wait", "--for", "nobody"); r.err == nil {
+		t.Error("bad --for accepted")
+	}
+	r := runCases(t, "", "--store", root, "wait", "--for", "human", "--id", id, "--timeout", "50ms")
+	if !strings.Contains(r.err.Error(), "no case needed the human within 50ms") {
+		t.Errorf("timeout message = %q", r.err)
+	}
+}
