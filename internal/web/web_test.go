@@ -262,6 +262,18 @@ func TestStyleHasViewTransitions(t *testing.T) {
 	}
 }
 
+// TestStyleCentresInboxZero checks that the inbox zero panel sits in the middle
+// of a wide page instead of at its left.
+func TestStyleCentresInboxZero(t *testing.T) {
+	a := newApp(t)
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	for _, want := range []string{"main:has(> .zero) { max-width: none; }", ".zero { width: 100%; max-width: 58rem; margin: 0 auto; }"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css lacks %s", want)
+		}
+	}
+}
+
 // TestStyleScalesWithTextSize keeps lengths in rem, so the size option, which
 // sets the root size, scales the whole page. Hairline rules, offsets and media
 // query breakpoints (which the root size does not move) may stay in px.
