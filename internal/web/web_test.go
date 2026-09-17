@@ -237,6 +237,40 @@ func TestStaticHTMXIsTheRecordedRelease(t *testing.T) {
 	}
 }
 
+// TestStyleScalesWithTextSize keeps lengths in rem, so the size option, which
+// sets the root size, scales the whole page. Hairline rules, offsets and media
+// query breakpoints (which the root size does not move) may stay in px.
+func TestStyleScalesWithTextSize(t *testing.T) {
+	a := newApp(t)
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	for _, want := range []string{`:root[data-size="small"] { font-size: 87.5%; }`, `:root[data-size="large"] { font-size: 125%; }`} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css lacks %s", want)
+		}
+	}
+	// Blank the comments but keep their newlines, so line numbers hold.
+	css = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllStringFunc(css, func(c string) string {
+		return strings.Repeat("\n", strings.Count(c, "\n"))
+	})
+	for i, line := range strings.Split(css, "\n") {
+		if strings.Contains(line, "@media") {
+			continue
+		}
+		for _, px := range regexp.MustCompile(`-?\d*\.?\d+px`).FindAllString(line, -1) {
+			switch px {
+			case "1px", "2px", "-1px", "-3px", "-5px":
+			case "16px":
+				if strings.Contains(line, "max(1rem, 16px)") {
+					continue
+				}
+				fallthrough
+			default:
+				t.Errorf("style.css line %d uses %s, want rem: %s", i+1, px, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 func TestMarkdownCannotInjectMarkup(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{
@@ -327,6 +361,11 @@ func TestOptionsOverlayAndPrefsScript(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Header().Get("Content-Type"), "javascript") {
 		t.Fatalf("prefs.js: status %d, type %q", w.Code, w.Header().Get("Content-Type"))
 	}
+	// The size option's first value is the default, the one that leaves
+	// data-size off, so it must be the step the dialog marks checked.
+	if !strings.Contains(w.Body.String(), `{ name: "size", values: ["medium", "small", "large"] }`) {
+		t.Error("prefs.js lacks the size option with medium as its default")
+	}
 
 	for _, target := range []string{"/", "/done", "/cases/" + c.ID} {
 		w := a.do("GET", target, nil, nil)
@@ -339,6 +378,7 @@ func TestOptionsOverlayAndPrefsScript(t *testing.T) {
 			`<form id="options" method="dialog">`,
 			`name="theme" value="system" checked`, `name="theme" value="light"`, `name="theme" value="dark"`,
 			`name="face" value="mono" checked`, `name="face" value="sans"`, `name="face" value="serif"`,
+			`name="size" value="small"`, `name="size" value="medium" checked`, `name="size" value="large"`,
 			`name="links" value="new" checked`, `name="links" value="same"`,
 			`<button type="button" id="options-reset">reset</button>`,
 			`<button type="submit">close</button>`,

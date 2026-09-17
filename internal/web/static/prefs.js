@@ -11,6 +11,7 @@
   var OPTIONS = [
     { name: "theme", values: ["system", "light", "dark"] },
     { name: "face", values: ["mono", "sans", "serif"] },
+    { name: "size", values: ["medium", "small", "large"] },
     { name: "links", values: ["new", "same"] },
   ];
   var root = document.documentElement;
