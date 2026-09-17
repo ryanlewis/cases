@@ -18,7 +18,7 @@
     <span class="badge state{{if eq $c.State "parked"}} parked{{end}}">{{$c.State}}</span>
     {{with $c.Worker}}<span>{{.}}</span>{{end}}
     {{range $c.Labels}}<span class="tag">{{.}}</span>{{end}}
-    <span class="age">opened {{stamp $c.OpenedAt}}</span>
+    <span class="age">opened {{stamp $c.OpenedAt}}, {{age $c.OpenedAt}}</span>
   </div>
   <h1>{{$c.Title}}</h1>
   {{with $c.Context}}<p class="context">{{.}}</p>{{end}}
@@ -99,7 +99,7 @@
   {{/* The poll replaces the thread; hx-preserve keeps a details the human opened as it is. The id holds a hash of the text, so a details whose text changes, as when an earlier amend syncs in late, is replaced. */}}
   {{range .Thread}}{{$seq := .Seq}}
     <li class="event author-{{.Author}}">
-      <div class="meta"><span class="who">[{{.Author}}]</span> <span>{{.Type}}</span> <span class="age">{{stamp .At}}</span></div>
+      <div class="meta"><span class="who">[{{.Author}}]</span> <span>{{.Type}}</span> <span class="age">{{stamp .At}}, {{age .At}}</span></div>
       {{range .Lines}}<p>{{.Text}}</p>
       {{with .PreviousBody}}<details id="previous-body-{{$seq}}-{{textID .}}" hx-preserve><summary>previous body</summary><div class="body">{{markdown .}}</div></details>{{end}}
       {{with .PreviousContext}}<details id="previous-context-{{$seq}}-{{textID .}}" hx-preserve><summary>previous context</summary><p class="context">{{.}}</p></details>{{end}}

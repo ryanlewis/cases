@@ -422,6 +422,8 @@ list and `/cases/ID` shows the case, with Inbox in the header to go back.
   kind, and the thread.
   An amended case is shown as amended, and the thread lists what each amend
   changed.
+  Times on the case and in the thread are in the local time zone of the
+  machine running serve, with how long ago each was; the store keeps UTC.
   Sending the form writes one answer. A stuck case has a separate `park`
   button, which parks it instead, with the note if one is written. Every other
   kind has a `drop` button, which answers with `drop` and the note, and a stuck
