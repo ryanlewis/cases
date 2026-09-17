@@ -314,3 +314,30 @@ func TestWaitForHumanAmendAndResume(t *testing.T) {
 		t.Errorf("timeout message = %q", r.err)
 	}
 }
+
+func TestWaitSinceCaseID(t *testing.T) {
+	root := t.TempDir()
+	// The answer lands between open and wait; with the case id as --since,
+	// wait still reports it.
+	id := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", id, "--option", "1")
+	if got := waited(t, runCases(t, "", "--store", root, "wait", "--id", id, "--since", id, "--timeout", "1s")); len(got) != 1 || got[0].ID != id {
+		t.Errorf("wait --since %s printed %+v", id, got)
+	}
+
+	// A case opened after the answer is a later baseline.
+	later := openDecision(t, root)
+	assertTimedOut(t, runCases(t, "", "--store", root, "wait", "--id", id, "--since", later, "--timeout", "100ms"))
+
+	for _, bad := range []string{"2026-09-17T00-00-00Z-no-such-case", "../x"} {
+		r := runCases(t, "", "--store", root, "wait", "--since", bad, "--timeout", "100ms")
+		var ee *exitError
+		if r.err == nil || errors.As(r.err, &ee) {
+			t.Errorf("--since %q: err = %v, want an error that exits 1", bad, r.err)
+			continue
+		}
+		if !strings.Contains(r.err.Error(), "neither an RFC 3339 time nor a case") {
+			t.Errorf("--since %q: err = %q", bad, r.err)
+		}
+	}
+}

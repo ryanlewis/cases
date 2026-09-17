@@ -40,12 +40,11 @@ it, run both sides in one shell.
 
 ```sh
 # Agent: raise a decision and wait for the answer in the background.
-# --since stops wait missing an answer that lands before it starts.
-since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "Pin bun to 1.2.3, or float it and fix the lockfile when it breaks?" > question.md
 id=$(cases open --kind decision --urgency blocking --title "Pin bun or float?" \
   --body-file question.md --option "Pin to 1.2.3" --option "Float and fix the lockfile")
-cases wait --id "$id" --since "$since" --timeout 2h > answered.jsonl &
+# --since "$id" stops wait missing an answer that lands before it starts.
+cases wait --id "$id" --since "$id" --timeout 2h > answered.jsonl &
 
 # Human: answer it, from here or from the inbox that cases serve opens.
 cases answer "$id" --option 1 --note "Revisit after 1.3"
@@ -236,7 +235,7 @@ cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
 cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--row JSON]... [--link URL]... [--label TEXT]...
                [--context TEXT] [--revision N]
-cases wait     [--for agent|human] [--since TIME] [--timeout DURATION]
+cases wait     [--for agent|human] [--since TIME|ID] [--timeout DURATION]
                [--id ID]... [--kind KIND]... [--label TEXT]... [--worker NAME]...
 cases pickup   ID [--by NAME] [--revision N]
 cases note     ID --body TEXT | --body-file FILE|- [--revision N]
@@ -338,7 +337,11 @@ prints every case still waiting on the agent, one JSON object per line, and
 exits 0. A case is waiting on the agent when its last event is one of those
 three human events. By default only events that land after `wait` starts can
 wake it, so running it again does not wake on answers already reported. With
-`--since TIME` it also wakes on human events recorded after that time.
+`--since TIME` it also wakes on human events recorded after that RFC 3339
+time. `--since ID` takes a case id instead and uses the time that case was
+opened, so an agent can pass the id `open` printed and not miss an answer that
+lands before `wait` starts. An id that is not in the store is an error (exit
+1).
 `--id ID` (repeatable) waits on those cases only.
 `--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on
 cases that have any of the given kinds or labels, or come from any of the given
