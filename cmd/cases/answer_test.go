@@ -269,3 +269,18 @@ func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
 		t.Errorf("answer --as actor = %+v", got)
 	}
 }
+
+// A blank worker, which open has always accepted, records no actor rather than
+// one the store refuses.
+func TestBlankWorkerRecordsNoActor(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today",
+		"--title", "Heads up", "--worker", " "))
+	mustRun(t, "--store", root, "note", id, "--body", "more")
+	c := loadCase(t, root, id)
+	for i, ev := range c.Events {
+		if ev.Actor != nil {
+			t.Errorf("event %d actor = %+v", i+1, ev.Actor)
+		}
+	}
+}
