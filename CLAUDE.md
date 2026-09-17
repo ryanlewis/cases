@@ -20,7 +20,7 @@ make install # go install ./cmd/cases
 make test    # go test -race ./...
 make cover   # coverage summary
 make lint    # golangci-lint run ./... (v2 config in .golangci.yml)
-make fmt     # gofmt -w . && goimports -w .
+make fmt     # golangci-lint fmt ./...
 ```
 
 ## Architecture

@@ -490,7 +490,12 @@ neither command asks: without `-y` they refuse.
 make build   # ./cases
 make test    # go test -race ./...
 make lint    # golangci-lint run ./...
+make fmt     # golangci-lint fmt ./...
 ```
+
+`govulncheck` is pinned as a `tool` directive in go.mod, so its dependency
+graph (`golang.org/x/vuln` and its own dependencies) shows up in go.mod and
+go.sum alongside the runtime dependencies.
 
 ## License
 
