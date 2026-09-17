@@ -74,7 +74,7 @@ Text flags come in two forms. For one line, pass it inline: `--body TEXT`, `--ou
 cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
   [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON]... \
   [--link URL]... [--label TEXT]... [--worker NAME] [--brief TEXT] \
-  [--context TEXT]
+  [--context TEXT] [--for NAME]
 ```
 
 - `--title` is one line; it also names the case directory.
@@ -83,7 +83,8 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--link URL` (repeatable) for the PR, issue or file the human should look at.
 - `--label TEXT` (repeatable) groups the case with others, such as every case one piece of work opens. `list` and `wait` filter by it. A blank label, or the same label twice, is refused.
 - `CASES_WORKER` and `CASES_LABEL`, if exported, stand in for `--worker` and one `--label` on `open`. `CASES_LABEL` is one label, commas included; an empty one makes `open` fail. Any `--label` flag replaces it, not adds to it. `wait` and `list` do not read them, so still pass `--label` or `--worker` there.
-- `--worker NAME` names your session, the one waiting on the case. `--brief TEXT` says where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line. `--context TEXT` is free text shown to the human with the case.
+- `--worker NAME` names your session, the one waiting on the case. `--brief TEXT` says where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line. `--context TEXT` is free text shown to the human with the case. `--for NAME` names the human the case is addressed to, when you were told who should answer.
+- Your events on a case opened with a worker record it as their `actor` (`{"name": ..., "kind": "agent"}`); without one they record none. An answer may carry the human's `actor` too; it says who answered and changes nothing about what the answer means.
 - Prints the new case id.
 
 ### `cases amend`

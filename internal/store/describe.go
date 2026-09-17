@@ -17,9 +17,30 @@ type Line struct {
 	PreviousContext string
 }
 
-// Describe summarises what an event said, as plain lines for a thread view.
-// The fold has already validated the data, so decode errors are not expected.
+// Describe summarises what an event said, as plain lines for a thread view,
+// starting with who wrote it when the event says. The fold has already
+// validated the data, so decode errors are not expected.
 func (c *Case) Describe(ev Event) []Line {
+	return append(ActorLines(ev), c.describe(ev)...)
+}
+
+// ActorLines is the line naming who wrote the event, or none when it does not
+// say. A pickup whose by already names the same actor gets no second line.
+func ActorLines(ev Event) []Line {
+	if ev.Actor == nil {
+		return nil
+	}
+	if ev.Type == EventPickup {
+		var p PickupRecord
+		_ = json.Unmarshal(ev.Data, &p)
+		if p.By == ev.Actor.Name {
+			return nil
+		}
+	}
+	return addLines(nil, "by %s", ev.Actor.Name)
+}
+
+func (c *Case) describe(ev Event) []Line {
 	switch ev.Type {
 	case EventAmend:
 		return describeAmend(ev)

@@ -25,6 +25,7 @@ type AnswerCmd struct {
 
 	Note     string `help:"A note to the agent. Allowed with every response."`
 	Revision *int   `help:"Refuse the answer if the case's revision (from show --json) is no longer N." placeholder:"N"`
+	As       string `help:"Record the answer as written by NAME (the name config key)." placeholder:"NAME"`
 }
 
 func (c *AnswerCmd) Run(d *Deps) error {
@@ -33,7 +34,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		return err
 	}
 	if c.Park {
-		cs, err := d.cases().Park(context.Background(), id, store.ParkRecord{Note: c.Note}, atRevision(c.Revision)...)
+		cs, err := d.cases().Park(context.Background(), id, store.ParkRecord{Note: c.Note, Actor: humanActor(c.As)}, atRevision(c.Revision)...)
 		if err != nil {
 			return err
 		}
@@ -58,6 +59,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		Drop:   c.Drop,
 		Ack:    c.Ack,
 		Note:   c.Note,
+		Actor:  humanActor(c.As),
 	}
 	switch {
 	case c.Accept:

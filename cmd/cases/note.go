@@ -28,7 +28,7 @@ func (c *NoteCmd) Run(d *Deps) error {
 	if err != nil {
 		return fmt.Errorf("body: %w", err)
 	}
-	cs, err := d.cases().Note(context.Background(), c.ID, store.NoteRecord{Body: body}, atRevision(c.Revision)...)
+	cs, err := d.cases().Note(context.Background(), c.ID, store.NoteRecord{Body: body, Actor: d.workerActor(c.ID)}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

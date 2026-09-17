@@ -42,6 +42,10 @@ func CheckLoopback(addr string) error {
 
 // Server is the web app over one store.
 type Server struct {
+	// Actor is recorded on the answers, parks and resumes the inbox writes.
+	// nil records none. Set it before serving.
+	Actor *store.Actor
+
 	store store.Store
 	log   io.Writer
 	// hosts are the Host header values requests may carry: the listen

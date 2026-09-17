@@ -22,6 +22,7 @@ type OpenCmd struct {
 	Worker   string   `help:"The agent session waiting on this case." env:"CASES_WORKER"`
 	Brief    string   `help:"Where to restart from if the case is parked: a brief, a ledger or a note, as a path or a short line."`
 	Context  string   `help:"Free-text context for the human, shown with the case."`
+	For      string   `help:"Who the case is addressed to, such as the human expected to answer it." placeholder:"NAME"`
 }
 
 func (c *OpenCmd) Run(d *Deps) error {
@@ -35,6 +36,10 @@ func (c *OpenCmd) Run(d *Deps) error {
 		Worker:  c.Worker,
 		Brief:   c.Brief,
 		Context: c.Context,
+		For:     c.For,
+	}
+	if c.Worker != "" {
+		rec.Actor = &store.Actor{Name: c.Worker, Kind: string(store.AuthorAgent)}
 	}
 	if c.Body != "" {
 		body, err := inlineText("body", c.Body)

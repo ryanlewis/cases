@@ -93,6 +93,7 @@ func printCase(w io.Writer, c *store.Case, link string) {
 	field("opened", stamp(c.OpenedAt))
 	field("revision", strconv.Itoa(c.Revision()))
 	field("labels", strings.Join(c.Labels, ", "))
+	field("for", c.For)
 	field("worker", c.Worker)
 	field("brief", c.Brief)
 	field("context", c.Context)

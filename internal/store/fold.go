@@ -20,6 +20,8 @@ type Event struct {
 	Type   EventType `json:"event"`
 	File   string    `json:"file"`
 	At     time.Time `json:"at"`
+	// Actor is who the event says wrote it, or nil when it does not say.
+	Actor *Actor `json:"actor,omitempty"`
 	// Data is the file exactly as written, so fields this version does not
 	// know about survive a read.
 	Data json.RawMessage `json:"data"`
@@ -226,6 +228,9 @@ func (c *Case) apply(ev Event) error {
 	if err := json.Unmarshal(ev.Data, rec); err != nil {
 		return fmt.Errorf("malformed %s event: %w", ev.Type, err)
 	}
+	if err := checkActor(rec.actor()); err != nil {
+		return err
+	}
 	if c.State == "" && ev.Type != EventOpen {
 		return &TransitionError{Event: ev.Type}
 	}
@@ -336,6 +341,7 @@ func (c *Case) apply(ev Event) error {
 	}
 
 	ev.At = rec.at()
+	ev.Actor = rec.actor()
 	c.Events = append(c.Events, ev)
 	if ev.At.After(c.UpdatedAt) {
 		c.UpdatedAt = ev.At

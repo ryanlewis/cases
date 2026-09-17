@@ -475,14 +475,17 @@ func thread(c *store.Case) []threadEntry {
 		switch ev.Type {
 		case store.EventOpen:
 			// The body is shown at the top of the page.
+			e.Lines = store.ActorLines(ev)
 		case store.EventNote:
 			var n store.NoteRecord
 			_ = json.Unmarshal(ev.Data, &n)
+			e.Lines = store.ActorLines(ev)
 			e.Markdown = renderMarkdown(n.Body)
 		case store.EventClose:
 			var cl store.CloseRecord
 			_ = json.Unmarshal(ev.Data, &cl)
 			e.Markdown = renderMarkdown(cl.Outcome)
+			e.Lines = store.ActorLines(ev)
 			for _, l := range cl.Links {
 				e.Lines = append(e.Lines, store.Line{Text: l})
 			}
@@ -600,8 +603,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if park {
 			event = store.EventPark
-			_, err = s.store.Park(r.Context(), c.ID, store.ParkRecord{Note: rec.Note}, store.AtRevision(rev))
+			_, err = s.store.Park(r.Context(), c.ID, store.ParkRecord{Note: rec.Note, Actor: s.Actor}, store.AtRevision(rev))
 		} else {
+			rec.Actor = s.Actor
 			_, err = s.store.Answer(r.Context(), c.ID, rec, store.AtRevision(rev))
 		}
 	}
@@ -619,7 +623,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
-	if _, err := s.store.Resume(r.Context(), c.ID, store.AuthorHuman, store.ResumeRecord{}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
+	if _, err := s.store.Resume(r.Context(), c.ID, store.AuthorHuman, store.ResumeRecord{Actor: s.Actor}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
 		s.refuse(w, r, c, cases, err, nil)
 		return
 	}

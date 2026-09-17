@@ -95,6 +95,18 @@ var Keys = []Key{
 		Example: `no-open = true`,
 	},
 	{
+		Name:     "name",
+		Flag:     "as",
+		Default:  func() string { return "" },
+		Commands: []string{"answer", "resume", "serve"},
+		Comment: []string{
+			"Your name, recorded as the actor on answers, parks and resumes from",
+			"cases answer, cases resume and the inbox. Same as --as on those",
+			"commands. Default: none is recorded.",
+		},
+		Example: `name = "Ryan"`,
+	},
+	{
 		Name:     "prune-age",
 		Flag:     "age",
 		Default:  func() string { return "720h" },

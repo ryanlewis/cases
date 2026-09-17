@@ -21,6 +21,7 @@ import (
 type ServeCmd struct {
 	Listen string `help:"Address to listen on. Only loopback addresses are allowed." default:"127.0.0.1:8765" placeholder:"HOST:PORT"`
 	NoOpen bool   `help:"Do not open the inbox in the browser. It is only opened when stdout is a terminal."`
+	As     string `help:"Record answers, parks and resumes from the inbox as written by NAME (the name config key)." placeholder:"NAME"`
 }
 
 func (c *ServeCmd) Run(d *Deps) error {
@@ -69,6 +70,7 @@ func (c *ServeCmd) Run(d *Deps) error {
 		_ = ln.Close()
 		return err
 	}
+	srv.Actor = humanActor(c.As)
 	ctx := d.Context
 	if ctx == nil {
 		var stop context.CancelFunc

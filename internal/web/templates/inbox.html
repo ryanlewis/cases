@@ -10,6 +10,7 @@
     <span class="badge urgency">{{.Urgency}}</span>
     <span>{{.Kind}}</span>
     {{if eq .State "parked"}}<span class="badge parked">parked</span>{{end}}
+    {{with .For}}<span>for {{.}}</span>{{end}}
     {{with .Worker}}<span>{{.}}</span>{{end}}
     {{range .Labels}}<span class="tag">{{.}}</span>{{end}}
     <span class="age">{{.Age}}</span>

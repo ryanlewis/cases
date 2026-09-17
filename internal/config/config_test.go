@@ -56,7 +56,7 @@ func TestLoadValues(t *testing.T) {
 
 func TestLoadRejectsBadFiles(t *testing.T) {
 	tests := []struct{ name, body, want string }{
-		{"unknown key", "stor = \"x\"\n", `unknown key "stor" (valid keys: store, listen, no-open, prune-age)`},
+		{"unknown key", "stor = \"x\"\n", `unknown key "stor" (valid keys: store, listen, no-open, name, prune-age)`},
 		{"wrong type", "store = true\n", `key "store" must be a string, got boolean`},
 		{"malformed", "store = \n", "invalid TOML: line 1"},
 	}
