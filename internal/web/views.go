@@ -234,8 +234,8 @@ type inboxData struct {
 	Zero *zeroStats
 }
 
-// now is the clock for the inbox-zero figures. Tests pin it.
-var now = time.Now
+// clock is the clock for the inbox-zero figures. Tests pin it.
+var clock = time.Now
 
 // zeroStats is what the inbox-zero panel says. Day and week start at
 // midnight, and on Monday, in the zone pages show times in.
@@ -258,7 +258,7 @@ func (d *inboxData) setEmpty(cases []*store.Case) {
 	if len(d.Cards) > 0 {
 		return
 	}
-	t := now().In(zone)
+	t := clock().In(zone)
 	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, zone)
 	week := day.AddDate(0, 0, -(int(day.Weekday())+6)%7)
 	z := &zeroStats{}
