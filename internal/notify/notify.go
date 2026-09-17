@@ -95,6 +95,14 @@ func (f *Feed) add(it Item) {
 	}
 }
 
+// Latest is the id of the newest item, or 0 when there is none: how many
+// items the feed has taken.
+func (f *Feed) Latest() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.latest
+}
+
 // After returns the items with an id above after, oldest first.
 func (f *Feed) After(after int64) Page {
 	f.mu.Lock()
