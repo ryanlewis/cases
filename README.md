@@ -415,6 +415,11 @@ selected case, and its card is highlighted in the list. The two columns scroll
 separately. On a window narrower than 56rem there is one column: `/` shows the
 list and `/cases/ID` shows the case, with Inbox in the header to go back.
 
+The header counts open cases by urgency and parked cases, as in
+`3 blocking · 5 today · 12 whenever · 1 parked`. A count of zero is left out,
+and only the blocking count is red. The page title starts with the blocking
+count when there is one.
+
 - `/` selects the first case in the inbox, or says there are no open cases and
   reloads when one arrives.
 - `/cases/ID` selects that case: its context and brief, the body rendered as
