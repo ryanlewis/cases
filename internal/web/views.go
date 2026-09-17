@@ -236,6 +236,38 @@ func nextCase(cases []*store.Case, id string) string {
 	return "/"
 }
 
+// recorded is what a successful answer, park or resume wrote, for the page
+// the post redirects to to confirm.
+type recorded struct {
+	Event store.EventType
+	Case  *store.Case
+}
+
+// withRecorded adds the event just written on the case with id to target, the
+// page a post redirects to.
+func withRecorded(target string, event store.EventType, id string) string {
+	return target + "?" + url.Values{"recorded": {id}, "event": {string(event)}}.Encode()
+}
+
+// findRecorded resolves the query withRecorded wrote against the loaded
+// cases. It returns nil unless the event is one a form writes and the id names
+// a loaded case, so a made-up query shows nothing.
+func findRecorded(q url.Values, cases []*store.Case) *recorded {
+	event := store.EventType(q.Get("event"))
+	switch event {
+	case store.EventAnswer, store.EventPark, store.EventResume:
+	default:
+		return nil
+	}
+	id := q.Get("recorded")
+	for _, c := range cases {
+		if c.ID == id {
+			return &recorded{Event: event, Case: c}
+		}
+	}
+	return nil
+}
+
 // excerpt returns the first n non-empty lines of a body, as plain text.
 func excerpt(body string, n int) []string {
 	var lines []string
@@ -265,7 +297,7 @@ func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 	if shown := inboxCases(cases); len(shown) > 0 {
 		first = shown[0]
 	}
-	s.renderCase(w, http.StatusOK, first, cases, true, "", nil)
+	s.renderCase(w, http.StatusOK, first, cases, true, findRecorded(r.URL.Query(), cases), "", nil)
 }
 
 func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
@@ -326,12 +358,14 @@ type threadEntry struct {
 // inbox is empty. Home is set on /, where a stale thread reloads / instead.
 type caseData struct {
 	page
-	Inbox  inboxData
-	Home   bool
-	Case   *store.Case
-	Thread []threadEntry
-	Error  string
-	Form   url.Values
+	Inbox inboxData
+	Home  bool
+	// Recorded is set when the page is where a post went after writing.
+	Recorded *recorded
+	Case     *store.Case
+	Thread   []threadEntry
+	Error    string
+	Form     url.Values
 }
 
 func thread(c *store.Case) []threadEntry {
@@ -370,11 +404,11 @@ func (s *Server) casePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderCase(w, http.StatusOK, c, cases, false, "", nil)
+	s.renderCase(w, http.StatusOK, c, cases, false, findRecorded(r.URL.Query(), cases), "", nil)
 }
 
-func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, msg string, form url.Values) {
-	d := caseData{Home: home, Error: msg, Form: form}
+func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, rec *recorded, msg string, form url.Values) {
+	d := caseData{Home: home, Recorded: rec, Error: msg, Form: form}
 	if c != nil {
 		d.Case, d.Thread = c, thread(c)
 		d.Inbox = newInbox(cases, c.ID)
@@ -460,8 +494,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec, park, err := answerFromForm(c, r.PostForm)
+	event := store.EventAnswer
 	if err == nil {
 		if park {
+			event = store.EventPark
 			_, err = store.Park(dir, store.ParkRecord{Note: rec.Note}, store.AtRevision(rev))
 		} else {
 			_, err = store.Answer(dir, rec, store.AtRevision(rev))
@@ -471,7 +507,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, c, cases, err, r.PostForm)
 		return
 	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	http.Redirect(w, r, withRecorded(next, event, c.ID), http.StatusSeeOther)
 }
 
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +521,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, c, cases, err, nil)
 		return
 	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	http.Redirect(w, r, withRecorded(next, store.EventResume, c.ID), http.StatusSeeOther)
 }
 
 // staleForm is the error for a form sent from a page rendered before the case
@@ -499,13 +535,13 @@ const staleForm = "this case changed after the page was loaded, so this was not 
 // carries the case's current revision, so the form can be sent again.
 func (s *Server) refuse(w http.ResponseWriter, c *store.Case, cases []*store.Case, err error, form url.Values) {
 	if !errors.Is(err, store.ErrStale) {
-		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, err.Error(), form)
+		s.renderCase(w, http.StatusUnprocessableEntity, c, cases, false, nil, err.Error(), form)
 		return
 	}
 	if now, lerr := store.Load(c.Dir); lerr == nil {
 		c = now
 	}
-	s.renderCase(w, http.StatusConflict, c, cases, false, staleForm, form)
+	s.renderCase(w, http.StatusConflict, c, cases, false, nil, staleForm, form)
 }
 
 // render executes a named template into a buffer first, so a template error

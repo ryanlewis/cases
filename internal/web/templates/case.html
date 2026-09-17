@@ -1,4 +1,5 @@
 {{define "content"}}
+{{with .Recorded}}<p class="recorded" role="status">{{.Event}} recorded on <a href="/cases/{{.Case.ID | pathEscape}}">{{.Case.Title}}</a></p>{{end}}
 <div class="split{{if .Home}} home{{end}}">
 <aside class="list" aria-label="inbox">
 {{template "inbox-list" .Inbox}}
