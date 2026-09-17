@@ -10,14 +10,15 @@ import (
 	"testing"
 
 	"github.com/ryanlewis/cases/internal/instance"
+	"github.com/ryanlewis/cases/internal/store/storetest"
 )
 
 func TestShow(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	mustRun(t, "--store", root, "answer", id, "--option", "2", "--note", "watch the lockfile")
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	mustRun(t, "--store", storePath, "answer", id, "--option", "2", "--note", "watch the lockfile")
 
-	out := mustRun(t, "--store", root, "show", id)
+	out := mustRun(t, "--store", storePath, "show", id)
 	for _, want := range []string{"Pin bun?", "state:    answered", "1. Pin to 1.2.3", "other. Other, see note", "revision: 2", "0002 human answer", "chose 2. Float, with renovate", "note: watch the lockfile"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q:\n%s", want, out)
@@ -34,7 +35,7 @@ func TestShow(t *testing.T) {
 			Data json.RawMessage `json:"data"`
 		} `json:"events"`
 	}
-	if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &c); err != nil {
+	if err := json.Unmarshal([]byte(mustRun(t, "--store", storePath, "show", id, "--json")), &c); err != nil {
 		t.Fatal(err)
 	}
 	if c.State != "answered" || c.Answer.Choice != 2 || len(c.Events) != 2 || c.Events[1].File != "0002-human-answer.json" {
@@ -43,11 +44,11 @@ func TestShow(t *testing.T) {
 }
 
 func TestShowQuestionReply(t *testing.T) {
-	root := t.TempDir()
-	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "question", "--urgency", "today", "--title", "Which host?"))
-	mustRun(t, "--store", root, "answer", id, "--text", "the staging one")
+	storePath := newStore(t)
+	id := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "question", "--urgency", "today", "--title", "Which host?"))
+	mustRun(t, "--store", storePath, "answer", id, "--text", "the staging one")
 
-	out := mustRun(t, "--store", root, "show", id)
+	out := mustRun(t, "--store", storePath, "show", id)
 	for _, want := range []string{"kind:     question", "0002 human answer", "reply: the staging one"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q:\n%s", want, out)
@@ -59,24 +60,22 @@ func TestShowQuestionReply(t *testing.T) {
 }
 
 func TestShowRefusesPathsAndMissingCases(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
 	for _, id := range []string{"../etc", "nope"} {
-		if r := runCases(t, "", "--store", root, "show", id); r.err == nil {
+		if r := runCases(t, "", "--store", storePath, "show", id); r.err == nil {
 			t.Errorf("show %q succeeded", id)
 		}
 	}
 }
 
 func TestShowJSONRevisionCountsSkippedFiles(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	// A malformed file is skipped by the fold but still counts: the next
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	// A malformed event is skipped by the fold but still counts: the next
 	// write goes after it.
-	if err := os.WriteFile(filepath.Join(root, id, "0002-human-answer.json"), []byte(`{"choice": 2`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	storetest.InsertEvent(t, storePath, id, 2, "human", "answer", `{"choice": 2`)
 
-	r := runCases(t, "", "--store", root, "show", id, "--json")
+	r := runCases(t, "", "--store", storePath, "show", id, "--json")
 	if r.err != nil {
 		t.Fatal(r.err)
 	}
@@ -91,27 +90,25 @@ func TestShowJSONRevisionCountsSkippedFiles(t *testing.T) {
 	if c.Revision == nil || *c.Revision != 2 || len(c.Events) != 1 || len(c.Problems) != 1 {
 		t.Fatalf("revision %v, %d events, problems %q:\n%s", c.Revision, len(c.Events), c.Problems, r.stdout)
 	}
-	if n := len(eventFiles(t, root, id)); n != *c.Revision {
-		t.Errorf("revision %d, %d files", *c.Revision, n)
+	if n := len(loadCase(t, storePath, id).Events); n != 1 {
+		t.Errorf("%d events folded, want the open event only", n)
 	}
-	mustRun(t, "--store", root, "answer", id, "--option", "1", "--revision", "2")
+	mustRun(t, "--store", storePath, "answer", id, "--option", "1", "--revision", "2")
 }
 
 func TestShowTakesPartOfAnID(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	if out := mustRun(t, "--store", root, "show", "pin-bun"); !strings.Contains(out, "id:       "+id+"\n") {
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	if out := mustRun(t, "--store", storePath, "show", "pin-bun"); !strings.Contains(out, "id:       "+id+"\n") {
 		t.Errorf("show pin-bun:\n%s", out)
 	}
 }
 
 func TestShowReportsAnUnknownEventAsVersionSkew(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	if err := os.WriteFile(filepath.Join(root, id, "0002-agent-comment.json"), []byte(`{"body":"x"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	r := runCases(t, "", "--store", root, "show", id)
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	storetest.InsertEvent(t, storePath, id, 2, "agent", "comment", `{"body":"x"}`)
+	r := runCases(t, "", "--store", storePath, "show", id)
 	if r.err != nil {
 		t.Fatal(r.err)
 	}
@@ -125,14 +122,14 @@ func TestShowReportsAnUnknownEventAsVersionSkew(t *testing.T) {
 }
 
 func TestShowURLOfTheRunningInbox(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
 	showURL := func() string {
 		t.Helper()
 		var c struct {
 			URL *string `json:"url"`
 		}
-		if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--json")), &c); err != nil {
+		if err := json.Unmarshal([]byte(mustRun(t, "--store", storePath, "show", id, "--json")), &c); err != nil {
 			t.Fatal(err)
 		}
 		if c.URL == nil {
@@ -144,16 +141,16 @@ func TestShowURLOfTheRunningInbox(t *testing.T) {
 	if got := showURL(); got != "" {
 		t.Errorf("url with no inbox running = %q, want empty", got)
 	}
-	if out := mustRun(t, "--store", root, "show", id); strings.Contains(out, "url:") {
+	if out := mustRun(t, "--store", storePath, "show", id); strings.Contains(out, "url:") {
 		t.Errorf("url line with no inbox running:\n%s", out)
 	}
 
-	base, stop := startServe(t, root)
+	base, stop := startServe(t, storePath)
 	want := base + "cases/" + id
 	if got := showURL(); got != want {
 		t.Errorf("url = %q, want %q", got, want)
 	}
-	if out := mustRun(t, "--store", root, "show", id); !strings.Contains(out, "url:      "+want+"\n") {
+	if out := mustRun(t, "--store", storePath, "show", id); !strings.Contains(out, "url:      "+want+"\n") {
 		t.Errorf("show missing the url line %q:\n%s", want, out)
 	}
 	if err := stop(); err != nil {
@@ -165,9 +162,9 @@ func TestShowURLOfTheRunningInbox(t *testing.T) {
 }
 
 func TestShowWarnsOnADamagedInstanceFile(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	path, err := instance.Path(root)
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	path, err := instance.Path(storePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +174,7 @@ func TestShowWarnsOnADamagedInstanceFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := runCases(t, "", "--store", root, "show", id)
+	r := runCases(t, "", "--store", storePath, "show", id)
 	if r.err != nil || !strings.Contains(r.stdout, "id:       "+id) || strings.Contains(r.stdout, "url:") {
 		t.Errorf("show with a damaged instance file: err %v\n%s", r.err, r.stdout)
 	}
@@ -187,12 +184,12 @@ func TestShowWarnsOnADamagedInstanceFile(t *testing.T) {
 }
 
 func TestShowAnswer(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
 	shown := func() map[string]json.RawMessage {
 		t.Helper()
 		var m map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(mustRun(t, "--store", root, "show", id, "--answer")), &m); err != nil {
+		if err := json.Unmarshal([]byte(mustRun(t, "--store", storePath, "show", id, "--answer")), &m); err != nil {
 			t.Fatal(err)
 		}
 		keys := slices.Sorted(maps.Keys(m))
@@ -207,7 +204,7 @@ func TestShowAnswer(t *testing.T) {
 		t.Errorf("open case: %s", m)
 	}
 
-	mustRun(t, "--store", root, "answer", id, "--option", "2", "--note", "watch the lockfile")
+	mustRun(t, "--store", storePath, "answer", id, "--option", "2", "--note", "watch the lockfile")
 	m = shown()
 	var answer struct {
 		Choice int    `json:"choice"`
@@ -220,8 +217,8 @@ func TestShowAnswer(t *testing.T) {
 		t.Errorf("answered case: %s", m)
 	}
 
-	mustRun(t, "--store", root, "pickup", id)
-	if r := runCases(t, "Which lockfile?", "--store", root, "note", id, "--body-file", "-"); r.err != nil {
+	mustRun(t, "--store", storePath, "pickup", id)
+	if r := runCases(t, "Which lockfile?", "--store", storePath, "note", id, "--body-file", "-"); r.err != nil {
 		t.Fatal(r.err)
 	}
 	m = shown()
@@ -229,7 +226,7 @@ func TestShowAnswer(t *testing.T) {
 		t.Errorf("case reopened by a note: %s", m)
 	}
 
-	if r := runCases(t, "", "--store", root, "show", id, "--answer", "--json"); r.err == nil {
+	if r := runCases(t, "", "--store", storePath, "show", id, "--answer", "--json"); r.err == nil {
 		t.Error("show took --answer with --json")
 	}
 }

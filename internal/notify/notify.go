@@ -2,9 +2,10 @@
 // the notifications that follow in a feed an open inbox tab reads.
 //
 // The Engine is given the store's cases after every poll. It compares their
-// event files with the ones it has already seen, so an event counts as new when
-// its file appears, not by its timestamp: a file that arrives late through sync
-// still counts. The first poll only records what is there.
+// events, by case id and file name, with the ones it has already seen, so an
+// event counts as new when it appears in the store, not by its timestamp: an
+// event that records an earlier time still counts. The first poll only records
+// what is there.
 //
 // The rule is fixed for now: a case that is open because the agent opened it,
 // followed up on an answer (a note that reopens the case), resumed it after a
@@ -125,8 +126,8 @@ func (f *Feed) After(after int64) Page {
 type Engine struct {
 	feed *Feed
 	now  func() time.Time
-	// seen holds case id / event file for every event already looked at;
-	// nil until the first poll.
+	// seen holds case id / event file name for every event already looked
+	// at; nil until the first poll.
 	seen map[string]bool
 }
 

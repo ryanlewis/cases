@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -715,6 +716,15 @@ func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "case", "thread", caseData{Home: home, Case: c, Thread: thread(c)})
 }
 
+// writeContext is the context a form's write to the store runs in: the
+// request's, without its cancellation. Once a form is accepted its write goes
+// through even if the browser goes away before the redirect, such as a tab
+// closed while the write waits for the store's lock, so the human's answer is
+// not dropped with no one there to see the error.
+func writeContext(r *http.Request) context.Context {
+	return context.WithoutCancel(r.Context())
+}
+
 // loadForPost resolves the case a form posts to, straight from the store.
 func (s *Server) loadForPost(w http.ResponseWriter, r *http.Request) (*store.Case, bool) {
 	id := r.PathValue("id")
@@ -760,10 +770,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if park {
 			event = store.EventPark
-			_, err = s.store.Park(r.Context(), c.ID, store.ParkRecord{Note: rec.Note, Actor: s.Actor}, store.AtRevision(rev))
+			_, err = s.store.Park(writeContext(r), c.ID, store.ParkRecord{Note: rec.Note, Actor: s.Actor}, store.AtRevision(rev))
 		} else {
 			rec.Actor = s.Actor
-			_, err = s.store.Answer(r.Context(), c.ID, rec, store.AtRevision(rev))
+			_, err = s.store.Answer(writeContext(r), c.ID, rec, store.AtRevision(rev))
 		}
 	}
 	if err != nil {
@@ -780,7 +790,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
-	if _, err := s.store.Resume(r.Context(), c.ID, store.AuthorHuman, store.ResumeRecord{Actor: s.Actor}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
+	if _, err := s.store.Resume(writeContext(r), c.ID, store.AuthorHuman, store.ResumeRecord{Actor: s.Actor}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
 		s.refuse(w, r, c, cases, err, nil)
 		return
 	}

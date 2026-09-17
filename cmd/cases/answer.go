@@ -34,7 +34,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		return err
 	}
 	if c.Park {
-		cs, err := d.cases().Park(context.Background(), id, store.ParkRecord{Note: c.Note, Actor: humanActor(c.As)}, atRevision(c.Revision)...)
+		cs, err := d.Cases.Park(context.Background(), id, store.ParkRecord{Note: c.Note, Actor: humanActor(c.As)}, atRevision(c.Revision)...)
 		if err != nil {
 			return err
 		}
@@ -74,7 +74,7 @@ func (c *AnswerCmd) Run(d *Deps) error {
 		}
 		rec.Rows = append(rec.Rows, row)
 	}
-	cs, err := d.cases().Answer(context.Background(), id, rec, atRevision(c.Revision)...)
+	cs, err := d.Cases.Answer(context.Background(), id, rec, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

@@ -70,7 +70,7 @@ func (c *WaitCmd) sinceTime(d *Deps) (time.Time, error) {
 	if err := store.ValidID(c.Since); err != nil {
 		return time.Time{}, fmt.Errorf("--since %q is neither an RFC 3339 time nor a case id", c.Since)
 	}
-	cs, err := d.cases().Get(context.Background(), c.Since)
+	cs, err := d.Cases.Get(context.Background(), c.Since)
 	if errors.Is(err, fs.ErrNotExist) {
 		return time.Time{}, fmt.Errorf("--since %q is neither an RFC 3339 time nor a case in the store", c.Since)
 	}
@@ -92,14 +92,14 @@ type waitLine struct {
 }
 
 // Run polls the store every second. It returns as soon as a case needs the
-// agent because of a human event that is new: its file was not in the store
-// on the first poll, or it is later than --since. It then prints every case
-// that currently needs the agent, one JSON object per line. With --for human
-// it does the same for cases waiting on the human.
+// agent because of a human event that is new: it was not in the store on the
+// first poll, or it is later than --since. It then prints every case that
+// currently needs the agent, one JSON object per line. With --for human it
+// does the same for cases waiting on the human.
 //
-// New is judged by the file appearing rather than by its timestamp alone,
-// because an answer written on another machine can arrive through sync well
-// after the time it records.
+// New is judged by the event appearing rather than by its timestamp alone,
+// because an event can record a time well before it was stored, such as an
+// answer written with an answered_at of its own.
 func (c *WaitCmd) Run(d *Deps) error {
 	since, err := c.sinceTime(d)
 	if err != nil {
@@ -124,9 +124,10 @@ func (c *WaitCmd) Run(d *Deps) error {
 		needs, side = needsHuman, "human"
 	}
 
-	poller := d.cases().NewPoller()
+	poller := d.Cases.NewPoller()
 	warned := map[string]bool{}
-	// seen holds the event files present on the first poll; nil until then.
+	// seen holds the events, by case id and file name, present on the first
+	// poll; nil until then.
 	var seen map[string]bool
 	for {
 		cases, bad, err := poller.Poll()

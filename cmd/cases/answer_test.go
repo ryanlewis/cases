@@ -82,10 +82,10 @@ func TestAnswerByKind(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			id := strings.TrimSpace(mustRun(t, append([]string{"--store", root, "open", "--urgency", "today", "--title", "T"}, tt.open...)...))
-			r := runCases(t, "", append([]string{"--store", root, "answer", id}, tt.answer...)...)
-			c := loadCase(t, root, id)
+			storePath := newStore(t)
+			id := strings.TrimSpace(mustRun(t, append([]string{"--store", storePath, "open", "--urgency", "today", "--title", "T"}, tt.open...)...))
+			r := runCases(t, "", append([]string{"--store", storePath, "answer", id}, tt.answer...)...)
+			c := loadCase(t, storePath, id)
 			if tt.wantErr != "" {
 				if r.err == nil || !strings.Contains(r.err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", r.err, tt.wantErr)
@@ -136,10 +136,10 @@ func TestAnswerTextFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "question", "--urgency", "today", "--title", "T"))
-			r := runCases(t, tt.stdin, append([]string{"--store", root, "answer", id}, tt.args...)...)
-			c := loadCase(t, root, id)
+			storePath := newStore(t)
+			id := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "question", "--urgency", "today", "--title", "T"))
+			r := runCases(t, tt.stdin, append([]string{"--store", storePath, "answer", id}, tt.args...)...)
+			c := loadCase(t, storePath, id)
 			if tt.wantErr != "" {
 				if r.err == nil || !strings.Contains(r.err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", r.err, tt.wantErr)
@@ -159,17 +159,18 @@ func TestAnswerTextFile(t *testing.T) {
 	}
 }
 
-// eventFiles names the files in a case directory, so a test can tell that a
-// refused write left nothing behind.
-func eventFiles(t *testing.T, root, id string) []string {
+// eventFiles names the case's events by the file names they keep, so a test
+// can tell that a refused write left nothing behind. It fails the test when
+// the case has an event the fold skipped, which would not be named.
+func eventFiles(t *testing.T, storePath, id string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(root, id))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := loadCase(t, storePath, id)
 	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
+	for _, ev := range c.Events {
+		names = append(names, ev.File)
+	}
+	if c.Revision() != len(names) {
+		t.Fatalf("case %s has %d events and %d folded: %q", id, c.Revision(), len(names), c.Problems)
 	}
 	return names
 }
@@ -177,10 +178,10 @@ func eventFiles(t *testing.T, root, id string) []string {
 // refusedAsStale runs a write that should be refused because the case has
 // moved on from revision read to revision now, and checks that it wrote
 // nothing.
-func refusedAsStale(t *testing.T, root, id string, read, now int, args ...string) {
+func refusedAsStale(t *testing.T, storePath, id string, read, now int, args ...string) {
 	t.Helper()
-	before := eventFiles(t, root, id)
-	r := runCases(t, "", append([]string{"--store", root}, args...)...)
+	before := eventFiles(t, storePath, id)
+	r := runCases(t, "", append([]string{"--store", storePath}, args...)...)
 	if !errors.Is(r.err, store.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", r.err)
 	}
@@ -188,61 +189,61 @@ func refusedAsStale(t *testing.T, root, id string, read, now int, args ...string
 	if msg := r.err.Error(); !strings.Contains(msg, want) || strings.Contains(msg, "\n") {
 		t.Errorf("err = %q, want one line containing %q", msg, want)
 	}
-	if after := eventFiles(t, root, id); len(after) != len(before) {
+	if after := eventFiles(t, storePath, id); len(after) != len(before) {
 		t.Errorf("refused write changed the files: %v, then %v", before, after)
 	}
 }
 
 func TestAnswerAtRevision(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	mustRun(t, "--store", root, "amend", id, "--option", "Vendor it")
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	mustRun(t, "--store", storePath, "amend", id, "--option", "Vendor it")
 
-	refusedAsStale(t, root, id, 1, 2, "answer", id, "--option", "3", "--revision", "1")
-	refusedAsStale(t, root, id, 0, 2, "answer", id, "--option", "3", "--revision", "0")
-	if out := mustRun(t, "--store", root, "answer", id, "--option", "3", "--revision", "2"); out != id+" answered\n" {
+	refusedAsStale(t, storePath, id, 1, 2, "answer", id, "--option", "3", "--revision", "1")
+	refusedAsStale(t, storePath, id, 0, 2, "answer", id, "--option", "3", "--revision", "0")
+	if out := mustRun(t, "--store", storePath, "answer", id, "--option", "3", "--revision", "2"); out != id+" answered\n" {
 		t.Errorf("stdout = %q", out)
 	}
-	if c := loadCase(t, root, id); c.Answer == nil || c.Answer.Choice != 3 || c.Revision() != 3 {
+	if c := loadCase(t, storePath, id); c.Answer == nil || c.Answer.Choice != 3 || c.Revision() != 3 {
 		t.Errorf("answer = %+v, revision %d", c.Answer, c.Revision())
 	}
 }
 
 func TestAnswerParkAtRevision(t *testing.T) {
-	root := t.TempDir()
-	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
-	mustRun(t, "--store", root, "amend", id, "--context", "CI is red")
+	storePath := newStore(t)
+	id := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
+	mustRun(t, "--store", storePath, "amend", id, "--context", "CI is red")
 
-	refusedAsStale(t, root, id, 1, 2, "answer", id, "--park", "--revision", "1")
-	if out := mustRun(t, "--store", root, "answer", id, "--park", "--note", "after release", "--revision", "2"); out != id+" parked\n" {
+	refusedAsStale(t, storePath, id, 1, 2, "answer", id, "--park", "--revision", "1")
+	if out := mustRun(t, "--store", storePath, "answer", id, "--park", "--note", "after release", "--revision", "2"); out != id+" parked\n" {
 		t.Errorf("stdout = %q", out)
 	}
-	if c := loadCase(t, root, id); c.State != store.StateParked || c.Revision() != 3 {
+	if c := loadCase(t, storePath, id); c.State != store.StateParked || c.Revision() != 3 {
 		t.Errorf("state %s, revision %d", c.State, c.Revision())
 	}
 }
 
 func TestAnswerTakesPartOfAnID(t *testing.T) {
-	root := t.TempDir()
-	id := openDecision(t, root)
-	if out := mustRun(t, "--store", root, "answer", "pin-bun", "--option", "1"); out != id+" answered\n" {
+	storePath := newStore(t)
+	id := openDecision(t, storePath)
+	if out := mustRun(t, "--store", storePath, "answer", "pin-bun", "--option", "1"); out != id+" answered\n" {
 		t.Errorf("stdout = %q", out)
 	}
 	// Agent commands still take the exact id only.
-	if r := runCases(t, "", "--store", root, "pickup", "pin-bun"); r.err == nil {
+	if r := runCases(t, "", "--store", storePath, "pickup", "pin-bun"); r.err == nil {
 		t.Error("pickup took part of an id")
 	}
 }
 
 func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
 	writeConfig(t, "name = \"Ryan\"\n")
-	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "decision", "--urgency", "today",
+	id := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "decision", "--urgency", "today",
 		"--title", "Pin bun?", "--option", "Pin", "--worker", "bun-pins", "--for", "Ryan"))
-	mustRun(t, "--store", root, "answer", id, "--option", "1")
-	mustRun(t, "--store", root, "pickup", id)
+	mustRun(t, "--store", storePath, "answer", id, "--option", "1")
+	mustRun(t, "--store", storePath, "pickup", id)
 
-	c := loadCase(t, root, id)
+	c := loadCase(t, storePath, id)
 	if c.For != "Ryan" {
 		t.Errorf("for = %q", c.For)
 	}
@@ -251,7 +252,7 @@ func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
 			t.Errorf("event %d actor = %+v, want %+v", i+1, got, want)
 		}
 	}
-	out := mustRun(t, "--store", root, "show", id)
+	out := mustRun(t, "--store", storePath, "show", id)
 	for _, want := range []string{"for:      Ryan", "by Ryan"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show missing %q:\n%s", want, out)
@@ -259,9 +260,9 @@ func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
 	}
 
 	// --as beats the config file; without a worker an agent event records no actor.
-	other := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today", "--title", "Heads up"))
-	mustRun(t, "--store", root, "answer", other, "--ack", "--as", "Sam")
-	c = loadCase(t, root, other)
+	other := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "fyi", "--urgency", "today", "--title", "Heads up"))
+	mustRun(t, "--store", storePath, "answer", other, "--ack", "--as", "Sam")
+	c = loadCase(t, storePath, other)
 	if c.Events[0].Actor != nil {
 		t.Errorf("open without a worker has actor %+v", c.Events[0].Actor)
 	}
@@ -273,11 +274,11 @@ func TestNameConfigStampsTheHumanOnAnswer(t *testing.T) {
 // A blank worker, which open has always accepted, records no actor rather than
 // one the store refuses.
 func TestBlankWorkerRecordsNoActor(t *testing.T) {
-	root := t.TempDir()
-	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "fyi", "--urgency", "today",
+	storePath := newStore(t)
+	id := strings.TrimSpace(mustRun(t, "--store", storePath, "open", "--kind", "fyi", "--urgency", "today",
 		"--title", "Heads up", "--worker", " "))
-	mustRun(t, "--store", root, "note", id, "--body", "more")
-	c := loadCase(t, root, id)
+	mustRun(t, "--store", storePath, "note", id, "--body", "more")
+	c := loadCase(t, storePath, id)
 	for i, ev := range c.Events {
 		if ev.Actor != nil {
 			t.Errorf("event %d actor = %+v", i+1, ev.Actor)

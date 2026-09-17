@@ -11,8 +11,8 @@ getting the answer back. The question is called a case.
 4. The agent picks up the answer, acts on it, and closes the case with what
    happened.
 
-Each case is a directory of JSON files, one file per event, so the store can
-live in a synced folder. No server is needed.
+The cases live in one SQLite file on this machine, and every event is kept as
+it was written. No server is needed.
 
 ## Install
 
@@ -25,6 +25,8 @@ sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf cases_vX.Y.Z_<os>_<arch>.tar.gz   # unzip the .zip on windows
 install cases /usr/local/bin/cases
 ```
+
+The binary includes SQLite; nothing else needs installing.
 
 Or install from a checkout with Go on the path:
 
@@ -45,8 +47,8 @@ cases skill install claude    # also: codex, pi
 ## A first case
 
 This runs one case end to end in the default store,
-`~/.local/share/cases`. In real use an agent runs the agent's commands; to try
-it, run both sides in one shell.
+`~/.local/share/cases/cases.db`. In real use an agent runs the agent's
+commands; to try it, run both sides in one shell.
 
 ```sh
 # Agent: raise a decision and wait for the answer in the background.
@@ -67,28 +69,72 @@ cases show "$id"
 
 ## Store format
 
-The store is a directory. By default it is `$XDG_DATA_HOME/cases`, which is
-usually `~/.local/share/cases`. Name another with `--store`, `CASES_STORE` or
-the [config file](#configuration). Each case is a directory named after the
-time it was opened (UTC) and a slug of its title. That name is the case id.
-Each write adds a new file:
+The store is one SQLite file. By default it is `$XDG_DATA_HOME/cases/cases.db`,
+which is usually `~/.local/share/cases/cases.db`. Name another with `--store`,
+`CASES_STORE` or the [config file](#configuration). The first `cases open`
+creates the file and its directory; until then every command reads the store
+as empty and creates nothing.
+
+While a command or `cases serve` has the store open, SQLite keeps two more
+files beside it, `cases.db-wal` and `cases.db-shm`, and removes them when the
+last one closes it. After a crash they can hold writes that are not in
+`cases.db` yet; the next command that opens the store moves them in, so keep
+the three files together.
+
+A store written by an earlier `cases`, a directory with one JSON file per
+event, is not read, and nothing is carried over from it. Named with `--store`,
+`CASES_STORE` or the config file, the directory is refused; name a file
+instead. The earlier default store was the directory `~/.local/share/cases`
+itself, so the new default file sits inside it, beside the old case
+directories, which are left as they were and not read. Update `cases`
+everywhere that uses a store at once: an earlier `cases` keeps writing case
+directories that this one does not see.
+
+### Tables
+
+| Table | One row per | Columns |
+| --- | --- | --- |
+| `cases` | case | `id`, `opened_at` |
+| `events` | event | `change`, `case_id`, `seq`, `author`, `event`, `at`, `data` |
+| `archive_cases` | case `cases prune` archived | `id`, `opened_at`, `archived_at` |
+| `archive_events` | event of an archived case | as in `events` |
+| `meta` | store (one row) | `schema_version`, now `1` |
+
+A case's id is the time it was opened (UTC) and a slug of its title, such as
+`2026-09-15T09-12-03Z-pin-bun-or-float`. If a case in the store or its archive
+already has that id, `-2`, `-3` and so on are added.
+
+Each event is one row in `events`:
+
+- `seq` numbers the case's events from 1, in the order they were written. No
+  two events of a case have the same number.
+- `author` is `agent` or `human`.
+- `event` is `open`, `amend`, `answer`, `pickup`, `note`, `close`,
+  `withdraw`, `park` or `resume`.
+- `at` is the time the record gives, RFC 3339 in UTC.
+- `data` is the event's JSON record exactly as written, below.
+- `change` numbers every event in the store and only goes up, even after
+  `prune`. `serve` and `wait` use it to find the cases that changed since they
+  last read the store.
+
+Each event also has the name it would have as a file,
+`NNNN-<author>-<event>.json`. `cases show --json` prints it as `file`, problems
+name the event by it, and `wait` and the browser notifications use it to tell
+events apart. A case's events, with what each record holds:
 
 ```
-cases/
-  2026-09-15T09-12-03Z-pin-bun-or-float/
-    0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], labels[], worker, brief, context, for
-    0002-agent-amend.json      # options[], rows[], links[], labels[] to add; body, context to replace; amended_at
-    0003-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
-    0004-agent-pickup.json     # picked_up_at, by
-    0005-agent-note.json       # follow-up question, reopens the case
-    0006-human-answer.json
-    0007-agent-pickup.json     # a reopened case is picked up again before it closes
-    0008-agent-close.json      # outcome (markdown), links, closed_at
+2026-09-15T09-12-03Z-pin-bun-or-float
+  0001-agent-open.json       # kind, urgency, title, body (markdown), options[], rows[], links[], labels[], worker, brief, context, for
+  0002-agent-amend.json      # options[], rows[], links[], labels[] to add; body, context to replace; amended_at
+  0003-human-answer.json     # choice / rows / signoff / text / drop / ack, note, answered_at
+  0004-agent-pickup.json     # picked_up_at, by
+  0005-agent-note.json       # follow-up question, reopens the case
+  0006-human-answer.json
+  0007-agent-pickup.json     # a reopened case is picked up again before it closes
+  0008-agent-close.json      # outcome (markdown), links, closed_at
 ```
 
-File names are `NNNN-<author>-<event>.json`. The author is `agent` or `human`.
-The events are `open`, `amend`, `answer`, `pickup`, `note`, `close`,
-`withdraw`, `park` and `resume`. Timestamps are RFC 3339 in UTC.
+Timestamps in records are RFC 3339 in UTC.
 
 The `labels`, `worker`, `brief` and `context` fields on `open` are optional
 and help the human act on a case. `labels` group cases, such as the ones one
@@ -106,9 +152,7 @@ event's `actor` and `for` also appear at the top level with the other open
 fields). The CLI records the human's name from `--as` or the `name` config key
 on `answer`, `resume` and the inbox, and the case's `worker` on the agent's
 events; when neither is set it records no actor. The store checks only that an
-actor it is given has a name and a kind, and never who may write what. A
-`cases` from before `actor` and `for` reads events carrying them as before and
-ignores both fields.
+actor it is given has a name and a kind, and never who may write what.
 
 An `amend` changes a case that is still open. Its `options`, `rows`,
 `links` and `labels` are added after the ones the case has, and its `body` or `context`
@@ -120,39 +164,43 @@ label, adds an option, link, label or row `id` the case already has, or changes 
 setting the `body` the case already has. So the same amend sent twice writes
 nothing the second time.
 
-The `open` file stays as it was written. The case shows the amended fields,
+The `open` record stays as it was written. The case shows the amended fields,
 and the answer is checked against them: an approval answer needs a verdict on
-the added rows too. An answer with the same sequence number as an amend was
-written without seeing it, for example on a machine the amend had not synced
-to yet. Unless the amend only added labels, the answer is refused and the case
-stays open for another answer. An amend that sets a body or context counts
-even when it is the one the case already has.
+the added rows too. An answer is numbered after every event before it, so it
+has seen every amend.
 
-A `cases` from before `amend` skips amend files as unknown events: it shows an
-amended case as it was opened and checks answers against that. A `cases` from
-before the `question` kind refuses a question case's open event as an unknown
-kind, so it reports the whole case as broken rather than skipping one file.
-A `cases` from before `drop` was allowed on every kind refuses a `drop` answer
-to any case but a stuck one: it lists the file as a problem and shows the case
-as still open. Update `cases` on every machine that uses the store before an
-agent amends a case or opens a question, or a human drops a case.
+### Writes
 
-An unknown event, kind or urgency is reported as possibly written by a newer
-`cases`, with the `go install` command that updates it. The same message comes
-from a file that `cases` did not write, such as an event file name with a typo
-in it, so check the name before updating.
+Each write is one transaction. It takes the store's write lock, reads the case,
+checks `--revision` if one was given, checks the event against the case with
+the same code that reads it, and adds the event numbered after the case's
+latest. A refused write changes nothing. Writers take turns, whether they are
+in one process or several, so two writers never take the same number. A writer
+that waits more than 5 seconds for the lock fails with `database is locked` and
+writes nothing; a long run of writes by another command can keep it waiting
+that long, though `sweep` and `prune` pause briefly after each write to let
+other writers in. Each write is synced to disk before the command returns.
 
-A case's state is worked out by reading its files in name order. It is never
-stored. Files are never edited or deleted, and closed cases are kept as the
+A case's state is worked out by reading its events in order. It is never
+stored. Events are never changed or removed, and closed cases are kept as the
 decision log until `cases prune` moves them to the [archive](#archive).
-Writes go to a temporary file (its name starts with a dot), which is then
-hard-linked to the event's file name and removed, so a reader never sees half
-a file. If a file already has that name, such as one a sync
-client added during the write, the write fails and that file is kept. Where
-hard links do not work (FAT, exFAT, some network mounts, or a sandbox that
-blocks them), the temporary file is renamed into place instead, once a check
-shows the name is still free. A file that arrives between that check and the
-rename is replaced.
+
+Change the store only through `cases`. Keep the file on a local disk that only
+this machine uses: not in a synced folder (Dropbox, iCloud Drive, Syncthing),
+where a sync client can copy it halfway through a write, and not on a network
+share (NFS, SMB) or a folder shared into a VM or container, where SQLite's
+locks and shared memory do not work.
+
+To back the store up while `cases` may be using it, run
+`sqlite3 cases.db ".backup cases-backup.db"`. Stop `cases serve` and any
+`cases wait` before removing, moving or replacing `cases.db`: a process that
+still has the store open keeps using its `cases.db-wal` and `cases.db-shm`, and
+a file put in its place would be read with them. To start again, stop them,
+then delete `cases.db`, `cases.db-wal` and `cases.db-shm` together. If
+`cases.db` is gone but the other two are still there, `cases` refuses to make a
+new store until they are deleted or the store is put back. To restore a
+backup, stop them, delete `cases.db-wal` and `cases.db-shm`, and copy the
+backup to `cases.db`.
 
 ### States
 
@@ -185,32 +233,47 @@ note. Every answer may carry a `note`.
 
 ### Archive
 
-`cases prune` moves whole case directories into `.archive` inside the store:
+`cases prune` moves whole cases, every event with them, from `cases` and
+`events` into `archive_cases` and `archive_events`, one transaction per case.
+`list`, `show`, `wait` and `serve` read only `cases` and `events`, so an
+archived case is out of sight. Its events are as they were written, and its id
+is not given to a new case.
 
-```
-cases/
-  .archive/
-    2026-08-01T10-00-00Z-old-question/
-  2026-09-15T09-12-03Z-pin-bun-or-float/
-```
-
-`list`, `wait` and `serve` skip any directory whose name starts with a dot,
-and `show` looks for a case only at the top of the store, so an archived case
-is out of sight. Its files are as they were. To restore one, move its
-directory back:
+There is no command to restore a case. To put one back, back up the store and
+move its rows back in one transaction. `.bail on` stops at the first error, so
+a failed step leaves the archive as it was:
 
 ```sh
-mv ~/.local/share/cases/.archive/2026-08-01T10-00-00Z-old-question ~/.local/share/cases/
+sqlite3 ~/.local/share/cases/cases.db <<'SQL'
+.bail on
+.timeout 5000
+BEGIN IMMEDIATE;
+INSERT INTO cases (id, opened_at)
+  SELECT id, opened_at FROM archive_cases WHERE id = '2026-08-01T10-00-00Z-old-question';
+INSERT INTO events (change, case_id, seq, author, event, at, data)
+  SELECT change, case_id, seq, author, event, at, data FROM archive_events
+  WHERE case_id = '2026-08-01T10-00-00Z-old-question';
+DELETE FROM archive_events WHERE case_id = '2026-08-01T10-00-00Z-old-question';
+DELETE FROM archive_cases WHERE id = '2026-08-01T10-00-00Z-old-question';
+COMMIT;
+SQL
 ```
 
-### Damaged files
+### Damaged events
 
-A file that is not valid JSON, has an unexpected name, or records an event the
-case could not accept at that point is skipped. The case still loads, and the
-file is reported as a problem (`cases show` lists it; `list` and `wait` print
-it as a warning on stderr). A case directory whose open event is damaged is
-reported and the other cases are still listed. Fields the CLI does not know are
-kept: `cases show --json` prints every event file as written.
+An event whose record is not valid JSON, or that the case could not accept at
+that point, such as one written by hand or by a newer `cases`, is skipped. The
+case still loads, and the event is reported as a problem under its file name
+(`cases show` lists it; `list` and `wait` print it as a warning on stderr). A
+case whose open event is damaged is reported and the other cases are still
+listed. Fields the CLI does not know are kept: `cases show --json` prints every
+event's record as written.
+
+An unknown event, kind or urgency is reported as possibly written by a newer
+`cases`, with the `go install` command that updates it. The same message comes
+from an event that `cases` did not write, so check where it came from before
+updating. A store whose schema version is newer than this `cases` reads is
+refused with the same advice.
 
 ## Configuration
 
@@ -231,14 +294,14 @@ cases config show    # print the defaults the environment and the file establish
 
 | Key | Sets | Beaten by | Default |
 | --- | --- | --- | --- |
-| `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
+| `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases/cases.db`, or `~/.local/share/cases/cases.db` |
 | `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
 | `no-open` | `--no-open` on `serve` | nothing | `false` (`true` or `false`, quoted or not) |
 | `name` | `--as` on `answer`, `resume` and `serve` | nothing | none: no actor is recorded |
 | `prune-age` | `--age` on `prune` | nothing | `720h` |
 
 ```toml
-store = "~/Sync/cases"
+store = "~/cases/work.db"
 ```
 
 A leading `~` in `store` is expanded. `CASES_STORE` set to an empty string
@@ -252,7 +315,10 @@ file is at fault.
 
 ## CLI
 
-Every command reads and writes the store directly.
+Every command opens the store file itself; nothing needs to be running. Name
+the store with `--store FILE` before the command, as in
+`cases --store ~/cases/work.db list`, or with `CASES_STORE` or the `store`
+config key.
 
 Agent side:
 
@@ -327,7 +393,7 @@ that it was already done, so read the case to see where it is. Other errors
 exit 1, and `wait` exits 2 on timeout. `sweep` and `prune` exit 1 when any case
 fails.
 
-`cases show` prints the case's revision, the number of event files it has, and
+`cases show` prints the case's revision, the number of events it has, and
 `show --json` and `show --answer` have it as `revision`. Pass it to `answer`, `resume`, `amend`,
 `pickup`, `note`, `close` or `withdraw` as `--revision N` and the write is refused, with nothing written, if an event has
 been added to the case since it was read. The error names the revision read and
@@ -401,24 +467,24 @@ not narrow `wait` to your own cases. A filter
 that matches no case, like an `--id` that is never answered, waits until the
 timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
-starts if the store directory does not exist yet.
+starts if the store file does not exist yet.
 
 Each line `wait` prints is the case as `show --json` prints it, without
 `revision`, plus two fields:
 
 - `fresh` is true when the event that put the case there is new to this
-  `wait`: its file landed while waiting, or it is later than `--since`. Those
+  `wait`: it was written while waiting, or it is later than `--since`. Those
   are the cases that woke it. The rest were already waiting, such as a parked
   case, which is printed on every wake until it is resumed.
 - `next_since` is the value to pass as `--since` to the next `wait`, the same
   on every line: the time of the latest event that put a printed case there,
   or the `--since` given if that is later. Waiting again with it does not wake
   on the events just printed, but does wake on one recorded later that lands
-  before the new `wait` starts. An answer synced in late from another machine
-  can record a time earlier than `next_since`; if it lands before the next
-  `wait` starts, it does not wake that `wait`, and is printed with `fresh`
-  false on a later wake. It is left out when none of those events records a
-  time.
+  before the new `wait` starts. An event that records a time of its own
+  earlier than `next_since`, such as one added by hand, does not wake the next
+  `wait` if it is written before that `wait` starts, and is printed with
+  `fresh` false on a later wake. It is left out when none of those events
+  records a time.
 
 `wait --for human` is the same wait from the human's side, for a notifier to
 run: it returns when a case lands on the human and prints every case waiting
@@ -447,12 +513,12 @@ cases it could not withdraw and exits 1.
 `prune` takes closed and withdrawn cases whose last event is older than
 `--age` (a Go duration; default `720h`, or the `prune-age` config key; `0`
 means any age). `--state closed` or `--state withdrawn` narrows it to one of
-them; no other state is accepted. With `--yes` it moves each case directory to
-`.archive/<id>` in the store, see [Archive](#archive). If a directory of that
-name is already in the archive the case is left where it is, the others are
-still moved, and prune exits 1. `--delete` removes the case directories
-instead, and cannot be undone. A case directory that cannot be loaded is
-reported on stderr and left.
+them; no other state is accepted. With `--yes` it moves each case to the
+store's archive, see [Archive](#archive). If the archive already has a case
+with that id, the case is left where it is, the others are still moved, and
+prune exits 1. So is a case that has had an event written since prune read it.
+`--delete` removes the cases instead, and cannot be undone. A case that cannot
+be loaded is reported on stderr and left.
 
 `list` reads every case in the store on each run, so pruning keeps it fast as
 the history grows. To prune daily, run `cases prune --yes` from cron or a
@@ -487,7 +553,7 @@ line instead, logs each request to stderr and does not open the browser:
 
 ```sh
 cases serve > serve.log
-# Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/
+# Serving /Users/you/.local/share/cases/cases.db at http://127.0.0.1:8765/
 ```
 
 Page refreshes that run every two seconds, and a tab's checks for
@@ -499,13 +565,12 @@ While it runs, serve records itself in a JSON file (`pid`, `url`, `addr`,
 `store`, `started_at`, `version`) in this machine's state directory:
 `$XDG_STATE_HOME/cases`, or `~/.local/state/cases`. The file is named
 `serve-<slug>-<hash>.json` from the store's absolute path, so serves on
-different stores do not clash, and it is never put in the store, which may be
-synced. Serve removes the file when it stops on `q`, Ctrl-C or SIGTERM.
+different stores do not clash, and it is never put beside the store. Serve removes the file when it stops on `q`, Ctrl-C or SIGTERM.
 `cases status` reads it for the current store:
 
 ```sh
 cases status
-# Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/ (pid 4242, since 2026-09-16T09:12:03Z)
+# Serving /Users/you/.local/share/cases/cases.db at http://127.0.0.1:8765/ (pid 4242, since 2026-09-16T09:12:03Z)
 cases status --json   # the file's fields
 ```
 
@@ -595,9 +660,8 @@ in the URL, so a reload shows it again. If the form is refused, the same case
 is shown again with the error.
 
 Each form carries the case's revision from when the page was loaded: the
-number of event files the case had. If an event has been added to the case
-since, including one a sync brought in from another machine, the form is
-refused and nothing is written. The case is shown again as it is now, so the
+number of events the case had. If an event has been added to the case since,
+the form is refused and nothing is written. The case is shown again as it is now, so the
 thread can be read before sending again; if the case is still open, the form
 keeps what was typed. This stops a tab left open from answering a case that was
 answered somewhere else and then reopened by a note, or a case that has been
@@ -702,6 +766,11 @@ make test    # go test -race ./...
 make lint    # golangci-lint run ./...
 make fmt     # golangci-lint fmt ./...
 ```
+
+The store uses `modernc.org/sqlite`, SQLite translated to Go, so a build needs
+no C compiler and cross-compiles like any Go program. Its go.mod pins the
+`modernc.org/libc` it was built against, and this module must pin the same
+version, so update the two together.
 
 `govulncheck` is pinned as a `tool` directive in go.mod, so its dependency
 graph (`golang.org/x/vuln` and its own dependencies) shows up in go.mod and

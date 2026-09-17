@@ -1,11 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -13,21 +12,31 @@ import (
 	"github.com/ryanlewis/cases/internal/store"
 )
 
-// archiveDir is the directory inside the store that prune moves cases into.
-// Its name starts with a dot, so list, wait and serve do not see it.
-const archiveDir = ".archive"
-
 type PruneCmd struct {
 	Age    time.Duration `help:"Only cases whose last event is older than this Go duration (720h). 0 means any age." default:"720h" placeholder:"DURATION"`
 	State  []string      `help:"Only cases in these states: closed, withdrawn or both. Repeat or comma-separate." default:"closed,withdrawn" placeholder:"STATE"`
-	Delete bool          `help:"Delete the case directories instead of moving them to the archive."`
+	Delete bool          `help:"Delete the cases instead of moving them to the archive."`
 	Yes    bool          `help:"Prune the cases. Without it, prune only prints what it would prune." short:"y"`
 }
 
-// Run moves each matching case directory to <store>/.archive/<id>, or removes
-// it with --delete. Only closed and withdrawn cases can be pruned: no event is
-// accepted in those states, so nothing can be writing to the directory. A
-// case that fails to load is reported and left.
+// pruner is a store that can take cases out of itself, as *store.DB can.
+type pruner interface {
+	store.Store
+	Archive(ctx context.Context, id string, pre ...store.Precondition) error
+	Delete(ctx context.Context, id string, pre ...store.Precondition) error
+}
+
+// writePause is how long sweep and prune wait after each write. A write from
+// elsewhere, such as an agent's note, polls for the store's lock with growing
+// pauses between tries, and without a gap it can miss every moment a long run
+// of writes lets the lock go, and fail.
+const writePause = time.Millisecond
+
+// Run moves each matching case into the store's archive tables, or deletes it
+// with --delete, each in a transaction of its own. Only closed and withdrawn
+// cases can be pruned: no event is accepted in those states. A case that has
+// had an event written since prune read it is refused and left, as is one
+// that fails to load.
 func (c *PruneCmd) Run(d *Deps) error {
 	var want []store.State
 	for _, s := range c.State {
@@ -44,7 +53,13 @@ func (c *PruneCmd) Run(d *Deps) error {
 		return errors.New("--age must not be negative")
 	}
 
-	cases, bad, err := store.List(d.Store)
+	// Archiving and deleting are not on the Store interface.
+	db, ok := d.Cases.(pruner)
+	if !ok {
+		return fmt.Errorf("the store at %s cannot prune cases", d.Store)
+	}
+	ctx := context.Background()
+	cases, bad, err := db.List(ctx)
 	if errors.Is(err, fs.ErrNotExist) {
 		cases, bad, err = nil, nil, nil
 	}
@@ -63,7 +78,7 @@ func (c *PruneCmd) Run(d *Deps) error {
 		}
 	}
 
-	verb, done := "archived", "moved to "+filepath.Join(d.Store, archiveDir)
+	verb, done := "archived", "moved to the archive in "+d.Store
 	if c.Delete {
 		verb, done = "deleted", "deleted"
 	}
@@ -77,22 +92,14 @@ func (c *PruneCmd) Run(d *Deps) error {
 		return nil
 	}
 
-	archive := filepath.Join(d.Store, archiveDir)
-	if !c.Delete && len(prune) > 0 {
-		if err := os.MkdirAll(archive, 0o755); err != nil {
-			return err
-		}
-	}
-	// Pruning moves case directories, so it works on the store's path rather
-	// than through the Store.
 	var failed []string
 	for _, cs := range prune {
-		dir, err := store.CaseDir(d.Store, cs.ID)
-		if err == nil && c.Delete {
-			err = os.RemoveAll(dir)
-		} else if err == nil {
-			err = moveNew(dir, filepath.Join(archive, cs.ID))
+		remove := db.Archive
+		if c.Delete {
+			remove = db.Delete
 		}
+		err := remove(ctx, cs.ID, store.AtRevision(cs.Revision()))
+		time.Sleep(writePause)
 		if err != nil {
 			failed = append(failed, cs.ID+": "+err.Error())
 			continue
@@ -103,15 +110,4 @@ func (c *PruneCmd) Run(d *Deps) error {
 		return fmt.Errorf("%d cases were not pruned:\n  %s", len(failed), strings.Join(failed, "\n  "))
 	}
 	return nil
-}
-
-// moveNew renames from to to, refusing when something is already at to.
-// os.Rename would replace an empty directory there.
-func moveNew(from, to string) error {
-	if _, err := os.Lstat(to); err == nil {
-		return fmt.Errorf("%s already exists", to)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return os.Rename(from, to)
 }

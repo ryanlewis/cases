@@ -14,12 +14,12 @@ import (
 // stops on SIGTERM. The signal is sent only once the Serving line shows the
 // handler is installed; before that it would kill the test binary.
 func TestServeStopsOnSignal(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
 	stdout := &syncBuffer{}
 	done := make(chan error, 1)
 	go func() {
 		cmd := &ServeCmd{Listen: "127.0.0.1:0"}
-		done <- cmd.Run(&Deps{Store: root, Stdout: stdout, Stderr: io.Discard})
+		done <- cmd.Run(&Deps{Store: storePath, Cases: openStore(t, storePath), Stdout: stdout, Stderr: io.Discard})
 	}()
 	waitForURL(t, stdout)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
@@ -33,5 +33,5 @@ func TestServeStopsOnSignal(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not stop on SIGTERM")
 	}
-	assertNotRunning(t, root)
+	assertNotRunning(t, storePath)
 }

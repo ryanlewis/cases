@@ -1,7 +1,6 @@
 // Package instance records a running `cases serve` in a small JSON file, so
 // `cases status` can say where it is listening. The file lives in this
-// machine's state directory, never in the store, which may be synced to other
-// machines.
+// machine's state directory, never beside the store.
 package instance
 
 import (
@@ -40,14 +39,14 @@ func Dir() (string, error) {
 	return filepath.Join(base, "cases"), nil
 }
 
-// Path is the file for one store: a slug of the store's directory name and a
-// hash of its absolute path, so serves on two stores do not share a file.
-func Path(storeDir string) (string, error) {
+// Path is the file for one store: a slug of the store's file name and a hash
+// of its absolute path, so serves on two stores do not share a file.
+func Path(storePath string) (string, error) {
 	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}
-	abs, err := filepath.Abs(storeDir)
+	abs, err := filepath.Abs(storePath)
 	if err != nil {
 		return "", err
 	}
@@ -89,12 +88,12 @@ func Write(info Info) (err error) {
 	return os.Rename(tmp, path)
 }
 
-// Running returns the serve recorded for storeDir if it is still running, or
+// Running returns the serve recorded for storePath if it is still running, or
 // nil. A file is stale when its process is gone or nothing accepts
 // connections on its address; the second check covers a pid that was reused
 // by an unrelated process after a crash.
-func Running(storeDir string) (*Info, error) {
-	path, err := Path(storeDir)
+func Running(storePath string) (*Info, error) {
+	path, err := Path(storePath)
 	if err != nil {
 		return nil, err
 	}
@@ -120,10 +119,10 @@ func Running(storeDir string) (*Info, error) {
 	return &info, nil
 }
 
-// Remove deletes the file for storeDir if it still records pid, so a serve
+// Remove deletes the file for storePath if it still records pid, so a serve
 // never removes a file another serve wrote.
-func Remove(storeDir string, pid int) error {
-	path, err := Path(storeDir)
+func Remove(storePath string, pid int) error {
+	path, err := Path(storePath)
 	if err != nil {
 		return err
 	}

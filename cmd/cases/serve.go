@@ -28,12 +28,12 @@ func (c *ServeCmd) Run(d *Deps) error {
 	if err := web.CheckLoopback(c.Listen); err != nil {
 		return err
 	}
-	storeDir, err := filepath.Abs(d.Store)
+	storePath, err := filepath.Abs(d.Store)
 	if err != nil {
 		return err
 	}
 	// A file that cannot be read is treated as stale and replaced below.
-	if running, _ := instance.Running(storeDir); running != nil {
+	if running, _ := instance.Running(storePath); running != nil {
 		return fmt.Errorf("cases serve is already running for %s at %s (pid %d)", running.Store, running.URL, running.PID)
 	}
 	ln, err := net.Listen("tcp", c.Listen)
@@ -53,19 +53,19 @@ func (c *ServeCmd) Run(d *Deps) error {
 	var screen *statusScreen
 	logw := d.Stderr
 	if term {
-		screen = newStatusScreen(d.Store, d.cases(), url, d.Stdout, os.Getenv("NO_COLOR") == "")
+		screen = newStatusScreen(d.Store, d.Cases, url, d.Stdout, os.Getenv("NO_COLOR") == "")
 		logw = screen.logWriter(d.Stderr, !isTerminal(d.Stderr))
 	}
 
 	// Record the instance for `cases status`. Serving goes ahead without it.
 	pid := os.Getpid()
-	if err := instance.Write(instance.Info{PID: pid, URL: url, Addr: addr, Store: storeDir, StartedAt: time.Now().UTC().Truncate(time.Second), Version: version}); err != nil {
+	if err := instance.Write(instance.Info{PID: pid, URL: url, Addr: addr, Store: storePath, StartedAt: time.Now().UTC().Truncate(time.Second), Version: version}); err != nil {
 		fmt.Fprintf(logw, "could not record the instance for cases status: %v\n", err)
 	} else {
-		defer func() { _ = instance.Remove(storeDir, pid) }()
+		defer func() { _ = instance.Remove(storePath, pid) }()
 	}
 
-	srv, err := web.New(d.cases(), addr, logw)
+	srv, err := web.New(d.Cases, addr, logw)
 	if err != nil {
 		_ = ln.Close()
 		return err

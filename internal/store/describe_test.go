@@ -1,7 +1,6 @@
 package store
 
 import (
-	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -111,12 +110,16 @@ func TestDescribeAmendSameText(t *testing.T) {
 	}
 }
 
-// Files written by the build that added labels to amend, byte for byte, fold
-// to the case that build showed, and the thread now has what each amend
+// Records written by the build that added labels to amend, byte for byte,
+// fold to the case that build showed, and the thread now has what each amend
 // replaced.
-func TestAmendFilesFromAnEarlierBuild(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "2026-09-16T22-15-41Z-pin-bun-or-float")
-	writeFile(t, dir, "0001-agent-open.json", `{
+func TestAmendRecordsFromAnEarlierBuild(t *testing.T) {
+	d := newDB(t)
+	if _, err := d.Create(t.Context(), openOf(KindFYI)); err != nil {
+		t.Fatal(err)
+	}
+	const id = "2026-09-16T22-15-41Z-pin-bun-or-float"
+	insertRow(t, d, id, 1, "agent", "open", `{
   "kind": "decision",
   "urgency": "today",
   "title": "Pin bun or float",
@@ -135,7 +138,7 @@ func TestAmendFilesFromAnEarlierBuild(t *testing.T) {
   "opened_at": "2026-09-16T22:15:41.605108Z"
 }
 `)
-	writeFile(t, dir, "0002-agent-amend.json", `{
+	insertRow(t, d, id, 2, "agent", "amend", `{
   "body": "# Pin bun?\n\nNow with the lockfile diff.\n",
   "links": [
     "https://example.com/log"
@@ -144,21 +147,21 @@ func TestAmendFilesFromAnEarlierBuild(t *testing.T) {
   "amended_at": "2026-09-16T22:15:41.632062Z"
 }
 `)
-	writeFile(t, dir, "0003-agent-amend.json", `{
+	insertRow(t, d, id, 3, "agent", "amend", `{
   "links": [
     "https://example.com/diff"
   ],
   "amended_at": "2026-09-16T22:15:41.652736Z"
 }
 `)
-	writeFile(t, dir, "0004-agent-amend.json", `{
+	insertRow(t, d, id, 4, "agent", "amend", `{
   "labels": [
     "review"
   ],
   "amended_at": "2026-09-16T22:15:41.668651Z"
 }
 `)
-	c, err := Load(dir)
+	c, err := d.Get(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}

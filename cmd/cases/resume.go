@@ -22,7 +22,7 @@ func (c *ResumeCmd) Run(d *Deps) error {
 	if c.Agent {
 		author, actor = store.AuthorAgent, d.workerActor(id)
 	}
-	cs, err := d.cases().Resume(context.Background(), id, author, store.ResumeRecord{Actor: actor}, atRevision(c.Revision)...)
+	cs, err := d.Cases.Resume(context.Background(), id, author, store.ResumeRecord{Actor: actor}, atRevision(c.Revision)...)
 	if err != nil {
 		return err
 	}

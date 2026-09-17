@@ -12,7 +12,7 @@ import (
 type OpenCmd struct {
 	Kind     string   `help:"decision, approval, signoff, stuck, question or fyi." required:"" enum:"decision,approval,signoff,stuck,question,fyi" placeholder:"KIND"`
 	Urgency  string   `help:"blocking, today or whenever." required:"" enum:"blocking,today,whenever" placeholder:"URGENCY"`
-	Title    string   `help:"One-line title; also names the case directory." required:""`
+	Title    string   `help:"One-line title; also names the case id." required:""`
 	Body     string   `help:"The body as one line of text." xor:"body" placeholder:"TEXT"`
 	BodyFile string   `help:"Markdown body. - reads stdin." name:"body-file" xor:"body" placeholder:"FILE"`
 	Option   []string `help:"An option for a decision case. Repeat per option; \"Other, see note\" is always offered." sep:"none" placeholder:"TEXT"`
@@ -58,7 +58,7 @@ func (c *OpenCmd) Run(d *Deps) error {
 		return err
 	}
 	rec.Rows = rows
-	created, err := d.cases().Create(context.Background(), rec)
+	created, err := d.Cases.Create(context.Background(), rec)
 	if err != nil {
 		return err
 	}

@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ryanlewis/cases/internal/store"
+	"github.com/ryanlewis/cases/internal/store/storetest"
 )
 
 var (
@@ -53,10 +52,10 @@ func TestInboxOrderAndContent(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	newBlocking := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "New blocker"})
 	answered := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "Answered"})
-	if _, err := store.Answer(answered.Dir, store.AnswerRecord{Ack: true}); err != nil {
+	if _, err := a.db.Answer(t.Context(), answered.ID, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Park(oldBlocking.Dir, store.ParkRecord{}); err != nil {
+	if _, err := a.db.Park(t.Context(), oldBlocking.ID, store.ParkRecord{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,10 +194,10 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/?event=answer&recorded="+c.ID {
 				t.Fatalf("post: %d %q %s", w.Code, w.Header().Get("Location"), w.Body.String())
 			}
-			if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", tt.wantFile}) {
+			if files := a.eventFiles(t, c.ID); !slices.Equal(files, []string{"0001-agent-open.json", tt.wantFile}) {
 				t.Errorf("files = %v", files)
 			}
-			loaded, err := store.Load(c.Dir)
+			loaded, err := a.db.Get(t.Context(), c.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,7 +242,7 @@ func TestDropAnswersEveryKind(t *testing.T) {
 			if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, pageRevision(t, page)), origin); w.Code != http.StatusSeeOther {
 				t.Fatalf("drop: %d %s", w.Code, w.Body.String())
 			}
-			loaded, err := store.Load(c.Dir)
+			loaded, err := a.db.Get(t.Context(), c.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -263,7 +262,7 @@ func TestAmendedCase(t *testing.T) {
 	origin := map[string]string{"Origin": "http://" + testAddr}
 	c := a.open(t, openRecords[store.KindApproval])
 	before := a.get(t, "/cases/"+c.ID)
-	if _, err := store.Amend(c.Dir, store.AmendRecord{
+	if _, err := a.db.Amend(t.Context(), c.ID, store.AmendRecord{
 		Body:  "Now with a **deploy**.",
 		Rows:  []store.Row{{ID: "deploy", Label: "Deploy", Script: "make deploy", Link: "https://example.com/deploy"}},
 		Links: []string{"https://example.com/log"},
@@ -302,7 +301,7 @@ func TestAmendedCase(t *testing.T) {
 	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, rev), origin); w.Code != http.StatusSeeOther {
 		t.Errorf("answer with every row: %d %s", w.Code, w.Body.String())
 	}
-	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-agent-amend.json", "0003-human-answer.json"}) {
+	if files := a.eventFiles(t, c.ID); !slices.Equal(files, []string{"0001-agent-open.json", "0002-agent-amend.json", "0003-human-answer.json"}) {
 		t.Errorf("files = %v", files)
 	}
 }
@@ -315,7 +314,7 @@ func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
 	const body, context = "Was **bold** & <script>alert(1)</script> <b>raw</b>", `Release <1.4> & "quoted"`
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up", Body: body, Context: context})
-	if _, err := store.Amend(c.Dir, store.AmendRecord{Body: "Now plain.", Context: "Release 1.4.1"}); err != nil {
+	if _, err := a.db.Amend(t.Context(), c.ID, store.AmendRecord{Body: "Now plain.", Context: "Release 1.4.1"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []string{"/cases/" + c.ID, "/cases/" + c.ID + "/thread?state=open"} {
@@ -338,7 +337,7 @@ func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
 	}
 
 	bare := a.open(t, openRecords[store.KindFYI])
-	if _, err := store.Amend(bare.Dir, store.AmendRecord{Body: "A body at last.", Context: "Release 1.4"}); err != nil {
+	if _, err := a.db.Amend(t.Context(), bare.ID, store.AmendRecord{Body: "A body at last.", Context: "Release 1.4"}); err != nil {
 		t.Fatal(err)
 	}
 	if page := a.get(t, "/cases/"+bare.ID); !strings.Contains(page, "<p>replaced the body</p>") || strings.Contains(page, "<details") {
@@ -346,27 +345,26 @@ func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
 	}
 }
 
-// An amend that syncs in after a later one changes what the later one
-// replaced. The details under the later one then gets a new id, so the poll
-// does not keep the old text in its place.
+// An amend stored after a later one, as a hand edit or another tool could
+// store it, changes what the later one replaced. The details under the later
+// one then gets a new id, so the poll does not keep the old text in its
+// place.
 func TestThreadDetailsFollowTheText(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up", Body: "First."})
-	arrive := func(name, data string) {
+	arrive := func(seq int, data string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(c.Dir, name), []byte(data), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		storetest.InsertEvent(t, a.db.Path, c.ID, seq, "agent", "amend", data)
 	}
 	thread := "/cases/" + c.ID + "/thread?state=open"
 
-	arrive("0003-agent-amend.json", `{"body":"Third."}`)
+	arrive(3, `{"body":"Third."}`)
 	stale := `<details id="previous-body-3-` + textID("First.") + `" hx-preserve>`
 	if page := a.get(t, thread); !strings.Contains(page, stale) {
 		t.Fatalf("thread missing %s:\n%s", stale, page)
 	}
 
-	arrive("0002-agent-amend.json", `{"body":"Second."}`)
+	arrive(2, `{"body":"Second."}`)
 	page := a.get(t, thread)
 	for _, want := range []string{
 		`<details id="previous-body-2-` + textID("First.") + `" hx-preserve>`,
@@ -405,7 +403,7 @@ func TestStuckParkAndResume(t *testing.T) {
 	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"stuck": {"text"}, "park": {"1"}, "note": {"after release"}}, 1), origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("park: %d %s", w.Code, w.Body.String())
 	}
-	if files := eventFiles(t, c.Dir); !slices.Equal(files, []string{"0001-agent-open.json", "0002-human-park.json"}) {
+	if files := a.eventFiles(t, c.ID); !slices.Equal(files, []string{"0001-agent-open.json", "0002-human-park.json"}) {
 		t.Errorf("files = %v", files)
 	}
 	page := a.get(t, "/cases/"+c.ID)
@@ -416,7 +414,7 @@ func TestStuckParkAndResume(t *testing.T) {
 	if w := a.do("POST", "/cases/"+c.ID+"/resume", withRevision(nil, 2), origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("resume: %d", w.Code)
 	}
-	loaded, err := store.Load(c.Dir)
+	loaded, err := a.db.Get(t.Context(), c.ID)
 	if err != nil || loaded.State != store.StateOpen || loaded.Events[2].Author != store.AuthorHuman {
 		t.Errorf("after resume: %+v %v", loaded, err)
 	}
@@ -424,7 +422,7 @@ func TestStuckParkAndResume(t *testing.T) {
 	if w := a.do("POST", "/cases/"+c.ID+"/resume", withRevision(nil, 3), origin); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("resume of open case: %d", w.Code)
 	}
-	if n := len(eventFiles(t, c.Dir)); n != 3 {
+	if n := len(a.eventFiles(t, c.ID)); n != 3 {
 		t.Errorf("%d files", n)
 	}
 }
@@ -437,7 +435,7 @@ func TestPostsGoToTheNextCase(t *testing.T) {
 	blocked := a.open(t, openRecords[store.KindStuck])
 	decision := a.open(t, openRecords[store.KindDecision])
 	parked := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyWhenever, Title: "Parked"})
-	if _, err := store.Park(parked.Dir, store.ParkRecord{}); err != nil {
+	if _, err := a.db.Park(t.Context(), parked.ID, store.ParkRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	zed := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Zed"})
@@ -545,7 +543,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 			if tt.keeps != "" && !strings.Contains(body, tt.keeps) {
 				t.Errorf("re-rendered form lost %q", tt.keeps)
 			}
-			if files := eventFiles(t, c.Dir); len(files) != 1 {
+			if files := a.eventFiles(t, c.ID); len(files) != 1 {
 				t.Errorf("files = %v", files)
 			}
 		})
@@ -555,7 +553,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 func TestAnswerOnAClosedCaseOrUnknownCase(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindFYI])
-	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{}); err != nil {
+	if _, err := a.db.Withdraw(t.Context(), c.ID, store.WithdrawRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, 2), nil)
@@ -586,13 +584,13 @@ func TestStaleTabCannotAnswerAReopenedCase(t *testing.T) {
 		t.Fatalf("tab A: %d %s", w.Code, w.Body.String())
 	}
 	// The agent picks the answer up and asks a follow-up, which reopens the case.
-	if _, err := store.Pickup(c.Dir, store.PickupRecord{By: "bun-pins"}); err != nil {
+	if _, err := a.db.Pickup(t.Context(), c.ID, store.PickupRecord{By: "bun-pins"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
 		t.Fatal(err)
 	}
-	written := eventFiles(t, c.Dir)
+	written := a.eventFiles(t, c.ID)
 
 	// Tab B's form is from before the answer. The case is open again, but the
 	// form is refused and nothing is written.
@@ -600,7 +598,7 @@ func TestStaleTabCannotAnswerAReopenedCase(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("tab B: %d, want 409\n%s", w.Code, w.Body.String())
 	}
-	if files := eventFiles(t, c.Dir); !slices.Equal(files, written) {
+	if files := a.eventFiles(t, c.ID); !slices.Equal(files, written) {
 		t.Errorf("files = %v, want %v", files, written)
 	}
 	// Tab B gets the case as it is now, with what it typed, and a form at the
@@ -618,7 +616,7 @@ func TestStaleTabCannotAnswerAReopenedCase(t *testing.T) {
 	if w := a.do("POST", target, withRevision(url.Values{"choice": {"2"}, "note": {"float it"}}, pageRevision(t, body)), origin); w.Code != http.StatusSeeOther {
 		t.Fatalf("sent again: %d %s", w.Code, w.Body.String())
 	}
-	if files := eventFiles(t, c.Dir); len(files) != 5 || files[4] != "0005-human-answer.json" {
+	if files := a.eventFiles(t, c.ID); len(files) != 5 || files[4] != "0005-human-answer.json" {
 		t.Errorf("files = %v", files)
 	}
 }
@@ -629,24 +627,24 @@ func TestStaleParkAndResumeAreRefused(t *testing.T) {
 	c := a.open(t, openRecords[store.KindStuck])
 	park := func() {
 		t.Helper()
-		if _, err := store.Park(c.Dir, store.ParkRecord{}); err != nil {
+		if _, err := a.db.Park(t.Context(), c.ID, store.ParkRecord{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	resume := func() {
 		t.Helper()
-		if _, err := store.Resume(c.Dir, store.AuthorAgent, store.ResumeRecord{}); err != nil {
+		if _, err := a.db.Resume(t.Context(), c.ID, store.AuthorAgent, store.ResumeRecord{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	refused := func(name, action string, form url.Values) {
 		t.Helper()
-		before := eventFiles(t, c.Dir)
+		before := a.eventFiles(t, c.ID)
 		w := a.do("POST", "/cases/"+c.ID+"/"+action, form, origin)
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), staleForm) {
 			t.Errorf("%s: %d, want 409 with the stale form error\n%s", name, w.Code, w.Body.String())
 		}
-		if files := eventFiles(t, c.Dir); !slices.Equal(files, before) {
+		if files := a.eventFiles(t, c.ID); !slices.Equal(files, before) {
 			t.Errorf("%s: files = %v, want %v", name, files, before)
 		}
 	}
@@ -676,14 +674,14 @@ func TestStaleParkAndResumeAreRefused(t *testing.T) {
 func TestStaleRefusalShowsTheCaseAsItIsNow(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindDecision])
-	loaded, err := store.Load(c.Dir)
+	loaded, err := a.db.Get(t.Context(), c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Pin to which **patch**?"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Answer(c.Dir, store.AnswerRecord{Choice: 1}, store.AtRevision(loaded.Revision()))
+	_, err = a.db.Answer(t.Context(), c.ID, store.AnswerRecord{Choice: 1}, store.AtRevision(loaded.Revision()))
 	if !errors.Is(err, store.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", err)
 	}
@@ -707,13 +705,13 @@ func TestStaleRefusalShowsTheCaseAsItIsNow(t *testing.T) {
 func TestThreadFragment(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindDecision])
-	if _, err := store.Answer(c.Dir, store.AnswerRecord{Choice: 1, Note: "ship it"}); err != nil {
+	if _, err := a.db.Answer(t.Context(), c.ID, store.AnswerRecord{Choice: 1, Note: "ship it"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Pickup(c.Dir, store.PickupRecord{By: "bun-pins"}); err != nil {
+	if _, err := a.db.Pickup(t.Context(), c.ID, store.PickupRecord{By: "bun-pins"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "Which **patch**?"}); err != nil {
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Which **patch**?"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -756,14 +754,17 @@ func TestDoneView(t *testing.T) {
 	open := a.open(t, openRecords[store.KindStuck])
 
 	steps := []func() error{
-		func() error { _, err := store.Answer(closed.Dir, store.AnswerRecord{Choice: 1}); return err },
-		func() error { _, err := store.Pickup(closed.Dir, store.PickupRecord{}); return err },
-		func() error { _, err := store.Withdraw(withdrawn.Dir, store.WithdrawRecord{}); return err },
+		func() error { _, err := a.db.Answer(t.Context(), closed.ID, store.AnswerRecord{Choice: 1}); return err },
+		func() error { _, err := a.db.Pickup(t.Context(), closed.ID, store.PickupRecord{}); return err },
+		func() error { _, err := a.db.Withdraw(t.Context(), withdrawn.ID, store.WithdrawRecord{}); return err },
 		func() error {
-			_, err := store.Close(closed.Dir, store.CloseRecord{Outcome: "Pinned in **#12**."})
+			_, err := a.db.Close(t.Context(), closed.ID, store.CloseRecord{Outcome: "Pinned in **#12**."})
 			return err
 		},
-		func() error { _, err := store.Answer(answered.Dir, store.AnswerRecord{Ack: true}); return err },
+		func() error {
+			_, err := a.db.Answer(t.Context(), answered.ID, store.AnswerRecord{Ack: true})
+			return err
+		},
 	}
 	for _, step := range steps {
 		time.Sleep(5 * time.Millisecond)
@@ -792,29 +793,29 @@ func TestDoneFilters(t *testing.T) {
 		return store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: title, Worker: worker, Labels: []string{"deps"}, OpenedAt: utc(1, 9, 0)}
 	}
 	// Answered 12m ago, by a case with a worker.
-	answered, err := store.Create(a.root, withWorker("Answered", "bun-pins"))
+	answered, err := a.db.Create(t.Context(), withWorker("Answered", "bun-pins"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := answerAt(utc(16, 19, 48))(answered.Dir); err != nil {
+	if err := a.answerAt(utc(16, 19, 48))(answered.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Picked up 3m ago by a named agent: the pickup's by wins over the worker.
-	picked, err := store.Create(a.root, withWorker("Picked up", "opener"))
+	picked, err := a.db.Create(t.Context(), withWorker("Picked up", "opener"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := answerAt(utc(16, 19, 0))(picked.Dir); err != nil {
+	if err := a.answerAt(utc(16, 19, 0))(picked.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Pickup(picked.Dir, store.PickupRecord{By: "rel-notes", PickedUpAt: utc(16, 19, 57)}); err != nil {
+	if _, err := a.db.Pickup(t.Context(), picked.ID, store.PickupRecord{By: "rel-notes", PickedUpAt: utc(16, 19, 57)}); err != nil {
 		t.Fatal(err)
 	}
 	// Picked up an hour ago with no worker and no by.
-	anon := a.through(t, store.KindFYI, "Nobody named", answerAt(utc(16, 18, 0)), pickupAt(utc(16, 19, 0)))
-	closedToday := a.through(t, store.KindFYI, "Closed today", answerAt(utc(16, 9, 0)), pickupAt(utc(16, 9, 5)), closeAt(utc(16, 10, 0)))
-	closedYesterday := a.through(t, store.KindFYI, "Closed yesterday", answerAt(utc(15, 9, 0)), pickupAt(utc(15, 9, 5)), closeAt(utc(16, 4, 59)))
-	withdrawn := a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+	anon := a.through(t, store.KindFYI, "Nobody named", a.answerAt(utc(16, 18, 0)), a.pickupAt(utc(16, 19, 0)))
+	closedToday := a.through(t, store.KindFYI, "Closed today", a.answerAt(utc(16, 9, 0)), a.pickupAt(utc(16, 9, 5)), a.closeAt(utc(16, 10, 0)))
+	closedYesterday := a.through(t, store.KindFYI, "Closed yesterday", a.answerAt(utc(15, 9, 0)), a.pickupAt(utc(15, 9, 5)), a.closeAt(utc(16, 4, 59)))
+	withdrawn := a.through(t, store.KindFYI, "Withdrawn", a.withdrawStep)
 	open := a.through(t, store.KindFYI, "Still open")
 
 	chips := []string{
@@ -896,10 +897,10 @@ func TestDoneFiltersEmpty(t *testing.T) {
 func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 	pinZeroClock(t)
 	a := newApp(t)
-	answered := a.through(t, store.KindFYI, "Answered", answerAt(utc(16, 19, 48)))
-	picked := a.through(t, store.KindFYI, "Picked up", answerAt(utc(16, 19, 0)), pickupAt(utc(16, 19, 57)))
-	closed := a.through(t, store.KindFYI, "Closed", answerAt(utc(16, 9, 0)), pickupAt(utc(16, 9, 5)), closeAt(utc(16, 10, 0)))
-	withdrawn := a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+	answered := a.through(t, store.KindFYI, "Answered", a.answerAt(utc(16, 19, 48)))
+	picked := a.through(t, store.KindFYI, "Picked up", a.answerAt(utc(16, 19, 0)), a.pickupAt(utc(16, 19, 57)))
+	closed := a.through(t, store.KindFYI, "Closed", a.answerAt(utc(16, 9, 0)), a.pickupAt(utc(16, 9, 5)), a.closeAt(utc(16, 10, 0)))
+	withdrawn := a.through(t, store.KindFYI, "Withdrawn", a.withdrawStep)
 	open := a.through(t, store.KindFYI, "Still open")
 
 	selected := func(id string) string {
@@ -1003,7 +1004,7 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 func TestThreadShowsWithdrawReason(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindSignoff])
-	if _, err := store.Withdraw(c.Dir, store.WithdrawRecord{Reason: "superseded by <the other case>"}); err != nil {
+	if _, err := a.db.Withdraw(t.Context(), c.ID, store.WithdrawRecord{Reason: "superseded by <the other case>"}); err != nil {
 		t.Fatal(err)
 	}
 	if page := a.get(t, "/cases/"+c.ID); !strings.Contains(page, "<p>reason: superseded by &lt;the other case&gt;</p>") {
@@ -1067,7 +1068,7 @@ func TestTimestampsAreLocalWithAnAge(t *testing.T) {
 	a := newApp(t)
 	opened := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
 	c := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "Stuck", OpenedAt: opened})
-	if _, err := store.Park(c.Dir, store.ParkRecord{}); err != nil {
+	if _, err := a.db.Park(t.Context(), c.ID, store.ParkRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	page := a.get(t, "/cases/"+c.ID)
@@ -1110,7 +1111,7 @@ func TestExternalLinksOpenInANewTab(t *testing.T) {
 		Body:  "[ext](https://example.com/body) <https://example.com/auto> [inbox](/done) [top](#top) [pct](https://example.com/100%) [rel](//example.com/rel)\n\n[forged](https://example.com/forged){target=_self}",
 		Links: []string{"https://example.com/listed"},
 	})
-	if _, err := store.Note(c.Dir, store.NoteRecord{Body: "see [the note link](https://example.com/note)"}); err != nil {
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "see [the note link](https://example.com/note)"}); err != nil {
 		t.Fatal(err)
 	}
 	page := a.get(t, "/cases/"+c.ID)
@@ -1139,10 +1140,10 @@ func TestExternalLinksOpenInANewTab(t *testing.T) {
 
 	closed := a.open(t, openRecords[store.KindFYI])
 	for _, step := range []func() error{
-		func() error { _, err := store.Answer(closed.Dir, store.AnswerRecord{Ack: true}); return err },
-		func() error { _, err := store.Pickup(closed.Dir, store.PickupRecord{}); return err },
+		func() error { _, err := a.db.Answer(t.Context(), closed.ID, store.AnswerRecord{Ack: true}); return err },
+		func() error { _, err := a.db.Pickup(t.Context(), closed.ID, store.PickupRecord{}); return err },
 		func() error {
-			_, err := store.Close(closed.Dir, store.CloseRecord{Outcome: "Shipped in [#12](https://example.com/pr/12)."})
+			_, err := a.db.Close(t.Context(), closed.ID, store.CloseRecord{Outcome: "Shipped in [#12](https://example.com/pr/12)."})
 			return err
 		},
 	} {
@@ -1173,7 +1174,7 @@ func TestEmptyAnswersAreRefused(t *testing.T) {
 				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `class="error"`) {
 					t.Errorf("status %d, want 422 with an error:\n%s", w.Code, w.Body.String())
 				}
-				if files := eventFiles(t, c.Dir); len(files) != 1 {
+				if files := a.eventFiles(t, c.ID); len(files) != 1 {
 					t.Errorf("files = %v", files)
 				}
 			})
@@ -1216,9 +1217,7 @@ func TestTallyHidesZeros(t *testing.T) {
 func TestThreadShowsAnUnknownEventAsVersionSkew(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindFYI])
-	if err := os.WriteFile(filepath.Join(c.Dir, "0002-agent-comment.json"), []byte(`{"body":"x"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	storetest.InsertEvent(t, a.db.Path, c.ID, 2, "agent", "comment", `{"body":"x"}`)
 	page := a.get(t, "/cases/"+c.ID)
 	if !strings.Contains(page, `<p class="error">0002-agent-comment.json: unknown event &#34;comment&#34;: perhaps written by a newer cases, or not by cases at all; if newer, update cases on this machine with go install github.com/ryanlewis/cases/cmd/cases@latest</p>`) {
 		t.Errorf("thread missing the version skew problem:\n%s", page)
@@ -1240,8 +1239,42 @@ func TestAnswerWritesThroughTheStore(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "store unavailable") {
 		t.Errorf("status %d, body:\n%s", w.Code, w.Body.String())
 	}
-	if files := eventFiles(t, c.Dir); len(files) != 1 {
+	if files := a.eventFiles(t, c.ID); len(files) != 1 {
 		t.Errorf("files = %v, want only the open event", files)
+	}
+}
+
+// cancelOnAnswer is a store that cancels the request's context as the answer
+// is written, as a browser that goes away mid-post does.
+type cancelOnAnswer struct {
+	store.Store
+	cancel context.CancelFunc
+}
+
+func (s cancelOnAnswer) Answer(ctx context.Context, id string, rec store.AnswerRecord, pre ...store.Precondition) (*store.Case, error) {
+	s.cancel()
+	return s.Store.Answer(ctx, id, rec, pre...)
+}
+
+// A browser that goes away once it has sent the form, such as a tab closed
+// straight after, cancels the request. The answer is still recorded.
+func TestAnswerIsRecordedWhenTheBrowserGoesAway(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	a := newAppWith(t, func(s store.Store) store.Store { return cancelOnAnswer{s, cancel} })
+	c := a.open(t, openRecords[store.KindDecision])
+
+	form := withRevision(url.Values{"choice": {"1"}}, c.Revision())
+	r := httptest.NewRequestWithContext(ctx, "POST", "/cases/"+c.ID+"/answer", strings.NewReader(form.Encode()))
+	r.Host = testAddr
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	a.handler.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status %d, body:\n%s", w.Code, w.Body.String())
+	}
+	if got, err := a.db.Get(t.Context(), c.ID); err != nil || got.State != store.StateAnswered {
+		t.Errorf("case after the browser went away: %+v, %v; want answered", got, err)
 	}
 }
 
@@ -1261,12 +1294,13 @@ func utc(day, hour, minute int) time.Time {
 	return time.Date(2026, 9, day, hour, minute, 0, 0, time.UTC)
 }
 
-// through opens a case of kind and applies steps to it, failing on any error.
-func (a *testApp) through(t *testing.T, kind store.Kind, title string, steps ...func(dir string) error) *store.Case {
+// through opens a case of kind and applies steps to it, by id, failing on
+// any error.
+func (a *testApp) through(t *testing.T, kind store.Kind, title string, steps ...func(id string) error) *store.Case {
 	t.Helper()
 	c := a.open(t, store.OpenRecord{Kind: kind, Urgency: store.UrgencyToday, Title: title, OpenedAt: utc(1, 9, 0)})
 	for _, step := range steps {
-		if err := step(c.Dir); err != nil {
+		if err := step(c.ID); err != nil {
 			t.Fatalf("%s: %v", title, err)
 		}
 	}
@@ -1274,54 +1308,64 @@ func (a *testApp) through(t *testing.T, kind store.Kind, title string, steps ...
 }
 
 // answerAt answers an fyi case, or with text any other.
-func answerAt(at time.Time) func(string) error {
-	return func(dir string) error {
+func (a *testApp) answerAt(at time.Time) func(string) error {
+	return func(id string) error {
+		ctx := context.Background()
 		rec := store.AnswerRecord{Ack: true, AnsweredAt: at}
-		if c, err := store.Load(dir); err == nil && c.Kind != store.KindFYI {
+		if c, err := a.db.Get(ctx, id); err == nil && c.Kind != store.KindFYI {
 			rec = store.AnswerRecord{Text: "go on", AnsweredAt: at}
 		}
-		_, err := store.Answer(dir, rec)
+		_, err := a.db.Answer(ctx, id, rec)
 		return err
 	}
 }
 
-func pickupAt(at time.Time) func(string) error {
-	return func(dir string) error { _, err := store.Pickup(dir, store.PickupRecord{PickedUpAt: at}); return err }
-}
-
-func closeAt(at time.Time) func(string) error {
-	return func(dir string) error {
-		_, err := store.Close(dir, store.CloseRecord{Outcome: "done", ClosedAt: at})
+func (a *testApp) pickupAt(at time.Time) func(string) error {
+	return func(id string) error {
+		_, err := a.db.Pickup(context.Background(), id, store.PickupRecord{PickedUpAt: at})
 		return err
 	}
+}
+
+func (a *testApp) closeAt(at time.Time) func(string) error {
+	return func(id string) error {
+		_, err := a.db.Close(context.Background(), id, store.CloseRecord{Outcome: "done", ClosedAt: at})
+		return err
+	}
+}
+
+// withdrawStep withdraws the case.
+func (a *testApp) withdrawStep(id string) error {
+	_, err := a.db.Withdraw(context.Background(), id, store.WithdrawRecord{})
+	return err
 }
 
 func TestInboxZeroCountsWhatWasGotThrough(t *testing.T) {
 	pinZeroClock(t)
 	a := newApp(t)
 	// Answered, picked up and closed today; the last answer, an hour ago.
-	a.through(t, store.KindFYI, "Today closed", answerAt(utc(16, 19, 0)), pickupAt(utc(16, 19, 10)), closeAt(utc(16, 19, 30)))
+	a.through(t, store.KindFYI, "Today closed", a.answerAt(utc(16, 19, 0)), a.pickupAt(utc(16, 19, 10)), a.closeAt(utc(16, 19, 30)))
 	// Answered on Monday and not picked up: this week, and with an agent.
-	a.through(t, store.KindFYI, "Monday", answerAt(utc(14, 15, 0)))
+	a.through(t, store.KindFYI, "Monday", a.answerAt(utc(14, 15, 0)))
 	// Answered last week, picked up: only with an agent.
-	a.through(t, store.KindFYI, "Last week", answerAt(utc(10, 15, 0)), pickupAt(utc(10, 16, 0)))
+	a.through(t, store.KindFYI, "Last week", a.answerAt(utc(10, 15, 0)), a.pickupAt(utc(10, 16, 0)))
 	// Closed yesterday: counts nowhere.
-	a.through(t, store.KindFYI, "Yesterday", answerAt(utc(8, 15, 0)), pickupAt(utc(8, 16, 0)), closeAt(utc(15, 20, 0)))
+	a.through(t, store.KindFYI, "Yesterday", a.answerAt(utc(8, 15, 0)), a.pickupAt(utc(8, 16, 0)), a.closeAt(utc(15, 20, 0)))
 	// Parked and resumed today by the human, then answered: one case today.
 	a.through(t, store.KindStuck, "Parked first",
-		func(dir string) error {
-			_, err := store.Park(dir, store.ParkRecord{ParkedAt: utc(16, 17, 0)})
+		func(id string) error {
+			_, err := a.db.Park(context.Background(), id, store.ParkRecord{ParkedAt: utc(16, 17, 0)})
 			return err
 		},
-		func(dir string) error {
-			_, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{ResumedAt: utc(16, 17, 30)})
+		func(id string) error {
+			_, err := a.db.Resume(context.Background(), id, store.AuthorHuman, store.ResumeRecord{ResumedAt: utc(16, 17, 30)})
 			return err
 		},
-		answerAt(utc(16, 18, 0)))
+		a.answerAt(utc(16, 18, 0)))
 	// Just after midnight before today, in the zone: yesterday there, so not today.
-	a.through(t, store.KindFYI, "Late night", answerAt(utc(16, 4, 59)), pickupAt(utc(16, 5, 0)), closeAt(utc(16, 4, 59)))
+	a.through(t, store.KindFYI, "Late night", a.answerAt(utc(16, 4, 59)), a.pickupAt(utc(16, 5, 0)), a.closeAt(utc(16, 4, 59)))
 	// Withdrawn: not the human's doing.
-	a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+	a.through(t, store.KindFYI, "Withdrawn", a.withdrawStep)
 
 	body := a.get(t, "/")
 	for _, want := range []string{
@@ -1356,7 +1400,7 @@ func TestInboxZeroHidesZeroLines(t *testing.T) {
 	}
 
 	// One case answered and closed on Monday: a week figure and an age, nothing else.
-	a.through(t, store.KindFYI, "Monday", answerAt(utc(14, 15, 0)), pickupAt(utc(14, 15, 5)), closeAt(utc(14, 16, 0)))
+	a.through(t, store.KindFYI, "Monday", a.answerAt(utc(14, 15, 0)), a.pickupAt(utc(14, 15, 5)), a.closeAt(utc(14, 16, 0)))
 	body = a.get(t, "/")
 	if !strings.Contains(body, "<p>you got through <strong>1</strong> case this week.</p>") || !strings.Contains(body, `<p class="age">last answered 2d ago.</p>`) {
 		t.Errorf("week line or age missing:\n%s", body)
@@ -1392,7 +1436,7 @@ func TestThreadShowsActorAndFor(t *testing.T) {
 	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"ack": {"1"}}, c.Revision()), nil); w.Code != http.StatusSeeOther {
 		t.Fatalf("answer: %d %s", w.Code, w.Body.String())
 	}
-	loaded, err := store.Load(c.Dir)
+	loaded, err := a.db.Get(t.Context(), c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1412,7 +1456,7 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	first := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "First"})
 	second := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Second"})
 	parked := a.open(t, store.OpenRecord{Kind: store.KindStuck, Urgency: store.UrgencyToday, Title: "Parked"})
-	if _, err := store.Park(parked.Dir, store.ParkRecord{}); err != nil {
+	if _, err := a.db.Park(t.Context(), parked.ID, store.ParkRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	hx := map[string]string{"HX-Request": "true"}
@@ -1430,13 +1474,13 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 
 	// The poll carries the new count once a case is answered, and a bare
 	// title once none is waiting.
-	if _, err := store.Answer(first.Dir, store.AnswerRecord{Ack: true}); err != nil {
+	if _, err := a.db.Answer(t.Context(), first.ID, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)
 	}
 	if body := a.do("GET", "/fragments/inbox", nil, hx).Body.String(); !strings.HasPrefix(body, "<title>(1) cases</title>") {
 		t.Errorf("fragment after an answer:\n%s", body)
 	}
-	if _, err := store.Answer(second.Dir, store.AnswerRecord{Ack: true}); err != nil {
+	if _, err := a.db.Answer(t.Context(), second.ID, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
@@ -1451,10 +1495,10 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 	}
 	// With the parked case resumed and answered too, / is the inbox zero
 	// page, titled bare.
-	if _, err := store.Resume(parked.Dir, store.AuthorHuman, store.ResumeRecord{}); err != nil {
+	if _, err := a.db.Resume(t.Context(), parked.ID, store.AuthorHuman, store.ResumeRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Answer(parked.Dir, store.AnswerRecord{Text: "go on"}); err != nil {
+	if _, err := a.db.Answer(t.Context(), parked.ID, store.AnswerRecord{Text: "go on"}); err != nil {
 		t.Fatal(err)
 	}
 	if body := a.get(t, "/"); !strings.Contains(body, "<title>cases</title>") || !strings.Contains(body, "inbox zero.") {

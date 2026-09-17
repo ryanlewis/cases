@@ -27,8 +27,9 @@ const (
 )
 
 const (
-	dirName  = "cases"
-	fileName = "config.toml"
+	dirName   = "cases"
+	fileName  = "config.toml"
+	storeName = "cases.db"
 )
 
 // Error is a problem with the config file itself: unreadable, malformed, or
@@ -69,10 +70,12 @@ var Keys = []Key{
 		Env:     "CASES_STORE",
 		Default: DefaultStore,
 		Comment: []string{
-			"Case store directory. Same as --store or $CASES_STORE. A leading ~",
-			"is expanded. Default: $XDG_DATA_HOME/cases, or ~/.local/share/cases.",
+			"Case store: one SQLite file, made on the first write. Same as --store",
+			"or $CASES_STORE. A leading ~ is expanded. Keep it on a local disk,",
+			"not in a synced folder or on a network share. Default:",
+			"$XDG_DATA_HOME/cases/cases.db, or ~/.local/share/cases/cases.db.",
 		},
-		Example: `store = "~/Sync/cases"`,
+		Example: `store = "~/cases/work.db"`,
 	},
 	{
 		Name:     "listen",
@@ -160,8 +163,8 @@ func DefaultPath() (string, error) {
 }
 
 // DefaultStore is the store used when nothing names one:
-// $XDG_DATA_HOME/cases, falling back to ~/.local/share/cases. It is empty
-// when neither variable is set.
+// $XDG_DATA_HOME/cases/cases.db, falling back to
+// ~/.local/share/cases/cases.db. It is empty when neither variable is set.
 func DefaultStore() string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
@@ -171,7 +174,7 @@ func DefaultStore() string {
 		}
 		base = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(base, dirName)
+	return filepath.Join(base, dirName, storeName)
 }
 
 // ExpandHome replaces a leading ~ with $HOME, so a store path can be

@@ -16,7 +16,7 @@ import (
 
 type ShowCmd struct {
 	ID     string `arg:"" help:"Case id, or any part of it that names one case."`
-	JSON   bool   `help:"Print JSON, including every event file as written." short:"j" xor:"format"`
+	JSON   bool   `help:"Print JSON, including every event as written." short:"j" xor:"format"`
 	Answer bool   `help:"Print only the state, kind, revision and current answer, as JSON." xor:"format"`
 }
 
@@ -25,7 +25,7 @@ func (c *ShowCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	cs, err := d.cases().Get(context.Background(), id)
+	cs, err := d.Cases.Get(context.Background(), id)
 	if err != nil {
 		return err
 	}

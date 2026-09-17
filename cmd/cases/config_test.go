@@ -65,10 +65,10 @@ func TestConfigKeysMatchFlags(t *testing.T) {
 }
 
 func TestConfigSetsStore(t *testing.T) {
-	root := t.TempDir()
-	writeConfig(t, "store = \""+root+"\"\n")
+	storePath := newStore(t)
+	writeConfig(t, "store = \""+storePath+"\"\n")
 	id := strings.TrimSpace(mustRun(t, "open", "--kind", "fyi", "--urgency", "whenever", "--title", "From config"))
-	if _, err := os.Stat(filepath.Join(root, id)); err != nil {
+	if _, err := openStore(t, storePath).Get(t.Context(), id); err != nil {
 		t.Fatalf("case not in the configured store: %v", err)
 	}
 	if out := mustRun(t, "list"); !strings.Contains(out, id) {
@@ -76,17 +76,17 @@ func TestConfigSetsStore(t *testing.T) {
 	}
 
 	// Precedence: flag > environment > file.
-	other := t.TempDir()
+	other := newStore(t)
 	t.Setenv("CASES_STORE", other)
 	if cli := parseCases(t, "list"); cli.Store != other {
 		t.Errorf("store with CASES_STORE = %s, want the environment to beat the file", cli.Store)
 	}
-	third := t.TempDir()
+	third := newStore(t)
 	if cli := parseCases(t, "--store", third, "list"); cli.Store != third {
 		t.Errorf("store with --store = %s, want the flag to win", cli.Store)
 	}
 	t.Setenv("CASES_STORE", "")
-	if cli := parseCases(t, "list"); cli.Store != root {
+	if cli := parseCases(t, "list"); cli.Store != storePath {
 		t.Errorf("store with blank CASES_STORE = %s, want the file's", cli.Store)
 	}
 }
@@ -94,8 +94,8 @@ func TestConfigSetsStore(t *testing.T) {
 func TestConfigExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, "store = \"~/cases\"\n")
-	if cli := parseCases(t, "list"); cli.Store != filepath.Join(home, "cases") {
+	writeConfig(t, "store = \"~/cases.db\"\n")
+	if cli := parseCases(t, "list"); cli.Store != filepath.Join(home, "cases.db") {
 		t.Errorf("store = %s", cli.Store)
 	}
 }
@@ -109,7 +109,7 @@ func TestConfigSetsListen(t *testing.T) {
 		t.Errorf("listen = %s, want the flag's", cli.Serve.Listen)
 	}
 	// The address the file supplies is checked like a flag.
-	if r := runCases(t, "", "--store", t.TempDir(), "serve"); r.err == nil || !strings.Contains(r.err.Error(), "loopback") {
+	if r := runCases(t, "", "--store", newStore(t), "serve"); r.err == nil || !strings.Contains(r.err.Error(), "loopback") {
 		t.Errorf("serve with a non-loopback listen from the file: err = %v", r.err)
 	}
 }
@@ -136,18 +136,18 @@ func TestConfigSetsNoOpen(t *testing.T) {
 }
 
 func TestConfigFlagAndEnv(t *testing.T) {
-	root := t.TempDir()
+	storePath := newStore(t)
 	path := filepath.Join(t.TempDir(), "mine.toml")
-	if err := os.WriteFile(path, []byte("store = \""+root+"\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("store = \""+storePath+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"--config", path, "list"}, {"--config=" + path, "list"}, {"list", "--config", path}} {
-		if cli := parseCases(t, args...); cli.Store != root {
+		if cli := parseCases(t, args...); cli.Store != storePath {
 			t.Errorf("%v: store = %s", args, cli.Store)
 		}
 	}
 	t.Setenv("CASES_CONFIG", path)
-	if cli := parseCases(t, "list"); cli.Store != root {
+	if cli := parseCases(t, "list"); cli.Store != storePath {
 		t.Errorf("CASES_CONFIG: store = %s", cli.Store)
 	}
 	if out := mustRun(t, "config", "path"); !strings.HasPrefix(out, path+" (exists)") {
@@ -161,13 +161,13 @@ func TestConfigFlagAndEnv(t *testing.T) {
 }
 
 func TestConfigFlagLastWins(t *testing.T) {
-	storeFile := func(name string) (path, root string) {
-		root = t.TempDir()
+	storeFile := func(name string) (path, storePath string) {
+		storePath = newStore(t)
 		path = filepath.Join(t.TempDir(), name)
-		if err := os.WriteFile(path, []byte("store = \""+root+"\"\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("store = \""+storePath+"\"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return path, root
+		return path, storePath
 	}
 	first, _ := storeFile("first.toml")
 	second, secondRoot := storeFile("second.toml")
@@ -192,7 +192,7 @@ func TestConfigFlagLastWins(t *testing.T) {
 
 func TestBrokenConfigStopsCommandsButNotDiagnosis(t *testing.T) {
 	path := writeConfig(t, "stor = \"x\"\n")
-	r := runCases(t, "", "--store", t.TempDir(), "list")
+	r := runCases(t, "", "--store", newStore(t), "list")
 	if r.err == nil || !strings.Contains(r.err.Error(), `unknown key "stor"`) {
 		t.Errorf("list with a broken file: err = %v", r.err)
 	}
@@ -211,10 +211,10 @@ func TestBrokenConfigStopsCommandsButNotDiagnosis(t *testing.T) {
 }
 
 func TestConfigShow(t *testing.T) {
-	root := t.TempDir()
-	path := writeConfig(t, "store = \""+root+"\"\n")
+	storePath := newStore(t)
+	path := writeConfig(t, "store = \""+storePath+"\"\n")
 	out := mustRun(t, "config", "show")
-	for _, want := range []string{"config: " + path + " (exists)", "store      " + root + "  config", "listen     127.0.0.1:8765", "no-open    false", "prune-age  720h", "  default"} {
+	for _, want := range []string{"config: " + path + " (exists)", "store      " + storePath + "  config", "listen     127.0.0.1:8765", "no-open    false", "prune-age  720h", "  default"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("config show lacks %q:\n%s", want, out)
 		}

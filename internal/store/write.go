@@ -1,51 +1,41 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
 
 // idTimeLayout is the timestamp at the front of a case id. Colons are left out
-// so the id is a safe directory name everywhere.
+// so the id is safe to type, and to use in a URL or a file name.
 const idTimeLayout = "2006-01-02T15-04-05Z"
 
 // maxSlug caps the title part of a case id.
 const maxSlug = 48
 
-// now is the store's clock: event timestamps and when Poller reads start.
-// Tests replace it.
+// atLayout is how the at, opened_at and archived_at columns write a time.
+const atLayout = time.RFC3339Nano
+
+// now is the store's clock: event timestamps and when archived. Tests
+// replace it.
 var now = func() time.Time { return time.Now().UTC() }
 
-// link, rename and remove are os.Link, os.Rename and os.Remove, replaceable so
-// tests can fail or race the last step of a write.
-var (
-	link   = os.Link
-	rename = os.Rename
-	remove = os.Remove
-)
+// commit commits a write transaction, replaceable so tests can fail the last
+// step of a write.
+var commit = func(tx *sql.Tx) error { return tx.Commit() }
 
-// ValidID refuses an id that would name anything other than a direct child of
-// a store root. It does not look at the filesystem.
+// ValidID refuses an id that Create could not have minted and that would be
+// unsafe to put in a path or a URL: empty, starting with a dot, or holding a
+// slash. It does not look in the store.
 func ValidID(id string) error {
-	if id == "" || strings.HasPrefix(id, ".") || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+	if id == "" || strings.HasPrefix(id, ".") || strings.ContainsAny(id, `/\`) {
 		return fmt.Errorf("invalid case id %q", id)
 	}
 	return nil
-}
-
-// CaseDir returns the directory for case id in the store root. It refuses an
-// id that would name anything other than a direct child of root.
-func CaseDir(root, id string) (string, error) {
-	if err := ValidID(id); err != nil {
-		return "", err
-	}
-	return filepath.Join(root, id), nil
 }
 
 // IsWholeID reports whether id has the shape Create gives a case id: the open
@@ -59,38 +49,44 @@ func IsWholeID(id string) bool {
 	return err == nil
 }
 
-// Create opens a new case in root, creating root if it does not exist. The
-// case id is the open time and a slug of the title; if that directory already
-// exists a numeric suffix is added.
-func Create(root string, rec OpenRecord) (*Case, error) {
-	rec.stamp(now())
+// Create opens a new case, creating the store's file if it does not exist.
+// The case id is the open time and a slug of the title; if a case, live or
+// archived, already has that id, a numeric suffix is added. The id is chosen
+// and the open event stored in one transaction.
+func (d *DB) Create(ctx context.Context, rec OpenRecord) (*Case, error) {
 	if err := rec.validate(); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, err
-	}
-	base := rec.OpenedAt.Format(idTimeLayout) + "-" + Slug(rec.Title)
-	var dir string
-	for n := 1; ; n++ {
-		id := base
-		if n > 1 {
-			id = fmt.Sprintf("%s-%d", base, n)
+	var c *Case
+	err := d.write(ctx, true, func(tx *sql.Tx) error {
+		rec.stamp(now())
+		base := rec.OpenedAt.Format(idTimeLayout) + "-" + Slug(rec.Title)
+		id := ""
+		for n := 1; id == ""; n++ {
+			if n > 100 {
+				return fmt.Errorf("cannot choose an id for the case: %s to %s-100 are all taken", base, base)
+			}
+			try := base
+			if n > 1 {
+				try = fmt.Sprintf("%s-%d", base, n)
+			}
+			var taken bool
+			err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM cases WHERE id = ?1) OR EXISTS (SELECT 1 FROM archive_cases WHERE id = ?1)`, try).Scan(&taken)
+			if err != nil {
+				return err
+			}
+			if !taken {
+				id = try
+			}
 		}
-		dir = filepath.Join(root, id)
-		err := os.Mkdir(dir, 0o755)
-		if err == nil {
-			break
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cases (id, opened_at) VALUES (?, ?)`, id, rec.OpenedAt.Format(atLayout)); err != nil {
+			return err
 		}
-		if !errors.Is(err, fs.ErrExist) || n >= 100 {
-			return nil, err
-		}
-	}
-	c, err := appendEvent(dir, AuthorAgent, EventOpen, &rec)
+		var err error
+		c, err = appendEvent(ctx, tx, id, AuthorAgent, EventOpen, &rec, nil)
+		return err
+	})
 	if err != nil {
-		// The directory is ours and empty; leaving it would show up as a
-		// broken case in every listing.
-		_ = os.Remove(dir)
 		return nil, err
 	}
 	return c, nil
@@ -100,8 +96,8 @@ func Create(root string, rec OpenRecord) (*Case, error) {
 // the case since the caller read it.
 var ErrStale = errors.New("the case has changed since it was read")
 
-// Precondition is a check on the case as it is on disk, made while the case is
-// locked for the write and before the event is checked. Make one with
+// Precondition is a check on the case as it is in the store, made inside the
+// write's transaction and before the event is checked. Make one with
 // AtRevision.
 type Precondition struct {
 	revision int
@@ -114,181 +110,142 @@ func AtRevision(rev int) Precondition {
 	return Precondition{revision: rev}
 }
 
+// checkPreconditions checks pre against a case now at revision rev.
+func checkPreconditions(pre []Precondition, rev int) error {
+	for _, p := range pre {
+		if rev != p.revision {
+			return fmt.Errorf("%w: read at revision %d, now at %d", ErrStale, p.revision, rev)
+		}
+	}
+	return nil
+}
+
+// noCase is the error for a case id the store does not have.
+func noCase(id string) error {
+	return &notFound{fmt.Sprintf("no case %q", id)}
+}
+
 // Amend records the agent changing an open case: adding options, rows,
 // links or labels, or replacing the body or context.
-func Amend(dir string, rec AmendRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventAmend, &rec, pre...)
+func (d *DB) Amend(ctx context.Context, id string, rec AmendRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorAgent, EventAmend, &rec, pre)
 }
 
 // Answer records the human's answer.
-func Answer(dir string, rec AnswerRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorHuman, EventAnswer, &rec, pre...)
+func (d *DB) Answer(ctx context.Context, id string, rec AnswerRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorHuman, EventAnswer, &rec, pre)
 }
 
 // Pickup records that the agent has read the answer.
-func Pickup(dir string, rec PickupRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventPickup, &rec, pre...)
+func (d *DB) Pickup(ctx context.Context, id string, rec PickupRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorAgent, EventPickup, &rec, pre)
 }
 
 // Note records a follow-up from the agent. It reopens an answered or picked-up
 // case.
-func Note(dir string, rec NoteRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventNote, &rec, pre...)
+func (d *DB) Note(ctx context.Context, id string, rec NoteRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorAgent, EventNote, &rec, pre)
 }
 
 // Close records the outcome of a picked-up case.
-func Close(dir string, rec CloseRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventClose, &rec, pre...)
+func (d *DB) Close(ctx context.Context, id string, rec CloseRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorAgent, EventClose, &rec, pre)
 }
 
 // Withdraw records that the agent no longer needs an open case answered.
-func Withdraw(dir string, rec WithdrawRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorAgent, EventWithdraw, &rec, pre...)
+func (d *DB) Withdraw(ctx context.Context, id string, rec WithdrawRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorAgent, EventWithdraw, &rec, pre)
 }
 
 // Park records the human parking an open stuck case.
-func Park(dir string, rec ParkRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, AuthorHuman, EventPark, &rec, pre...)
+func (d *DB) Park(ctx context.Context, id string, rec ParkRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, AuthorHuman, EventPark, &rec, pre)
 }
 
 // Resume reopens a parked case. Either side may resume.
-func Resume(dir string, author Author, rec ResumeRecord, pre ...Precondition) (*Case, error) {
-	return appendEvent(dir, author, EventResume, &rec, pre...)
+func (d *DB) Resume(ctx context.Context, id string, author Author, rec ResumeRecord, pre ...Precondition) (*Case, error) {
+	return d.append(ctx, id, author, EventResume, &rec, pre)
 }
 
-// appendEvent folds the case, checks the preconditions and then the new event
-// against it with the same code the fold uses, and only then writes the next
-// event file. The case directory is locked for the whole sequence so two local
-// writers cannot take the same sequence number, and a precondition cannot pass
-// on a case that changes before the write.
-func appendEvent(dir string, author Author, typ EventType, rec record, pre ...Precondition) (*Case, error) {
-	rec.stamp(now())
+// append stores one event on the case id in a transaction of its own.
+func (d *DB) append(ctx context.Context, id string, author Author, typ EventType, rec record, pre []Precondition) (*Case, error) {
+	if err := ValidID(id); err != nil {
+		return nil, err
+	}
+	var c *Case
+	err := d.write(ctx, false, func(tx *sql.Tx) error {
+		// Stamped once the write holds the store's lock, so events are timed
+		// in the order they are stored however long the wait for the lock: a
+		// wait --since an event's time sees every event stored after it.
+		rec.stamp(now())
+		var err error
+		c, err = appendEvent(ctx, tx, id, author, typ, rec, pre)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// write runs fn in a write transaction on the store and commits only when fn
+// succeeds. With create it creates the store if it does not exist; without it
+// a missing store is fs.ErrNotExist. The transaction begins immediate: it
+// takes the store's write lock before its first read, so writers, in this
+// process or another, run one at a time, and each reads the case as the
+// writer before it left it.
+func (d *DB) write(ctx context.Context, create bool, fn func(tx *sql.Tx) error) error {
+	pool, _, err := d.open(ctx, create)
+	if err != nil {
+		return err
+	}
+	tx, err := pool.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkVersion(ctx, tx, d.Path); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return commit(tx)
+}
+
+// appendEvent folds the case in tx, checks the preconditions and then the new
+// event against it with the same code the fold uses, and only then inserts
+// the event, numbered after the case's latest. The caller's transaction holds
+// the write lock throughout, so two writers cannot take the same number, and
+// a precondition cannot pass on a case that changes before the insert.
+func appendEvent(ctx context.Context, tx *sql.Tx, id string, author Author, typ EventType, rec record, pre []Precondition) (*Case, error) {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	data = append(data, '\n')
 
-	unlock, err := lockDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
-	c := &Case{ID: filepath.Base(dir), Dir: dir}
+	c := &Case{ID: id}
 	if typ != EventOpen {
-		if c, err = Load(dir); err != nil {
+		if c, err = loadCase(ctx, tx, id); err != nil {
 			return nil, err
 		}
 	}
-	for _, p := range pre {
-		if rev := c.Revision(); rev != p.revision {
-			return nil, fmt.Errorf("%w: read at revision %d, now at %d", ErrStale, p.revision, rev)
-		}
-	}
-	seq := c.lastSeq + 1
-	name := fmt.Sprintf("%04d-%s-%s.json", seq, author, typ)
-	if err := c.apply(Event{Seq: seq, Author: author, Type: typ, File: name, Data: data}); err != nil {
+	if err := checkPreconditions(pre, c.Revision()); err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(dir, name, data); err != nil {
+	seq := c.lastSeq + 1
+	if err := c.apply(Event{Seq: seq, Author: author, Type: typ, File: fileName(seq, author, typ), Data: data}); err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO events (case_id, seq, author, event, at, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, seq, string(author), string(typ), rec.at().UTC().Format(atLayout), data)
+	if err != nil {
 		return nil, err
 	}
 	c.lastSeq = seq
-	c.files++
+	c.events++
 	return c, nil
-}
-
-// writeFileAtomic writes data to a temporary file in dir and then publishes it
-// under name, so a reader sees either no file or the whole file. The temporary
-// name starts with a dot, which the fold ignores. It refuses to replace a file
-// that already exists.
-func writeFileAtomic(dir, name string, data []byte) (err error) {
-	final := filepath.Join(dir, name)
-	// A cheap early refusal. It cannot see a file added after it runs;
-	// publish refuses that one.
-	if _, err := os.Lstat(final); err == nil {
-		return fmt.Errorf("%s already exists", final)
-	}
-	f, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err = f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = os.Chmod(tmp, 0o644); err != nil {
-		return err
-	}
-	if err = publish(tmp, final); err != nil {
-		return err
-	}
-	// Persist the new directory entry. A failure here does not undo the
-	// write, which has already happened.
-	if d, derr := os.Open(dir); derr == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
-}
-
-// publish gives the complete temporary file tmp the name final. It refuses to
-// replace a file that already has the name, such as one a sync client added
-// after writeFileAtomic checked for it.
-//
-// It links rather than renames, because a link fails when the name is taken
-// and a rename would replace the file. Where hard links do not work (FAT,
-// exFAT, some network mounts, a sandbox that denies them) the link fails with
-// another error, and publish renames once it has checked that the name is
-// still free. A file added between that check and the rename is replaced.
-func publish(tmp, final string) error {
-	err := link(tmp, final)
-	if err == nil {
-		// The fold skips the temporary name if removing it fails.
-		_ = remove(tmp)
-		return nil
-	}
-	if !errors.Is(err, fs.ErrExist) {
-		_, serr := os.Lstat(final)
-		if errors.Is(serr, fs.ErrNotExist) {
-			return rename(tmp, final)
-		}
-		if serr != nil {
-			return serr
-		}
-	}
-	// The name is taken, possibly by this link: on a network mount a link can
-	// go through and still report an error, as when a retried request finds
-	// the link the first one made.
-	if sameFile(tmp, final) {
-		_ = remove(tmp)
-		return nil
-	}
-	return fmt.Errorf("%s already exists", final)
-}
-
-// sameFile reports whether the names a and b are links to one file.
-func sameFile(a, b string) bool {
-	ai, err := os.Lstat(a)
-	if err != nil {
-		return false
-	}
-	bi, err := os.Lstat(b)
-	return err == nil && os.SameFile(ai, bi)
 }
 
 // Slug turns a title into the lowercase ASCII words-and-dashes part of a case
