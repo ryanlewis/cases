@@ -1,5 +1,10 @@
 {{define "content"}}
 {{with .Recorded}}<p class="recorded" role="status">{{.Event}} recorded on <a href="/cases/{{.Case.ID | pathEscape}}">{{.Case.Title}}</a></p>{{end}}
+{{if and .Home (not .Case)}}
+<section class="zero" aria-label="inbox">
+{{template "inbox-list" .Inbox}}
+</section>
+{{else}}
 <div class="split{{if .Home}} home{{end}}">
 <aside class="list" aria-label="inbox">
 {{template "inbox-list" .Inbox}}
@@ -8,6 +13,7 @@
 {{if .Case}}{{template "case" .}}{{else}}<p class="empty">no open cases.</p>{{end}}
 </div>
 </div>
+{{end}}
 {{end}}
 
 {{define "case"}}

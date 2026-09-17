@@ -526,8 +526,11 @@ The header counts open cases by urgency and parked cases, as in
 and only the blocking count is red. The page title starts with the blocking
 count when there is one.
 
-- `/` selects the first case in the inbox, or says there are no open cases and
-  reloads when one arrives.
+- `/` selects the first case in the inbox. With no open or parked cases it
+  shows one inbox zero panel instead of the columns: the cases you answered,
+  parked or resumed today and this week, the cases closed today, the answered
+  ones still with an agent, and when you last answered. It reloads when a case
+  arrives.
 - `/cases/ID` selects that case: its context and brief, the body rendered as
   markdown (GFM tables included), its links, a response form that fits the
   kind, and the thread.

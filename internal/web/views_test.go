@@ -774,11 +774,11 @@ func TestDoneView(t *testing.T) {
 func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	a := newApp(t)
 	body := a.get(t, "/")
-	if !strings.Contains(body, "no open cases.") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
+	if !strings.Contains(body, "<h1>inbox zero.</h1>") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
 		t.Fatalf("empty / does not poll for a first case:\n%s", body)
 	}
 	hx := map[string]string{"HX-Request": "true"}
-	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `hx-get="/fragments/inbox?empty=1"`) {
+	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `hx-get="/fragments/inbox?empty=1"`) || !strings.Contains(w.Body.String(), "<h1>inbox zero.</h1>") {
 		t.Errorf("still empty: %d %s", w.Code, w.Body.String())
 	}
 	a.open(t, openRecords[store.KindDecision])
@@ -1033,5 +1033,135 @@ func TestAnswerWritesThroughTheStore(t *testing.T) {
 	}
 	if files := eventFiles(t, c.Dir); len(files) != 1 {
 		t.Errorf("files = %v, want only the open event", files)
+	}
+}
+
+// pinZeroClock puts the inbox-zero clock at Wednesday 2026-09-16 15:00 in a
+// zone five hours behind UTC, so today starts at 05:00 UTC that day and the
+// week at 05:00 UTC on Monday the 14th.
+func pinZeroClock(t *testing.T) {
+	t.Helper()
+	oldZone, oldNow := zone, now
+	zone = time.FixedZone("XST", -5*60*60)
+	now = func() time.Time { return time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { zone, now = oldZone, oldNow })
+}
+
+// utc is a time on 2026-09-dd in UTC.
+func utc(day, hour, minute int) time.Time {
+	return time.Date(2026, 9, day, hour, minute, 0, 0, time.UTC)
+}
+
+// through opens a case of kind and applies steps to it, failing on any error.
+func (a *testApp) through(t *testing.T, kind store.Kind, title string, steps ...func(dir string) error) *store.Case {
+	t.Helper()
+	c := a.open(t, store.OpenRecord{Kind: kind, Urgency: store.UrgencyToday, Title: title, OpenedAt: utc(1, 9, 0)})
+	for _, step := range steps {
+		if err := step(c.Dir); err != nil {
+			t.Fatalf("%s: %v", title, err)
+		}
+	}
+	return c
+}
+
+// answerAt answers an fyi case, or with text any other.
+func answerAt(at time.Time) func(string) error {
+	return func(dir string) error {
+		rec := store.AnswerRecord{Ack: true, AnsweredAt: at}
+		if c, err := store.Load(dir); err == nil && c.Kind != store.KindFYI {
+			rec = store.AnswerRecord{Text: "go on", AnsweredAt: at}
+		}
+		_, err := store.Answer(dir, rec)
+		return err
+	}
+}
+
+func pickupAt(at time.Time) func(string) error {
+	return func(dir string) error { _, err := store.Pickup(dir, store.PickupRecord{PickedUpAt: at}); return err }
+}
+
+func closeAt(at time.Time) func(string) error {
+	return func(dir string) error {
+		_, err := store.Close(dir, store.CloseRecord{Outcome: "done", ClosedAt: at})
+		return err
+	}
+}
+
+func TestInboxZeroCountsWhatWasGotThrough(t *testing.T) {
+	pinZeroClock(t)
+	a := newApp(t)
+	// Answered, picked up and closed today; the last answer, an hour ago.
+	a.through(t, store.KindFYI, "Today closed", answerAt(utc(16, 19, 0)), pickupAt(utc(16, 19, 10)), closeAt(utc(16, 19, 30)))
+	// Answered on Monday and not picked up: this week, and with an agent.
+	a.through(t, store.KindFYI, "Monday", answerAt(utc(14, 15, 0)))
+	// Answered last week, picked up: only with an agent.
+	a.through(t, store.KindFYI, "Last week", answerAt(utc(10, 15, 0)), pickupAt(utc(10, 16, 0)))
+	// Closed yesterday: counts nowhere.
+	a.through(t, store.KindFYI, "Yesterday", answerAt(utc(8, 15, 0)), pickupAt(utc(8, 16, 0)), closeAt(utc(15, 20, 0)))
+	// Parked and resumed today by the human, then answered: one case today.
+	a.through(t, store.KindStuck, "Parked first",
+		func(dir string) error {
+			_, err := store.Park(dir, store.ParkRecord{ParkedAt: utc(16, 17, 0)})
+			return err
+		},
+		func(dir string) error {
+			_, err := store.Resume(dir, store.AuthorHuman, store.ResumeRecord{ResumedAt: utc(16, 17, 30)})
+			return err
+		},
+		answerAt(utc(16, 18, 0)))
+	// Just after midnight before today, in the zone: yesterday there, so not today.
+	a.through(t, store.KindFYI, "Late night", answerAt(utc(16, 4, 59)), pickupAt(utc(16, 5, 0)), closeAt(utc(16, 4, 59)))
+	// Withdrawn: not the human's doing.
+	a.through(t, store.KindFYI, "Withdrawn", func(dir string) error { _, err := store.Withdraw(dir, store.WithdrawRecord{}); return err })
+
+	body := a.get(t, "/")
+	for _, want := range []string{
+		`<section class="zero" aria-label="inbox">`,
+		"<h1>inbox zero.</h1>",
+		"<p>you got through <strong>2</strong> cases today, <strong>4</strong> this week.</p>",
+		`<p><a href="/done"><strong>1</strong> closed</a> by agents today.</p>`,
+		`<p><a href="/done"><strong>3</strong> answered</a> and still with an agent.</p>`,
+		`<p class="age">last answered 1h ago.</p>`,
+		`hx-get="/fragments/inbox?empty=1"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/ lacks %s", want)
+		}
+	}
+	if strings.Contains(body, `class="split`) || strings.Contains(body, "nothing has needed you yet.") || strings.Contains(body, "no open cases.") {
+		t.Errorf("/ at inbox zero still shows the columns or the fresh-store line:\n%s", body)
+	}
+	// The poll renders the same panel.
+	frag := a.do("GET", "/fragments/inbox?empty=1", nil, map[string]string{"HX-Request": "true"}).Body.String()
+	if !strings.Contains(frag, "<p>you got through <strong>2</strong> cases today, <strong>4</strong> this week.</p>") {
+		t.Errorf("fragment lacks the panel:\n%s", frag)
+	}
+}
+
+func TestInboxZeroHidesZeroLines(t *testing.T) {
+	pinZeroClock(t)
+	a := newApp(t)
+	body := a.get(t, "/")
+	if !strings.Contains(body, "<h1>inbox zero.</h1>") || !strings.Contains(body, "<p>nothing has needed you yet.</p>") {
+		t.Errorf("fresh store:\n%s", body)
+	}
+
+	// One case answered and closed on Monday: a week figure and an age, nothing else.
+	a.through(t, store.KindFYI, "Monday", answerAt(utc(14, 15, 0)), pickupAt(utc(14, 15, 5)), closeAt(utc(14, 16, 0)))
+	body = a.get(t, "/")
+	if !strings.Contains(body, "<p>you got through <strong>1</strong> case this week.</p>") || !strings.Contains(body, `<p class="age">last answered 2d ago.</p>`) {
+		t.Errorf("week line or age missing:\n%s", body)
+	}
+	for _, unwanted := range []string{"today", "closed</a>", "still with an agent", "nothing has needed you yet."} {
+		if strings.Contains(body[strings.Index(body, `<section class="zero"`):], unwanted) {
+			t.Errorf("panel shows %q", unwanted)
+		}
+	}
+
+	// A case arrives: the two columns are back, and no panel.
+	a.open(t, openRecords[store.KindDecision])
+	body = a.get(t, "/")
+	if !strings.Contains(body, `<div class="split home">`) || strings.Contains(body, "inbox zero.") {
+		t.Errorf("/ with an open case:\n%s", body)
 	}
 }
