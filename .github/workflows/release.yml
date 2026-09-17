@@ -30,6 +30,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME}"
+          commit="${GITHUB_SHA:0:7}"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}"
           mkdir -p dist
           targets=(
             "linux amd64"
@@ -45,7 +48,7 @@ jobs:
             mkdir -p "$dir"
             bin="cases"
             [ "$os" = "windows" ] && bin="cases.exe"
-            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "${dir}/${bin}" ./cmd/cases
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$ldflags" -o "${dir}/${bin}" ./cmd/cases
             if [ "$os" = "windows" ]; then
               (cd "$dir" && zip -q "../${name}.zip" "$bin")
             else
