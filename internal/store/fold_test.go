@@ -319,6 +319,30 @@ func TestReopenClearsAnswerAndPickup(t *testing.T) {
 	}
 }
 
+func TestEventsRecordTheStateBeforeThem(t *testing.T) {
+	c, _, err := fold(t,
+		agent(EventOpen, openOf(KindStuck)),
+		noteStep,
+		human(EventAnswer, answerOf(KindStuck)),
+		pickupStep,
+		noteStep,
+		parkStep,
+		resumeAgent,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []State{"", StateOpen, StateOpen, StateAnswered, StatePickedUp, StateOpen, StateParked}
+	if len(c.Events) != len(want) {
+		t.Fatalf("events = %d, want %d", len(c.Events), len(want))
+	}
+	for i, ev := range c.Events {
+		if ev.From() != want[i] {
+			t.Errorf("event %d (%s): from %q, want %q", i+1, ev.Type, ev.From(), want[i])
+		}
+	}
+}
+
 func TestOpenValidation(t *testing.T) {
 	tests := []struct {
 		name    string
