@@ -473,8 +473,9 @@ On a terminal, serve shows a status screen that refreshes every second:
 - the inbox URL and the store
 - open cases by urgency (blocking in red), parked cases, cases with the agent
   (answered or picked up), and cases closed today and in all
-- since start: requests, and answers, parks and resumes recorded by a human
-  from the inbox or the CLI; and how long ago the last event was
+- since start: requests, answers, parks and resumes recorded by a human
+  from the inbox or the CLI, and [notifications](#browser-notifications)
+  queued; and how long ago the last event was
 - the last five request log lines
 - how to set up an agent with the bundled skill
 
@@ -489,7 +490,8 @@ cases serve > serve.log
 # Serving /Users/you/.local/share/cases at http://127.0.0.1:8765/
 ```
 
-Page refreshes that run every two seconds are not logged or counted.
+Page refreshes that run every two seconds, and a tab's checks for
+notifications, are not logged or counted.
 
 ### Finding a running serve
 
@@ -564,7 +566,8 @@ count when there is one.
 The `options` button in the header opens an overlay that sets the theme
 (system, light or dark), the face for case bodies, notes and outcomes (mono,
 sans or serif), the text size of the whole page (small, medium or large), and
-whether links to other sites open in a new tab. The choices are kept in this
+whether links to other sites open in a new tab, and
+[desktop notifications](#browser-notifications). The choices are kept in this
 browser's local storage, not on the server, and apply at once;
 `reset` goes back to the defaults. Close it with `close`, Escape, or a click
 outside it.
@@ -604,6 +607,39 @@ dropped. Links to other sites open in a new tab, with
 `rel="noopener noreferrer"`. A case link or row link that does not start with
 `http://` or `https://`, such as a file path, is shown as text, not a link. htmx is included in the binary; nothing is fetched
 from the network.
+
+### Browser notifications
+
+An open inbox tab can show a desktop notification when a case lands on you.
+Turn it on in `options` under desktop notifications: `blocking cases` or
+`every case`. The browser asks for permission the first time; `allow
+notifications` asks again while it has not been answered. If it is refused,
+the choice goes back to `off`, and the overlay says to allow it in the
+browser's site settings. `http://127.0.0.1` and `localhost` count as secure
+origins, so no certificate is needed.
+
+A notification fires when a case becomes open because the agent:
+
+- opened it,
+- followed up an answered or picked-up case with a note, which reopens it, or
+- resumed it after it was parked.
+
+It does not fire for a note or an amend on a case that is already open, for a
+case you resumed yourself, for a case that was answered or withdrawn before
+serve saw it, or for cases already in the store when serve started. Clicking
+it opens the case in that tab.
+
+Serve reads the store every two seconds and keeps the last 50 notifications in
+memory, numbered from 1. Each page with notifications turned on asks
+`/notifications?after=N` every five seconds and shows the new ones. The
+number shown last is kept in the browser with serve's boot id. A tab with no
+kept number, or one from before serve restarted, starts at the latest and
+shows nothing. Every tab shows the same notification under one tag, so the
+desktop shows it once.
+
+The limits: nothing is shown when no inbox tab is open; browsers slow timers
+in background tabs, so a notification can come up to about a minute late; and
+a case that arrives while serve is stopped is not notified when it starts.
 
 ## skill
 

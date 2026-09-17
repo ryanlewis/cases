@@ -54,7 +54,7 @@ func TestScreenDrawRedrawsInPlace(t *testing.T) {
 		"inbox       http://127.0.0.1:8765/",
 		"store       " + root,
 		"open          0   0 blocking · 0 today · 0 whenever",
-		"since start 0 requests · 0 answers · 0 parks · 0 resumes",
+		"since start 0 requests · 0 answers · 0 parks · 0 resumes · 0 notifications",
 		"last event  none",
 		"  nothing yet",
 		"Ctrl-C quit",
