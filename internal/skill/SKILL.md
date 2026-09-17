@@ -105,7 +105,7 @@ cases amend ID [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON
 ### `cases wait`
 
 ```sh
-cases wait [--since TIME] [--timeout DURATION] [--id ID]... \
+cases wait [--for agent|human] [--since TIME] [--timeout DURATION] [--id ID]... \
   [--kind KIND]... [--label TEXT]... [--worker NAME]...
 ```
 
@@ -115,6 +115,7 @@ cases wait [--since TIME] [--timeout DURATION] [--id ID]... \
 - `--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those kinds or labels, or from any of those workers. A case must match every filter given, `--id` included. `--kind` alone does not scope `wait` to your own cases; pair it with `--id` or `--label`. A filter that matches none of your cases waits until the timeout, as an `--id` that is never answered does, so check the label you pass is the one you opened with.
 - By default only human events written after `wait` starts can wake it. An answer that lands between `cases open` and `cases wait` would be missed, so pass `--since` with a time from before you opened the case: an RFC 3339 time such as `2026-09-16T09:12:03Z`, or the case's `opened_at` from `show --json`.
 - `--timeout` takes a Go duration (`30m`, `2h`). When it passes with nothing to report, `wait` prints one line to stderr and **exits 2**. Other errors exit 1. The default, 0, waits forever.
+- `--for human` waits for cases waiting on the human instead. It is for the human's notifiers; you do not need it.
 
 ### `cases show` and `cases list`
 

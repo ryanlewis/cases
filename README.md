@@ -236,8 +236,8 @@ cases open     --kind KIND --urgency blocking|today|whenever --title TEXT
 cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--row JSON]... [--link URL]... [--label TEXT]...
                [--context TEXT] [--revision N]
-cases wait     [--since TIME] [--timeout DURATION] [--id ID]...
-               [--kind KIND]... [--label TEXT]... [--worker NAME]...
+cases wait     [--for agent|human] [--since TIME] [--timeout DURATION]
+               [--id ID]... [--kind KIND]... [--label TEXT]... [--worker NAME]...
 cases pickup   ID [--by NAME] [--revision N]
 cases note     ID --body TEXT | --body-file FILE|- [--revision N]
 cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
@@ -348,6 +348,15 @@ that matches no case, like an `--id` that is never answered, waits until the
 timeout. If `--timeout` passes first,
 it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store directory does not exist yet.
+
+`wait --for human` is the same wait from the human's side, for a notifier to
+run: it returns when a case lands on the human and prints every case waiting
+on the human. A case is waiting on the human when it is open and its last event
+is the agent's: an open, a note, an amend or a resume by the agent. An amend
+to a case that was already waiting does not wake it, and nor does a human
+event. `--since`, `--timeout` and the filters work as they do for the agent;
+on timeout the stderr line says `no case needed the human`. `--for agent` is
+the default.
 
 ### Clearing the inbox and pruning
 

@@ -13,6 +13,7 @@ import (
 )
 
 type WaitCmd struct {
+	For     string        `help:"Whose turn to wait for: agent (a human answered, parked or resumed) or human (the agent opened, noted or resumed a case)." enum:"agent,human" default:"agent" placeholder:"SIDE"`
 	Since   string        `help:"Also count human events written after this RFC 3339 time, even if they were already in the store when wait started. By default only events that land while waiting count." placeholder:"TIME"`
 	Timeout time.Duration `help:"Give up after this long: nothing on stdout, one line on stderr, exit 2. 0 waits forever." default:"0"`
 	ID      []string      `help:"Only wait on this case. Repeatable." name:"id" sep:"none" placeholder:"ID"`
@@ -38,10 +39,28 @@ func needsAgent(c *store.Case) (store.Event, bool) {
 	return last, false
 }
 
+// needsHuman reports whether the case is waiting on the human, and the event
+// that put it there: the case is open and its last event is the agent's. An
+// amend changes a case that was already waiting, so the event reported is the
+// agent event before any trailing amends; only an amend that follows a human
+// event is reported itself.
+func needsHuman(c *store.Case) (store.Event, bool) {
+	n := len(c.Events)
+	if c.State != store.StateOpen || n == 0 || c.Events[n-1].Author != store.AuthorAgent {
+		return store.Event{}, false
+	}
+	i := n - 1
+	for i > 0 && c.Events[i].Type == store.EventAmend && c.Events[i-1].Author == store.AuthorAgent {
+		i--
+	}
+	return c.Events[i], true
+}
+
 // Run polls the store every second. It returns as soon as a case needs the
 // agent because of a human event that is new: its file was not in the store
 // on the first poll, or it is later than --since. It then prints every case
-// that currently needs the agent, one JSON object per line.
+// that currently needs the agent, one JSON object per line. With --for human
+// it does the same for cases waiting on the human.
 //
 // New is judged by the file appearing rather than by its timestamp alone,
 // because an answer written on another machine can arrive through sync well
@@ -67,6 +86,11 @@ func (c *WaitCmd) Run(d *Deps) error {
 	poll := d.Poll
 	if poll <= 0 {
 		poll = time.Second
+	}
+
+	needs, side := needsAgent, "agent"
+	if c.For == "human" {
+		needs, side = needsHuman, "human"
 	}
 
 	poller := store.NewPoller(d.Store)
@@ -102,7 +126,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 			if len(c.ID) > 0 && !slices.Contains(c.ID, cs.ID) || !c.match(cs) {
 				continue
 			}
-			ev, ok := needsAgent(cs)
+			ev, ok := needs(cs)
 			if !ok {
 				continue
 			}
@@ -141,7 +165,7 @@ func (c *WaitCmd) Run(d *Deps) error {
 		if !deadline.IsZero() {
 			left := time.Until(deadline)
 			if left <= 0 {
-				return &exitError{code: exitTimeout, msg: fmt.Sprintf("no case needed the agent within %s", c.Timeout)}
+				return &exitError{code: exitTimeout, msg: fmt.Sprintf("no case needed the %s within %s", side, c.Timeout)}
 			}
 			sleep = min(sleep, left)
 		}
