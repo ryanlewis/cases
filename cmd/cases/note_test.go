@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -27,7 +29,34 @@ func TestNoteReopensAnAnsweredCase(t *testing.T) {
 	if r := runCases(t, "   \n", "--store", root, "note", id, "--body-file", "-"); r.err == nil || !strings.Contains(r.err.Error(), "empty") {
 		t.Errorf("empty note: err = %v", r.err)
 	}
-	if r := runCases(t, "", "--store", root, "note", id); r.err == nil {
-		t.Error("note without --body-file accepted")
+	if r := runCases(t, "", "--store", root, "note", id); r.err == nil || !strings.Contains(r.err.Error(), "missing flags: --body=TEXT or --body-file=FILE") {
+		t.Errorf("note without a body: err = %v", r.err)
+	}
+}
+
+func TestNoteInlineBody(t *testing.T) {
+	root := t.TempDir()
+	id := openDecision(t, root)
+	file := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(file, []byte("From a file."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := runCases(t, "", "--store", root, "note", id, "--body", "x", "--body-file", file); r.err == nil || !strings.Contains(r.err.Error(), "--body and --body-file can't be used together") {
+		t.Errorf("both forms: err = %v", r.err)
+	}
+	if r := runCases(t, "", "--store", root, "note", id, "--body", file); r.err == nil || !strings.Contains(r.err.Error(), "names a file; pass it with --body-file") {
+		t.Errorf("a file name: err = %v", r.err)
+	}
+	if r := runCases(t, "", "--store", root, "note", id, "--body", " "); r.err == nil || !strings.Contains(r.err.Error(), "empty") {
+		t.Errorf("blank body: err = %v", r.err)
+	}
+	if n := len(eventFiles(t, root, id)); n != 1 {
+		t.Fatalf("refused notes wrote files: %d", n)
+	}
+	if out := mustRun(t, "--store", root, "note", id, "--body", "Also pin bunx."); out != id+" open\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if c := loadCase(t, root, id); len(c.Events) != 2 || !strings.Contains(string(c.Events[1].Data), "Also pin bunx.") {
+		t.Errorf("events = %+v", c.Events)
 	}
 }

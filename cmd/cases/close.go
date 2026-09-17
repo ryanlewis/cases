@@ -8,7 +8,8 @@ import (
 
 type CloseCmd struct {
 	ID          string   `arg:"" help:"Case id."`
-	OutcomeFile string   `help:"Markdown outcome. - reads stdin." name:"outcome-file" required:"" placeholder:"FILE"`
+	Outcome     string   `help:"The outcome as one line of text." xor:"outcome" required:"" placeholder:"TEXT"`
+	OutcomeFile string   `help:"Markdown outcome. - reads stdin." name:"outcome-file" xor:"outcome" required:"" placeholder:"FILE"`
 	Link        []string `help:"A link to evidence of the outcome. Repeatable." sep:"none" placeholder:"URL"`
 }
 
@@ -17,7 +18,12 @@ func (c *CloseCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	outcome, err := d.readText(c.OutcomeFile)
+	var outcome string
+	if c.OutcomeFile != "" {
+		outcome, err = d.readText(c.OutcomeFile)
+	} else {
+		outcome, err = inlineText("outcome", c.Outcome)
+	}
 	if err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}

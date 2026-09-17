@@ -8,7 +8,8 @@ import (
 
 type NoteCmd struct {
 	ID       string `arg:"" help:"Case id."`
-	BodyFile string `help:"Markdown follow-up. - reads stdin." name:"body-file" required:"" placeholder:"FILE"`
+	Body     string `help:"The follow-up as one line of text." xor:"body" required:"" placeholder:"TEXT"`
+	BodyFile string `help:"Markdown follow-up. - reads stdin." name:"body-file" xor:"body" required:"" placeholder:"FILE"`
 }
 
 func (c *NoteCmd) Run(d *Deps) error {
@@ -16,7 +17,12 @@ func (c *NoteCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	body, err := d.readText(c.BodyFile)
+	var body string
+	if c.BodyFile != "" {
+		body, err = d.readText(c.BodyFile)
+	} else {
+		body, err = inlineText("body", c.Body)
+	}
 	if err != nil {
 		return fmt.Errorf("body: %w", err)
 	}
