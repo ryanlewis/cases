@@ -27,6 +27,7 @@ type waitedCase struct {
 	State     string    `json:"state"`
 	UpdatedAt time.Time `json:"updated_at"`
 	NextSince string    `json:"next_since"`
+	Fresh     *bool     `json:"fresh"`
 	Answer    *struct {
 		Choice int  `json:"choice"`
 		Ack    bool `json:"ack"`
@@ -385,5 +386,38 @@ func TestWaitPrintsTheNextSince(t *testing.T) {
 	mustRun(t, "--store", root, "answer", other, "--option", "2")
 	if got := waited(t, <-ch); len(got) != 1 || got[0].NextSince != future {
 		t.Errorf("with a later --since: %+v, want next_since %s", got, future)
+	}
+}
+
+func TestWaitMarksWhichCasesAreFresh(t *testing.T) {
+	root := t.TempDir()
+	old := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", old, "--option", "1")
+	late := openDecision(t, root)
+	earlier := time.Now().UTC().Format(time.RFC3339Nano)
+	time.Sleep(10 * time.Millisecond)
+	mustRun(t, "--store", root, "answer", late, "--option", "1")
+	idle := openDecision(t, root)
+
+	isFresh := func(c waitedCase) bool {
+		if c.Fresh == nil {
+			t.Fatalf("line for %s has no fresh", c.ID)
+		}
+		return *c.Fresh
+	}
+
+	// Without --since only the event that landed while waiting is fresh.
+	ch := startWait(t, root, "--timeout", "5s")
+	mustRun(t, "--store", root, "answer", idle, "--option", "2")
+	got := waited(t, <-ch)
+	if len(got) != 3 || got[0].ID != old || isFresh(got[0]) || got[1].ID != late || isFresh(got[1]) || got[2].ID != idle || !isFresh(got[2]) {
+		t.Errorf("wait printed %+v, want only %s fresh", got, idle)
+	}
+
+	// With --since, an event already in the store and later than it is fresh
+	// too.
+	got = waited(t, runCases(t, "", "--store", root, "wait", "--since", earlier, "--timeout", "1s"))
+	if len(got) != 3 || isFresh(got[0]) || !isFresh(got[1]) || !isFresh(got[2]) {
+		t.Errorf("wait --since printed %+v, want %s and %s fresh", got, late, idle)
 	}
 }
