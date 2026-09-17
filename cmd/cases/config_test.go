@@ -125,6 +125,14 @@ func TestConfigSetsNoOpen(t *testing.T) {
 	if cli := parseCases(t, "serve", "--no-open=false"); cli.Serve.NoOpen {
 		t.Error("no-open = true, want the flag's false")
 	}
+	writeConfig(t, "no-open = true\n")
+	if cli := parseCases(t, "serve"); !cli.Serve.NoOpen {
+		t.Error("no-open = false, want the file's unquoted true")
+	}
+	writeConfig(t, "no-open = false\n")
+	if cli := parseCases(t, "serve"); cli.Serve.NoOpen {
+		t.Error("no-open = true, want the file's unquoted false")
+	}
 }
 
 func TestConfigFlagAndEnv(t *testing.T) {

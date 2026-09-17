@@ -206,7 +206,7 @@ cases config show    # print the defaults the environment and the file establish
 | --- | --- | --- | --- |
 | `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases`, or `~/.local/share/cases` |
 | `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
-| `no-open` | `--no-open` on `serve` | nothing | `false` |
+| `no-open` | `--no-open` on `serve` | nothing | `false` (`true` or `false`, quoted or not) |
 | `prune-age` | `--age` on `prune` | nothing | `720h` |
 
 ```toml
@@ -216,8 +216,9 @@ store = "~/Sync/cases"
 A leading `~` in `store` is expanded. `CASES_STORE` set to an empty string
 counts as unset.
 
-An unknown key, a value that is not a string, or malformed TOML is an error
-that names the file. It stops every command except `cases config path`,
+Values are strings, except `no-open`, which also takes an unquoted `true` or
+`false`. An unknown key, a value of the wrong type, or malformed TOML is an
+error that names the file. It stops every command except `cases config path`,
 `cases config show` and `cases config init`, which are how you find out which
 file is at fault.
 
@@ -350,7 +351,7 @@ launchd job.
 
 `cases serve` runs a web inbox over the store and opens it in the browser
 (`open` on macOS, `xdg-open` elsewhere). Pass `--no-open`, or set
-`no-open = "true"` in the [config file](#configuration), to skip that.
+`no-open = true` in the [config file](#configuration), to skip that.
 
 The default address is `127.0.0.1:8765`; change it with `--listen` or the
 `listen` key in the config file. Only loopback addresses (`127.0.0.1`, `::1`,

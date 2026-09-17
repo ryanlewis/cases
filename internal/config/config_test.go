@@ -134,12 +134,38 @@ func TestTemplateLoads(t *testing.T) {
 	}
 }
 
-// TestLoadNamesWrongTypes gives every key a value of each TOML type that is
-// not a string, and checks the error names the type as TOML spells it, or
-// as the decoder's Go type for the date and time forms.
+// TestLoadNamesWrongTypes gives every key a value of each TOML type it does
+// not take, and checks the error names the type as TOML spells it, or as the
+// decoder's Go type for the date and time forms. A Bool key takes a boolean;
+// every other key refuses it.
+// TestLoadBoolKeys checks a Bool key takes an unquoted boolean, held as the
+// string the flag parses, and still takes the quoted form.
+func TestLoadBoolKeys(t *testing.T) {
+	var n int
+	for _, k := range Keys {
+		if !k.Bool {
+			continue
+		}
+		n++
+		for toml, want := range map[string]string{"true": "true", "false": "false", `"true"`: "true", `"false"`: "false"} {
+			t.Run(k.Name+"="+toml, func(t *testing.T) {
+				f, err := Load(write(t, k.Name+" = "+toml+"\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := f.values[k.Name]; got != want {
+					t.Errorf("value = %q, want %q", got, want)
+				}
+			})
+		}
+	}
+	if n == 0 {
+		t.Error("no Bool keys; no-open should be one")
+	}
+}
+
 func TestLoadNamesWrongTypes(t *testing.T) {
 	values := []struct{ toml, want string }{
-		{"true", "boolean"},
 		{"42", "number"},
 		{"1.5", "number"},
 		{"inf", "number"},
@@ -151,10 +177,17 @@ func TestLoadNamesWrongTypes(t *testing.T) {
 		{"07:32:00", "toml.LocalTime"},
 	}
 	for _, k := range Keys {
-		for _, v := range values {
+		kind := "a string"
+		cases := values
+		if k.Bool {
+			kind = "a boolean or a string"
+		} else {
+			cases = append([]struct{ toml, want string }{{"true", "boolean"}}, values...)
+		}
+		for _, v := range cases {
 			t.Run(k.Name+"="+v.toml, func(t *testing.T) {
 				_, err := Load(write(t, k.Name+" = "+v.toml+"\n"))
-				want := `key "` + k.Name + `" must be a string, got ` + v.want
+				want := `key "` + k.Name + `" must be ` + kind + `, got ` + v.want
 				if err == nil || !strings.HasSuffix(err.Error(), want) {
 					t.Errorf("err = %v, want %q", err, want)
 				}
