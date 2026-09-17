@@ -22,10 +22,12 @@ func startWait(t *testing.T, root string, args ...string) <-chan result {
 }
 
 type waitedCase struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	State  string `json:"state"`
-	Answer *struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	State     string    `json:"state"`
+	UpdatedAt time.Time `json:"updated_at"`
+	NextSince string    `json:"next_since"`
+	Answer    *struct {
 		Choice int  `json:"choice"`
 		Ack    bool `json:"ack"`
 	} `json:"answer"`
@@ -339,5 +341,49 @@ func TestWaitSinceCaseID(t *testing.T) {
 		if !strings.Contains(r.err.Error(), "neither an RFC 3339 time nor a case") {
 			t.Errorf("--since %q: err = %q", bad, r.err)
 		}
+	}
+}
+
+func TestWaitPrintsTheNextSince(t *testing.T) {
+	root := t.TempDir()
+	id := strings.TrimSpace(mustRun(t, "--store", root, "open", "--kind", "stuck", "--urgency", "blocking", "--title", "Blocked"))
+	other := openDecision(t, root)
+	mustRun(t, "--store", root, "answer", other, "--option", "1")
+
+	ch := startWait(t, root, "--timeout", "5s")
+	mustRun(t, "--store", root, "answer", id, "--park")
+	got := waited(t, <-ch)
+	if len(got) != 2 {
+		t.Fatalf("wait printed %+v", got)
+	}
+	// Every line carries the same value, the time of the latest event that
+	// put a printed case there: the park.
+	next := got[1].NextSince
+	if got[0].NextSince != next || got[1].ID != id {
+		t.Fatalf("next_since %q and %q, want both from %s", got[0].NextSince, next, id)
+	}
+	if at, err := time.Parse(time.RFC3339, next); err != nil || !at.Equal(got[1].UpdatedAt) {
+		t.Errorf("next_since = %q (%v), want the park at %s", next, err, got[1].UpdatedAt)
+	}
+
+	// Passed back, it does not wake on the park or the older answer, but a
+	// resume that lands before the next wait starts does wake it.
+	assertTimedOut(t, runCases(t, "", "--store", root, "wait", "--since", next, "--timeout", "100ms"))
+	mustRun(t, "--store", root, "resume", id)
+	if got := waited(t, runCases(t, "", "--store", root, "wait", "--since", next, "--timeout", "1s")); len(got) != 2 || got[1].ID != id || got[1].State != "open" {
+		t.Errorf("after resume: %+v", got)
+	}
+
+	// A --since later than every printed event is kept.
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	ch = startWait(t, root, "--since", future, "--id", other, "--timeout", "5s")
+	mustRun(t, "--store", root, "pickup", other)
+	if r := runCases(t, "Which version?\n", "--store", root, "note", other, "--body-file", "-"); r.err != nil {
+		t.Fatal(r.err)
+	}
+	// The note hands the case to the human; answer it again so it wakes.
+	mustRun(t, "--store", root, "answer", other, "--option", "2")
+	if got := waited(t, <-ch); len(got) != 1 || got[0].NextSince != future {
+		t.Errorf("with a later --since: %+v, want next_since %s", got, future)
 	}
 }

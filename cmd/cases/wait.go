@@ -80,6 +80,15 @@ func (c *WaitCmd) sinceTime(d *Deps) (time.Time, error) {
 	return cs.OpenedAt, nil
 }
 
+// waitLine is a case as wait prints it: the case's own JSON with the
+// --since to pass to the next wait beside it. That is the latest time among
+// the events that put the printed cases there, or the --since given if it is
+// later, so the next wait does not wake again on what this one printed.
+type waitLine struct {
+	*store.Case
+	NextSince time.Time `json:"next_since,omitzero"`
+}
+
 // Run polls the store every second. It returns as soon as a case needs the
 // agent because of a human event that is new: its file was not in the store
 // on the first poll, or it is later than --since. It then prints every case
@@ -171,10 +180,16 @@ func (c *WaitCmd) Run(d *Deps) error {
 				}
 				return strings.Compare(a.c.ID, b.c.ID)
 			})
+			next := since
+			for _, r := range waiting {
+				if r.ev.At.After(next) {
+					next = r.ev.At
+				}
+			}
 			enc := json.NewEncoder(d.Stdout)
 			enc.SetEscapeHTML(false)
 			for _, r := range waiting {
-				if err := enc.Encode(r.c); err != nil {
+				if err := enc.Encode(waitLine{r.c, next}); err != nil {
 					return err
 				}
 			}
