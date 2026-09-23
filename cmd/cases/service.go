@@ -103,7 +103,11 @@ func checkNoServe(d *Deps, m *service.Manager, listen string) error {
 		return err
 	}
 	if installed {
-		if active, _ := m.Active(); active {
+		active, err := m.Active()
+		if err != nil {
+			return err
+		}
+		if active {
 			if args, err := m.Args(); err == nil {
 				oldStore, oldListen = flagValue(args, "--store"), flagValue(args, "--listen")
 			}
