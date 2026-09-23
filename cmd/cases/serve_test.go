@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -168,6 +169,23 @@ func TestServeWithoutTerminalPrintsURLAndOpensNothing(t *testing.T) {
 	}
 	if n := opened.Load(); n != 0 {
 		t.Errorf("browser opened %d times with stdout not a terminal", n)
+	}
+}
+
+// Each platform opens the URL with a program it has, passing the URL as one
+// argument; Windows has no xdg-open.
+func TestBrowserCommand(t *testing.T) {
+	const url = "http://127.0.0.1:8765/cases/a?b=1&c=2"
+	for goos, want := range map[string][]string{
+		"darwin":  {"open", url},
+		"linux":   {"xdg-open", url},
+		"freebsd": {"xdg-open", url},
+		"windows": {"rundll32", "url.dll,FileProtocolHandler", url},
+	} {
+		name, args := browserCommand(goos, url)
+		if got := append([]string{name}, args...); !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", goos, got, want)
+		}
 	}
 }
 

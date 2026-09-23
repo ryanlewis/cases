@@ -554,7 +554,8 @@ launchd job.
 ## serve
 
 `cases serve` runs a web inbox over the store and opens it in the browser
-(`open` on macOS, `xdg-open` elsewhere). Pass `--no-open`, or set
+(`open` on macOS, `rundll32 url.dll,FileProtocolHandler` on Windows,
+`xdg-open` elsewhere). Pass `--no-open`, or set
 `no-open = true` in the [config file](#configuration), to skip that.
 
 The default address is `127.0.0.1:8765`; change it with `--listen` or the

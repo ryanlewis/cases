@@ -146,16 +146,28 @@ func pollStore(ctx context.Context, srv *web.Server, interval time.Duration) {
 
 // openBrowser opens url with the desktop's handler and does not wait for it.
 func openBrowser(url string) error {
-	name := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		name = "open"
-	}
-	cmd := exec.Command(name, url)
+	name, args := browserCommand(runtime.GOOS, url)
+	cmd := exec.Command(name, args...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go func() { _ = cmd.Wait() }()
 	return nil
+}
+
+// browserCommand names the program that opens url on goos, and its
+// arguments. No shell is involved, so the url is passed as data. On Windows
+// url.dll's FileProtocolHandler opens it, as `start` would without cmd's
+// parsing of the url.
+func browserCommand(goos, url string) (string, []string) {
+	switch goos {
+	case "darwin":
+		return "open", []string{url}
+	case "windows":
+		return "rundll32", []string{"url.dll,FileProtocolHandler", url}
+	default:
+		return "xdg-open", []string{url}
+	}
 }
 
 // isTerminal reports whether w is a terminal: a character device that also
