@@ -4,7 +4,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 
 ## Safety
 
-- **Safe to run freely**: `list`, `show`, `wait`, `status`, `config path`, `config show`, `skill list`, `skill show`. They only read.
+- **Safe to run freely**: `list`, `show`, `wait`, `status`, `inbox --print`, `config path`, `config show`, `skill list`, `skill show`. They only read.
 - **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. `Error: database is locked` means other writes, such as a long `cases sweep`, kept the store busy for more than 5 seconds; nothing was written, so run the command again. An error saying a `-wal` or `-shm` file `from an earlier store is still there` means the store file was removed while something still had it open: do not delete anything, and tell the human. Other errors exit 1.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never open or edit the database file; use the commands.** The state is worked out from the events stored in it, so a change made any other way corrupts the record. Do not run `sqlite3` on it, and do not move, copy over or delete it or the `-wal` and `-shm` files beside it.
@@ -12,6 +12,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
 - `serve`, `service install` / `service uninstall` (which set serve up as a login service), `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked. Bare `cases service` only reads, and you may run it.
+- `cases inbox` without `--print` opens a browser on the human's machine: do not run it unless asked. `cases inbox --print` only prints a URL, and you may run it freely.
 - **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case "<id>"`.
 
 ## The store
@@ -147,12 +148,13 @@ cases status [--json]
 
 - Prints where the human's web inbox (`cases serve`) is running for the store: its URL and pid. `--json` prints `pid`, `url`, `addr`, `store`, `started_at` and `version`.
 - Read the result:
-  - Exit 0 with the URL: the inbox is running. For a link to a case, use `url` from `cases show ID --json`.
+  - Exit 0 with the URL: the inbox is running. For a link to a case, use `url` from `cases show ID --json`, or `cases inbox --print ID`.
   - Exit 1 with `not running` on stderr: no inbox is running, including one that crashed. Do not start one; tell the human they can answer from `cases serve` or the terminal.
   - Exit 1 with an `Error:` line: the check failed, usually because the inbox's state file is damaged or unreadable (the message names it). Report it to the human; do not fix or delete the file.
 - Running means the process is alive and accepts connections. It cannot tell a hung inbox from a healthy one.
 - `cases service [--json]` says whether the inbox is set up as a login service, whether launchd or systemd has it, and whether it answers, with a `Problem:` line for each disagreement. It only reads. Exit 1 means it is not installed, loaded and answering; report that to the human rather than installing or restarting anything.
 - Only if the `cases` CLI cannot run at all: the state file is `$XDG_STATE_HOME/cases/serve-<slug>-<hash>.json` (default `~/.local/state/cases`), with the same fields as `--json`. A crash can leave it behind, so it may be stale; `cases status` is the authority.
+- `cases inbox [ID] [--print]` opens the running inbox, or a case's page in it, in the browser. Opening a browser is for the human: run it only with `--print`, or when asked to open it. `cases inbox --print ID` prints the case's link without opening anything, the same link `cases show ID --json` has as `url`.
 
 ### `cases pickup`, `cases note`, `cases close`, `cases withdraw`
 

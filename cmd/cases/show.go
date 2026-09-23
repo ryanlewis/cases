@@ -56,7 +56,12 @@ func (d *Deps) inboxLink(id string) string {
 	if info == nil {
 		return ""
 	}
-	return strings.TrimSuffix(info.URL, "/") + "/cases/" + url.PathEscape(id)
+	return caseURL(info.URL, id)
+}
+
+// caseURL is a case's page in a running web inbox at base.
+func caseURL(base, id string) string {
+	return strings.TrimSuffix(base, "/") + "/cases/" + url.PathEscape(id)
 }
 
 // shownCase is the case as show --json prints it: the case's own JSON with its

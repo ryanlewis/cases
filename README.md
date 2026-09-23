@@ -365,6 +365,7 @@ cases list   [--state STATE,...|--all] [--urgency URGENCY]...
 cases show   ID [--json | --answer]
 cases serve  [--listen 127.0.0.1:8765] [--no-open] [--as NAME]
 cases status [--json]
+cases inbox  [ID] [--print]
 ```
 
 `list --json` prints one object, `{"list": [...]}`, the matching cases as an
@@ -595,6 +596,21 @@ and names that serve's URL and pid. If the file cannot be read or parsed,
 running inbox, and `show --json` has it as `url`. With no serve running there
 is no `url` line and the field is empty. A file that cannot be read leaves it
 empty too, with a warning on stderr.
+
+`cases inbox` opens the running inbox in the browser, or with an id, that
+case's page in it:
+
+```sh
+cases inbox          # opens the inbox
+cases inbox ID       # opens the case's page
+cases inbox --print  # prints the URL instead of opening it
+```
+
+It exits 1 with a message naming `cases serve` or `cases service install`
+when nothing is running; it never starts a server. `--print` is for scripts
+and for agents: an agent should not open a browser on the human's machine
+without being asked, but may print the link (`cases inbox --print ID`) to
+give the human one, instead of building it by hand from `cases status`.
 
 The check has three limits. It cannot tell a hung serve from a healthy one. A
 store reached by two different paths (a symlink) gets two files. Two serves
