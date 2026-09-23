@@ -279,7 +279,7 @@ func TestDescribe(t *testing.T) {
 			Rows: []RowAnswer{{ID: "a", Verdict: VerdictApprove}, {ID: "b", Verdict: VerdictReject, Note: "not today"}},
 			Note: "one at a time",
 		})},
-			[]Line{{Text: "[a] approve"}, {Text: "[b] reject: not today"}, {Text: "note: one at a time"}}},
+			[]Line{{Text: "[a] approve"}, {Text: "[b] don't run: not today"}, {Text: "note: one at a time"}}},
 
 		{"pickup", []step{open(KindStuck), answer(answerOf(KindStuck)), agent(EventPickup, PickupRecord{By: "bun-pins"})},
 			[]Line{{Text: "by bun-pins"}}},

@@ -62,9 +62,9 @@
     <p>{{if webLink .Link}}<a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a>{{else}}{{.Link}}{{end}}</p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve</label>
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> hold</label>
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> reject</label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve <span class="hint">run it</span></label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> hold <span class="hint">not now; ask again later</span></label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> don't run <span class="hint">never run this row</span></label>
     </div>
     <label>note on this row <textarea name="{{$note}}" rows="1">{{formValue $form $note}}</textarea></label>
   </fieldset>

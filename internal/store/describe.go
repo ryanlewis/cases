@@ -101,6 +101,15 @@ func describeAmend(ev Event) []Line {
 	return lines
 }
 
+// verdictLabel is how a stored verdict reads in a description. Only the
+// display text changes; the stored value stays approve/hold/reject.
+func verdictLabel(v string) string {
+	if v == VerdictReject {
+		return "don't run"
+	}
+	return v
+}
+
 func (c *Case) describeAnswer(ev Event) []Line {
 	var a AnswerRecord
 	_ = json.Unmarshal(ev.Data, &a)
@@ -122,10 +131,11 @@ func (c *Case) describeAnswer(ev Event) []Line {
 		lines = addLines(lines, "acknowledged")
 	}
 	for _, r := range a.Rows {
+		verdict := verdictLabel(r.Verdict)
 		if r.Note != "" {
-			lines = addLines(lines, "[%s] %s: %s", r.ID, r.Verdict, r.Note)
+			lines = addLines(lines, "[%s] %s: %s", r.ID, verdict, r.Note)
 		} else {
-			lines = addLines(lines, "[%s] %s", r.ID, r.Verdict)
+			lines = addLines(lines, "[%s] %s", r.ID, verdict)
 		}
 	}
 	if a.Note != "" {
