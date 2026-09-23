@@ -89,7 +89,9 @@ func (c *ListCmd) Run(d *Deps) error {
 		enc := json.NewEncoder(d.Stdout)
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)
-		return enc.Encode(shown)
+		return enc.Encode(struct {
+			List []*store.Case `json:"list"`
+		}{shown})
 	}
 	if len(shown) == 0 {
 		fmt.Fprintln(d.Stdout, "No cases.")

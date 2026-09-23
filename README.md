@@ -367,6 +367,10 @@ cases serve  [--listen 127.0.0.1:8765] [--no-open] [--as NAME]
 cases status [--json]
 ```
 
+`list --json` prints one object, `{"list": [...]}`, the matching cases as an
+array under `list`, `[]` when none match. `wait` prints one object per line
+instead; see below.
+
 Setup:
 
 ```

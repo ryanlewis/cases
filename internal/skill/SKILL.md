@@ -136,6 +136,7 @@ cases list [--state STATE,...|--all] [--urgency URGENCY]... \
 - `list --kind KIND`, `--urgency URGENCY`, `--label TEXT` and `--worker NAME` (each repeatable) show cases with any of those kinds, urgencies or labels, or from any of those workers. A case must match every filter given.
 - `list --older-than DURATION` (`30m`, `2h`) shows cases whose last event is older than that, not their open time.
 - `list --count` prints only the number of matching cases, `0` when none match.
+- `list --json` prints one object, `{"list": [...]}`, the matching cases as an array under `list`, `[]` when none match. This differs from `wait`, which prints one object per line.
 - A damaged event is skipped and the rest of the case still loads. `show` lists it as a problem; `list`, `show` and `wait` also warn about it on stderr. Report it to the human; do not try to fix the store.
 
 ### `cases status`
