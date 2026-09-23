@@ -687,12 +687,16 @@ checks the service's store for a running inbox as `cases status` does. A
 loaded but not answering, loaded with its file gone, a file for another store
 or binary than this command's, or a serve started by hand with no service
 installed. It exits 0 when the service is installed, loaded and answering, and
-1 otherwise. `--json` prints `installed`, `path`, `args`, `store`, `listen`,
-`loaded`, `running`, `url`, `pid` and `problems`.
+1 otherwise. When launchd or systemd cannot be asked at all, for example
+because `launchctl` or the user's systemd bus cannot be reached, it prints the
+error instead of reporting the service not loaded. `--json` prints
+`installed`, `path`, `args`, `store`, `listen`, `loaded`, `running`, `url`,
+`pid` and `problems`.
 
 `cases service uninstall` stops the service and removes its file. It fails
-when there is none. Other systems are not supported; run `cases serve` under
-your own supervisor there.
+when there is none, and leaves the file in place when it cannot ask launchd or
+systemd whether the service is loaded. Other systems are not supported; run
+`cases serve` under your own supervisor there.
 
 ### The inbox
 

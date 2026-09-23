@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,17 +17,32 @@ import (
 
 // serviceRunner records the launchctl and systemctl commands a test's
 // service manager is given, and runs none of them. `launchctl print` and
-// `systemctl is-active` succeed only when active is set.
+// `systemctl is-active` succeed only when active is set, and otherwise answer
+// as for a service that is not there. With down set, every command fails as
+// when the service manager cannot be reached.
 type serviceRunner struct {
 	calls  []string
 	active bool
+	down   bool
 }
+
+// exitStatus stands in for an *exec.ExitError.
+type exitStatus int
+
+func (e exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitStatus) ExitCode() int { return int(e) }
 
 func (r *serviceRunner) run(name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, strings.Join(append([]string{name}, args...), " "))
-	query := (name == "launchctl" && args[0] == "print") || (name == "systemctl" && args[1] == "is-active")
-	if query && !r.active {
-		return []byte("Could not find service"), errors.New("exit status 113")
+	if r.down {
+		return []byte("Failed to connect to the service manager"), exitStatus(1)
+	}
+	switch {
+	case r.active:
+	case name == "launchctl" && args[0] == "print":
+		return []byte("Could not find service"), exitStatus(113)
+	case name == "systemctl" && args[1] == "is-active":
+		return []byte("inactive\n"), exitStatus(3)
 	}
 	return nil, nil
 }
@@ -166,6 +182,36 @@ func TestServiceUninstall(t *testing.T) {
 	res = runService(t, "linux", dir, r, "--store", storePath, "service", "uninstall")
 	if !errors.Is(res.err, service.ErrNotInstalled) {
 		t.Errorf("second uninstall: err = %v, want ErrNotInstalled", res.err)
+	}
+}
+
+// A service manager that cannot be asked about the agent stops uninstall
+// before the plist is deleted, rather than reporting it removed while it may
+// still run, and stops cases service before it reports the agent not loaded.
+func TestServiceManagerDown(t *testing.T) {
+	storePath := newStore(t)
+	dir := t.TempDir()
+	r := &serviceRunner{active: true}
+	installService(t, "darwin", dir, r, storePath)
+	r.down = true
+	r.calls = nil
+	res := runService(t, "darwin", dir, r, "--store", storePath, "service", "uninstall")
+	if res.err == nil || !strings.Contains(res.err.Error(), "Failed to connect") {
+		t.Errorf("uninstall: err = %v, want the query's error", res.err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, service.Label+".plist")); err != nil {
+		t.Errorf("plist gone after a failed query: %v", err)
+	}
+	if want := "launchctl print gui/501/" + service.Label; len(r.calls) != 1 || r.calls[0] != want {
+		t.Errorf("calls = %q, want only %q", r.calls, want)
+	}
+	res = runService(t, "darwin", dir, r, "--store", storePath, "service")
+	if res.err == nil || !strings.Contains(res.err.Error(), "Failed to connect") || strings.Contains(res.stdout, "Loaded:    no") {
+		t.Errorf("cases service: err = %v, stdout = %q; want the query's error", res.err, res.stdout)
+	}
+	res = runService(t, "darwin", dir, r, "--store", storePath, "service", "install")
+	if res.err == nil || !strings.Contains(res.err.Error(), "Failed to connect") {
+		t.Errorf("install: err = %v, want the query's error", res.err)
 	}
 }
 

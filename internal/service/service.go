@@ -151,6 +151,14 @@ func (m *Manager) Install(s Spec) (string, error) {
 			return "", err
 		}
 	}
+	// Ask launchd before the file is replaced, so a query that fails leaves
+	// the installed file matching the agent that runs.
+	loaded := false
+	if m.GOOS == "darwin" {
+		if loaded, err = m.loaded(); err != nil {
+			return "", err
+		}
+	}
 	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
 		return "", err
 	}
@@ -160,7 +168,7 @@ func (m *Manager) Install(s Spec) (string, error) {
 	if m.GOOS == "darwin" {
 		// A loaded agent keeps the old plist until it is booted out, and
 		// bootstrap refuses a label that is already loaded.
-		if m.loaded() {
+		if loaded {
 			if err := m.run("launchctl", "bootout", m.target()); err != nil {
 				return "", err
 			}
@@ -204,7 +212,10 @@ func (m *Manager) Uninstall() (string, error) {
 		return "", statErr
 	}
 	if m.GOOS == "darwin" {
-		loaded := m.loaded()
+		loaded, err := m.loaded()
+		if err != nil {
+			return "", err
+		}
 		if !exists && !loaded {
 			return "", ErrNotInstalled
 		}
@@ -221,7 +232,11 @@ func (m *Manager) Uninstall() (string, error) {
 	if !exists {
 		// A unit whose file was removed keeps running until it is stopped;
 		// cases service points here for it.
-		if active, _ := m.Active(); !active {
+		active, err := m.Active()
+		if err != nil {
+			return "", err
+		}
+		if !active {
 			return "", ErrNotInstalled
 		}
 		if err := m.run("systemctl", "--user", "stop", UnitName); err != nil {
@@ -241,23 +256,50 @@ func (m *Manager) Uninstall() (string, error) {
 func (m *Manager) domain() string { return fmt.Sprintf("gui/%d", m.UID) }
 func (m *Manager) target() string { return m.domain() + "/" + Label }
 
-// loaded reports whether launchd has the agent: `launchctl print` fails for
-// a label it does not know.
-func (m *Manager) loaded() bool {
-	_, err := m.Run("launchctl", "print", m.target())
-	return err == nil
+// launchdNoService is the status `launchctl print` exits with for a label
+// launchd does not know ("Could not find service").
+const launchdNoService = 113
+
+// loaded reports whether launchd has the agent. Only `launchctl print`
+// exiting launchdNoService means it does not; any other failure, such as
+// launchctl not running at all, is returned as an error.
+func (m *Manager) loaded() (bool, error) {
+	args := []string{"print", m.target()}
+	out, err := m.Run("launchctl", args...)
+	if err == nil {
+		return true, nil
+	}
+	if exitCode(err) == launchdNoService {
+		return false, nil
+	}
+	return false, commandError("launchctl", args, out, err)
+}
+
+// exitCode is the status a command that ran exited with, or -1 when err is
+// not an exit status, as when the command could not be started.
+func exitCode(err error) int {
+	var e interface{ ExitCode() int }
+	if errors.As(err, &e) {
+		return e.ExitCode()
+	}
+	return -1
 }
 
 func (m *Manager) run(name string, args ...string) error {
 	out, err := m.Run(name, args...)
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg != "" {
-			return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, msg)
-		}
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return commandError(name, args, out, err)
 	}
 	return nil
+}
+
+// commandError names the command that failed and adds its output.
+func commandError(name string, args []string, out []byte, err error) error {
+	msg := strings.TrimSpace(string(out))
+	if msg != "" {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, msg)
+	}
+	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 }
 
 // writeFile replaces path with body through a temporary file renamed into
@@ -368,15 +410,26 @@ func unitQuote(v string, exec bool) string {
 // Active reports whether the service manager has the service: loaded in
 // launchd (`launchctl print`), or active in systemd
 // (`systemctl --user is-active`), counting a unit waiting out RestartSec
-// (activating) as active, as launchd counts a job it will restart. It only
-// reads.
+// (activating) as active, as launchd counts a job it will restart. A query
+// that fails without naming a state, as when the service manager cannot be
+// reached, is an error, not an inactive service. It only reads.
 func (m *Manager) Active() (bool, error) {
 	switch m.GOOS {
 	case "darwin":
-		return m.loaded(), nil
+		return m.loaded()
 	case "linux":
-		out, err := m.Run("systemctl", "--user", "is-active", UnitName)
-		return err == nil || strings.TrimSpace(string(out)) == "activating", nil
+		args := []string{"--user", "is-active", UnitName}
+		out, err := m.Run("systemctl", args...)
+		if err == nil {
+			return true, nil
+		}
+		switch strings.TrimSpace(string(out)) {
+		case "activating":
+			return true, nil
+		case "inactive", "failed", "deactivating", "maintenance", "unknown":
+			return false, nil
+		}
+		return false, commandError("systemctl", args, out, err)
 	}
 	_, err := m.Path()
 	return false, err

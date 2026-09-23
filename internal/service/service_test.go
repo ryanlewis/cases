@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,24 +14,44 @@ import (
 )
 
 // fakeRunner records the commands it is given instead of running them. A
-// command whose line starts with a key in fail fails with that output.
+// command whose line starts with a key in fail fails with that output and
+// exit status.
 type fakeRunner struct {
 	calls []string
-	fail  map[string]string
+	fail  map[string]failure
 }
+
+// failure is what a failing command prints and the status it exits with.
+type failure struct {
+	out  string
+	code int
+}
+
+// exitStatus stands in for an *exec.ExitError.
+type exitStatus int
+
+func (e exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitStatus) ExitCode() int { return int(e) }
+
+var (
+	// noService is launchctl print for a label launchd does not know.
+	noService = failure{"Bad request.\nCould not find service \"" + Label + "\" in domain for user gui: 501", 113}
+	// inactive is systemctl is-active for a unit that is not running.
+	inactive = failure{"inactive\n", 3}
+)
 
 func (f *fakeRunner) run(name string, args ...string) ([]byte, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
 	f.calls = append(f.calls, line)
-	for prefix, out := range f.fail {
+	for prefix, fl := range f.fail {
 		if strings.HasPrefix(line, prefix) {
-			return []byte(out), errors.New("exit status 1")
+			return []byte(fl.out), exitStatus(fl.code)
 		}
 	}
 	return nil, nil
 }
 
-func newManager(t *testing.T, goos string, fail map[string]string) (*Manager, *fakeRunner) {
+func newManager(t *testing.T, goos string, fail map[string]failure) (*Manager, *fakeRunner) {
 	t.Helper()
 	f := &fakeRunner{fail: fail}
 	return &Manager{GOOS: goos, Dir: filepath.Join(t.TempDir(), "agents"), UID: 501, Run: f.run}, f
@@ -98,7 +119,7 @@ WantedBy=default.target
 }
 
 func TestInstallLaunchd(t *testing.T) {
-	m, f := newManager(t, "darwin", map[string]string{"launchctl print": "Could not find service"})
+	m, f := newManager(t, "darwin", map[string]failure{"launchctl print": noService})
 	s := testSpec(t)
 	path, err := m.Install(s)
 	if err != nil {
@@ -158,7 +179,7 @@ func TestInstallSystemd(t *testing.T) {
 }
 
 func TestInstallReportsFailure(t *testing.T) {
-	m, _ := newManager(t, "linux", map[string]string{"systemctl --user restart": "Failed to connect to bus"})
+	m, _ := newManager(t, "linux", map[string]failure{"systemctl --user restart": {"Failed to connect to bus", 1}})
 	_, err := m.Install(testSpec(t))
 	if err == nil || !strings.Contains(err.Error(), "systemctl --user restart "+UnitName) || !strings.Contains(err.Error(), "Failed to connect to bus") {
 		t.Errorf("err = %v, want the command and its output", err)
@@ -185,7 +206,7 @@ func TestUninstallLaunchd(t *testing.T) {
 }
 
 func TestUninstallLaunchdNotLoaded(t *testing.T) {
-	m, f := newManager(t, "darwin", map[string]string{"launchctl print": "Could not find service"})
+	m, f := newManager(t, "darwin", map[string]failure{"launchctl print": noService})
 	if _, err := m.Uninstall(); !errors.Is(err, ErrNotInstalled) {
 		t.Errorf("nothing installed: err = %v, want ErrNotInstalled", err)
 	}
@@ -207,7 +228,7 @@ func TestUninstallLaunchdNotLoaded(t *testing.T) {
 }
 
 func TestUninstallSystemd(t *testing.T) {
-	m, f := newManager(t, "linux", map[string]string{"systemctl --user is-active": "inactive"})
+	m, f := newManager(t, "linux", map[string]failure{"systemctl --user is-active": inactive})
 	if _, err := m.Uninstall(); !errors.Is(err, ErrNotInstalled) {
 		t.Errorf("nothing installed: err = %v, want ErrNotInstalled", err)
 	}
@@ -252,7 +273,7 @@ func TestUninstallSystemdWithoutFile(t *testing.T) {
 func TestInstallLaunchdRetriesFirstBootstrap(t *testing.T) {
 	defer func(d time.Duration) { bootstrapRetry = d }(bootstrapRetry)
 	bootstrapRetry = time.Millisecond
-	m, _ := newManager(t, "darwin", map[string]string{"launchctl print": "Could not find service"})
+	m, _ := newManager(t, "darwin", map[string]failure{"launchctl print": noService})
 	fails := 2
 	run := m.Run
 	m.Run = func(name string, args ...string) ([]byte, error) {
@@ -335,7 +356,7 @@ func TestInstallLaunchdRetriesBootstrapAfterBootout(t *testing.T) {
 func TestArgsRoundTrip(t *testing.T) {
 	args := []string{"/opt/my tools/cases", "--store", `/d/a&b <1> "q" 50% $HOME\x`, "serve", "--as", "line\nbreak"}
 	for _, goos := range []string{"darwin", "linux"} {
-		m, _ := newManager(t, goos, map[string]string{"launchctl print": ""})
+		m, _ := newManager(t, goos, map[string]failure{"launchctl print": noService})
 		if _, err := m.Args(); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s: Args with nothing installed: err = %v", goos, err)
 		}
@@ -359,17 +380,18 @@ func TestArgsRoundTrip(t *testing.T) {
 func TestActive(t *testing.T) {
 	for _, tc := range []struct {
 		goos, query string
+		absent      failure
 	}{
-		{"darwin", "launchctl print gui/501/" + Label},
-		{"linux", "systemctl --user is-active " + UnitName},
+		{"darwin", "launchctl print gui/501/" + Label, noService},
+		{"linux", "systemctl --user is-active " + UnitName, inactive},
 	} {
 		m, f := newManager(t, tc.goos, nil)
 		if active, err := m.Active(); err != nil || !active {
 			t.Errorf("%s: Active = %v, %v", tc.goos, active, err)
 		}
-		m, f2 := newManager(t, tc.goos, map[string]string{tc.query: "inactive"})
+		m, f2 := newManager(t, tc.goos, map[string]failure{tc.query: tc.absent})
 		if active, err := m.Active(); err != nil || active {
-			t.Errorf("%s: Active when the query fails = %v, %v", tc.goos, active, err)
+			t.Errorf("%s: Active with no service = %v, %v", tc.goos, active, err)
 		}
 		for _, calls := range [][]string{f.calls, f2.calls} {
 			if !slices.Equal(calls, []string{tc.query}) {
@@ -381,8 +403,86 @@ func TestActive(t *testing.T) {
 
 // A unit waiting out RestartSec is still the service manager's to restart.
 func TestActiveSystemdWhileRestarting(t *testing.T) {
-	m, _ := newManager(t, "linux", map[string]string{"systemctl --user is-active": "activating\n"})
+	m, _ := newManager(t, "linux", map[string]failure{"systemctl --user is-active": {"activating\n", 3}})
 	if active, err := m.Active(); err != nil || !active {
 		t.Errorf("Active while activating = %v, %v; want true", active, err)
+	}
+}
+
+// managerQueryFailures are ways the query for the service can fail without
+// saying whether it is there: the tool cannot be run, or it cannot reach the
+// service manager.
+var managerQueryFailures = []struct {
+	name, goos string
+	run        Runner
+}{
+	{"no launchctl", "darwin", func(name string, _ ...string) ([]byte, error) {
+		return nil, &exec.Error{Name: name, Err: exec.ErrNotFound}
+	}},
+	{"launchd refuses", "darwin", func(string, ...string) ([]byte, error) {
+		return []byte("Could not print: 5: Input/output error"), exitStatus(5)
+	}},
+	{"no systemctl", "linux", func(name string, _ ...string) ([]byte, error) {
+		return nil, &exec.Error{Name: name, Err: exec.ErrNotFound}
+	}},
+	{"no user bus", "linux", func(string, ...string) ([]byte, error) {
+		return []byte("Failed to connect to bus: No medium found"), exitStatus(1)
+	}},
+}
+
+// A query that fails is an error, not a service that is not loaded.
+func TestActiveReportsQueryFailure(t *testing.T) {
+	for _, tc := range managerQueryFailures {
+		m, _ := newManager(t, tc.goos, nil)
+		m.Run = tc.run
+		if active, err := m.Active(); err == nil {
+			t.Errorf("%s: Active = %v, nil; want an error", tc.name, active)
+		}
+	}
+}
+
+// When the service manager cannot be asked about the service, Install stops
+// before it loads the new file, and Uninstall before it deletes the file or
+// reports nothing installed.
+func TestUninstallStopsOnQueryFailure(t *testing.T) {
+	for _, tc := range managerQueryFailures {
+		m, _ := newManager(t, tc.goos, nil)
+		path, err := m.Install(testSpec(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var calls []string
+		m.Run = func(name string, args ...string) ([]byte, error) {
+			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+			return tc.run(name, args...)
+		}
+		if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.Install(testSpec(t)); err == nil {
+			t.Errorf("%s: Install = nil, want the query's error", tc.name)
+		}
+		if got, _ := os.ReadFile(path); tc.goos == "darwin" && string(got) != "old\n" {
+			t.Errorf("%s: Install replaced the plist after a failed query", tc.name)
+		}
+		if _, err := m.Uninstall(); err == nil {
+			t.Errorf("%s: Uninstall = nil, want the query's error", tc.name)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s: service file gone after a failed query: %v", tc.name, err)
+		}
+		if tc.goos == "darwin" {
+			for _, c := range calls {
+				if !strings.HasPrefix(c, "launchctl print ") {
+					t.Errorf("%s: ran %q after a failed query", tc.name, c)
+				}
+			}
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.Uninstall(); err == nil || errors.Is(err, ErrNotInstalled) {
+			t.Errorf("%s: Uninstall with no file = %v, want the query's error", tc.name, err)
+		}
 	}
 }
