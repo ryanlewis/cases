@@ -9,17 +9,19 @@ import (
 
 // The favicon is an SVG drawn by the server from its query, so the page's CSP
 // needs no data: or blob: images and the page no script to draw it. The layout
-// points <link rel=icon> at Icon's URL, and the tally fragment swaps that link
-// whenever the counts change; the browser fetches the new URL.
+// points <link rel=icon> at Icon's URL, and the tally fragment carries that
+// link whenever the counts change; prefs.js copies its href onto the page's
+// link, and the browser fetches the new URL.
 //
-// With nothing waiting it is the plain mark: a paper tile with a "c". With
-// cases waiting the tile turns to ink and shows the count, 9+ above nine;
-// with a blocking case among them it turns red, the one hue the page gives
-// blocking.
+// With nothing waiting it is the plain mark: a paper tile with a "c". Its
+// stroke spans x 7.9 to 23.4, centred but for a hair more room on the open
+// side. With cases waiting the tile turns to ink and shows the count, 9+ above
+// nine; with a blocking case among them it turns red, the one hue the page
+// gives blocking.
 const (
 	iconMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
 		`<rect x="1" y="1" width="30" height="30" fill="#fbfbfa" stroke="#1a1a18" stroke-width="2"/>` +
-		`<path d="M21 11A7.07 7.07 0 1 0 21 21" fill="none" stroke="#1a1a18" stroke-width="4"/>` +
+		`<path d="M22 11A7.07 7.07 0 1 0 22 21" fill="none" stroke="#1a1a18" stroke-width="4"/>` +
 		`</svg>`
 	iconCount = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
 		`<rect x="0.5" y="0.5" width="31" height="31" fill="%s" stroke="#fbfbfa" stroke-width="1"/>` +

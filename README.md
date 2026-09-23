@@ -698,10 +698,11 @@ number; the title is otherwise `cases` on every page. The tab icon shows the
 same count: a plain `c` tile with none open, the count on a dark tile when cases
 are open (`9+` above nine), and on a red tile when any of them is blocking. A
 parked blocking case does not turn it red. The server draws the icon as SVG at
-`/favicon.svg`, so it needs no script and the page's content security policy
-allows no `data:` images; browsers that do not show SVG tab icons still have the
-title. The counts, the title and the icon follow the store while the page is
-open, as described below.
+`/favicon.svg`, so the page's content security policy allows no `data:` images;
+browsers that do not show SVG tab icons still have the title. The counts, the
+title and the icon follow the store while the page is open, as described below,
+except in Safari, which loads a page's icon once, when the page loads, so its
+tab icon shows the count as of the last page load.
 
 - `/` selects the first case in the inbox. With no open or parked cases it
   shows one inbox zero panel instead of the columns: the cases you answered,
