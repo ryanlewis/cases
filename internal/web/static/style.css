@@ -148,7 +148,8 @@ main { max-width: 60rem; padding: .5rem 1rem 3rem; margin-inline: auto; }
    main to its content where body is a flex column (wide screens below). */
 main:has(> .split) { max-width: none; padding: 0; margin-inline: 0; }
 .split > * { padding: 0 1rem 3rem; }
-/* The case sits in the middle of its column at about 70 characters a line. */
+/* The case sits in the middle of its column, about 70 characters a line in
+   the mono face (more in sans or serif). */
 .work > * { max-width: 40rem; margin-inline: auto; }
 
 /* Page changes cross-fade where the browser has cross-document view

@@ -293,6 +293,17 @@ func TestStyleCentresInboxZero(t *testing.T) {
 	}
 }
 
+// TestStyleSpansTheSplit checks that the split fills the window with the list
+// at its left edge: main's auto margins would shrink it to its content where
+// the body is a flex column, as it is on wide screens.
+func TestStyleSpansTheSplit(t *testing.T) {
+	a := newApp(t)
+	css := a.do("GET", "/static/style.css", nil, nil).Body.String()
+	if !strings.Contains(css, "main:has(> .split) { max-width: none; padding: 0; margin-inline: 0; }") {
+		t.Errorf("style.css lacks the rule that spans main across the window for the split")
+	}
+}
+
 // TestStyleKeepsBoldReadableOnHover pins the rule that stops a bold figure
 // inside a link vanishing when the hover inverts the link: .zero-panel strong
 // sets its own colour, so the hover must win inside the link.
