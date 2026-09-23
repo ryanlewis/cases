@@ -246,7 +246,8 @@ func (s *Server) cases() ([]*store.Case, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cases, bad, err := s.poller.Poll()
-	if errors.Is(err, fs.ErrNotExist) {
+	missing := errors.Is(err, fs.ErrNotExist)
+	if missing {
 		cases, bad, err = nil, nil, nil
 	}
 	if err != nil {
@@ -254,10 +255,14 @@ func (s *Server) cases() ([]*store.Case, error) {
 	}
 	// The poller hands back the same cases while the store is unchanged, and
 	// the notifier and the version have seen them then. An empty first poll
-	// still counts, so the first case to arrive is new.
+	// still counts, so the first case to arrive is new. A store that goes
+	// missing after that leaves the notifier as it was: were the file put
+	// back, its cases would otherwise all be new again.
 	if !s.polled || !slices.Equal(cases, s.seen) {
+		if !missing || !s.polled {
+			s.notifier.Observe(cases)
+		}
 		s.polled, s.seen = true, cases
-		s.notifier.Observe(cases)
 		s.see(cases)
 	}
 	for _, b := range bad {

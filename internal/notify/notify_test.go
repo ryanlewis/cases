@@ -190,6 +190,39 @@ func TestACaseAlreadyAnsweredWhenSeenDoesNotFire(t *testing.T) {
 	}
 }
 
+// The engine forgets a case once it has left the store, so an always-on
+// serve that sees cases opened, closed and pruned keeps only what the live
+// store holds.
+func TestSeenForgetsCasesThatLeaveTheStore(t *testing.T) {
+	db := newDB(t)
+	e := New(NewFeed(), fixedNow)
+	keep := create(t, db, openRec(store.KindFYI, store.UrgencyToday, "Stays"))
+	e.Observe(poll(t, db))
+	for i := range 20 {
+		c := create(t, db, openRec(store.KindFYI, store.UrgencyBlocking, "Passing"))
+		if n := e.Observe(poll(t, db)); n != 1 {
+			t.Fatalf("round %d: opening added %d, want 1", i, n)
+		}
+		must(t)(db.Answer(t.Context(), c.ID, store.AnswerRecord{Ack: true}))
+		must(t)(db.Pickup(t.Context(), c.ID, store.PickupRecord{}))
+		must(t)(db.Close(t.Context(), c.ID, store.CloseRecord{Outcome: "Done."}))
+		e.Observe(poll(t, db))
+		if err := db.Archive(t.Context(), c.ID); err != nil {
+			t.Fatal(err)
+		}
+		if n := e.Observe(poll(t, db)); n != 0 {
+			t.Fatalf("round %d: pruning added %d, want 0", i, n)
+		}
+		if _, ok := e.seen[keep.ID]; len(e.seen) != 1 || !ok {
+			t.Fatalf("round %d: seen = %v, want only %s", i, e.seen, keep.ID)
+		}
+	}
+	// A case still in the store is not new again.
+	if n := e.Observe(poll(t, db)); n != 0 {
+		t.Errorf("unchanged poll added %d, want 0", n)
+	}
+}
+
 func TestItemPayload(t *testing.T) {
 	db := newDB(t)
 	feed := NewFeed()

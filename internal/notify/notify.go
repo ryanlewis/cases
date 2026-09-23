@@ -5,7 +5,9 @@
 // events, by case id and file name, with the ones it has already seen, so an
 // event counts as new when it appears in the store, not by its timestamp: an
 // event that records an earlier time still counts. The first poll only records
-// what is there.
+// what is there. The Engine forgets a case that leaves the store, such as
+// one pruned, so what it keeps is bounded by the live store; a case put back
+// from the archive is new again, and notifies if it is on the human.
 //
 // The rule is fixed for now: a case that is open because the agent opened it,
 // followed up on an answer (a note that reopens the case), resumed it after a
@@ -126,9 +128,9 @@ func (f *Feed) After(after int64) Page {
 type Engine struct {
 	feed *Feed
 	now  func() time.Time
-	// seen holds case id / event file name for every event already looked
-	// at; nil until the first poll.
-	seen map[string]bool
+	// seen holds, for each case in the last poll, the file names of its
+	// events already looked at; nil until the first poll.
+	seen map[string]map[string]bool
 }
 
 // New returns an Engine that adds to feed. now stamps the items; nil means
@@ -145,16 +147,20 @@ func New(feed *Feed, now func() time.Time) *Engine {
 // call records the events already in the store and adds none.
 func (e *Engine) Observe(cases []*store.Case) int {
 	first := e.seen == nil
-	if first {
-		e.seen = map[string]bool{}
-	}
+	// Only the cases in this poll carry over, so a case gone from the store
+	// is forgotten.
+	seen := make(map[string]map[string]bool, len(cases))
 	added := 0
 	for _, c := range cases {
+		files := e.seen[c.ID]
+		if files == nil {
+			files = map[string]bool{}
+		}
+		seen[c.ID] = files
 		fresh := map[string]bool{}
 		for _, ev := range c.Events {
-			key := c.ID + "/" + ev.File
-			if !e.seen[key] {
-				e.seen[key] = true
+			if !files[ev.File] {
+				files[ev.File] = true
 				fresh[ev.File] = true
 			}
 		}
@@ -168,6 +174,7 @@ func (e *Engine) Observe(cases []*store.Case) int {
 		e.feed.add(item(c, ev, name, e.now()))
 		added++
 	}
+	e.seen = seen
 	return added
 }
 
