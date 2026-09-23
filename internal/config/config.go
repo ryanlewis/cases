@@ -80,9 +80,10 @@ var Keys = []Key{
 	{
 		Name:     "listen",
 		Default:  func() string { return "127.0.0.1:8765" },
-		Commands: []string{"serve"},
+		Commands: []string{"serve", "service install"},
 		Comment: []string{
-			"Address cases serve listens on. Same as --listen. Loopback only.",
+			"Address cases serve listens on. Same as --listen on serve and",
+			"service install. Loopback only.",
 		},
 		Example: `listen = "127.0.0.1:8765"`,
 	},
@@ -101,7 +102,7 @@ var Keys = []Key{
 		Name:     "name",
 		Flag:     "as",
 		Default:  func() string { return "" },
-		Commands: []string{"answer", "resume", "serve"},
+		Commands: []string{"answer", "resume", "serve", "service install"},
 		Comment: []string{
 			"Your name, recorded as the actor on answers, parks and resumes from",
 			"cases answer, cases resume and the inbox. Same as --as on those",

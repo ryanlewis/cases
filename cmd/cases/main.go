@@ -14,6 +14,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/ryanlewis/cases/internal/config"
+	"github.com/ryanlewis/cases/internal/service"
 	"github.com/ryanlewis/cases/internal/store"
 )
 
@@ -51,6 +52,7 @@ type CLI struct {
 	Prune    PruneCmd    `cmd:"" help:"Move closed and withdrawn cases older than --age into the store's archive (human). Prints what it would do unless --yes."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 	Status   StatusCmd   `cmd:"" help:"Print where cases serve is running for the store; exits 1 when it is not."`
+	Service  ServiceCmd  `cmd:"" help:"Report on, install and remove cases serve as a user service."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
 	Skill    SkillCmd    `cmd:"" help:"Install, show and list the bundled agent skill."`
 }
@@ -92,6 +94,9 @@ type Deps struct {
 	Context context.Context
 	// OpenURL opens the inbox in a browser. When nil, serve opens nothing.
 	OpenURL func(url string) error
+	// Service is the service manager the service commands use. When nil,
+	// they fail.
+	Service func() (*service.Manager, error)
 }
 
 // exitError ends the process with a specific status and no "Error:" line.
@@ -137,7 +142,7 @@ func main() {
 	}
 
 	db := store.NewDB(cli.Store)
-	deps := &Deps{Store: cli.Store, Cases: db, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser}
+	deps := &Deps{Store: cli.Store, Cases: db, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Poll: time.Second, Config: cfg, OpenURL: openBrowser, Service: service.Default}
 	err = ctx.Run(deps)
 	// Closing the last connection checkpoints the write-ahead log into the
 	// database file.

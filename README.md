@@ -297,9 +297,9 @@ cases config show    # print the defaults the environment and the file establish
 | Key | Sets | Beaten by | Default |
 | --- | --- | --- | --- |
 | `store` | `--store` | `CASES_STORE` | `$XDG_DATA_HOME/cases/cases.db`, or `~/.local/share/cases/cases.db` |
-| `listen` | `--listen` on `serve` | nothing | `127.0.0.1:8765` |
+| `listen` | `--listen` on `serve` and `service install` | nothing | `127.0.0.1:8765` |
 | `no-open` | `--no-open` on `serve` | nothing | `false` (`true` or `false`, quoted or not) |
-| `name` | `--as` on `answer`, `resume` and `serve` | nothing | none: no actor is recorded |
+| `name` | `--as` on `answer`, `resume`, `serve` and `service install` | nothing | none: no actor is recorded |
 | `prune-age` | `--age` on `prune` | nothing | `720h` |
 
 ```toml
@@ -379,6 +379,9 @@ cases skill uninstall AGENT [--path DIR] [-y]
 cases skill show      [AGENT]
 cases skill list
 cases skill check     [AGENT]
+cases service         [--json]
+cases service install [--listen 127.0.0.1:8765] [--as NAME]
+cases service uninstall
 ```
 
 `open` prints the new case id. The other write commands print the id and the
@@ -595,6 +598,66 @@ empty too, with a warning on stderr.
 The check has three limits. It cannot tell a hung serve from a healthy one. A
 store reached by two different paths (a symlink) gets two files. Two serves
 started at the same moment on one store can both pass the check.
+
+### Running serve as a service
+
+`cases service install` sets serve up as a user service that starts at login
+and is started again whenever it stops.
+
+- On macOS it writes a launchd agent,
+  `~/Library/LaunchAgents/com.github.ryanlewis.cases.serve.plist`
+  (`RunAtLoad`, `KeepAlive`), and loads it with
+  `launchctl bootstrap gui/$UID`. Its output goes to
+  `$XDG_STATE_HOME/cases/serve.log`, or `~/.local/state/cases/serve.log`.
+- On Linux it writes a systemd user unit,
+  `$XDG_CONFIG_HOME/systemd/user/cases-serve.service` (or
+  `~/.config/systemd/user`), with `Restart=always`, then runs
+  `systemctl --user daemon-reload`, `enable` and `restart`. Its output goes to
+  the journal: `journalctl --user -u cases-serve`. A user unit stops when you
+  log out unless lingering is on (`loginctl enable-linger`).
+
+The service runs this binary, found by its absolute path, as
+`cases --store STORE --config CONFIG serve --no-open --listen ADDR [--as NAME]`,
+with what install resolved: the store's absolute path, the config file,
+`--listen` and `--as`. The last two default from the `listen` and `name` keys
+in the [config file](#configuration), as they do for serve. It sets `HOME` and
+`XDG_STATE_HOME`, so the service records itself where `cases status` looks.
+Run install again after moving the binary or changing any of those; it
+replaces the file and restarts the service. There is one service per user, so
+installing for another store replaces it.
+
+A crashed serve leaves a stale instance file, which the restarted one
+replaces, as above. While the service holds the address, a `cases serve` you
+start by hand fails. The other way round, an install refuses while a
+serve is running for the store or something holds the address, and names what
+to stop. A reinstall skips the part of that check the loaded service already
+covers: a serve on the same store, or the same address, is the service itself.
+
+`cases service` on its own (also `cases service status`) reports on the
+service and changes nothing:
+
+```
+Installed: /Users/you/Library/LaunchAgents/com.github.ryanlewis.cases.serve.plist
+Runs:      /Users/you/go/bin/cases --store /Users/you/.local/share/cases/cases.db --config /Users/you/.config/cases/config.toml serve --no-open --listen 127.0.0.1:8765
+Store:     /Users/you/.local/share/cases/cases.db
+Listen:    127.0.0.1:8765
+Loaded:    yes (launchctl print gui/501/com.github.ryanlewis.cases.serve)
+Inbox:     http://127.0.0.1:8765/ (pid 4242)
+```
+
+It reads the command back from the file, asks launchd (`launchctl print`) or
+systemd (`systemctl --user is-active`) whether they have the service, and
+checks the service's store for a running inbox as `cases status` does. A
+`Problem:` line names anything that disagrees: installed but not loaded,
+loaded but not answering, loaded with its file gone, a file for another store
+or binary than this command's, or a serve started by hand with no service
+installed. It exits 0 when the service is installed, loaded and answering, and
+1 otherwise. `--json` prints `installed`, `path`, `args`, `store`, `listen`,
+`loaded`, `running`, `url`, `pid` and `problems`.
+
+`cases service uninstall` stops the service and removes its file. It fails
+when there is none. Other systems are not supported; run `cases serve` under
+your own supervisor there.
 
 ### The inbox
 
