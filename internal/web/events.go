@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ func (s *Server) changes() (string, <-chan struct{}) {
 // so no change goes unsent.
 const streamGap = time.Second
 
+// streamWriteTimeout is how long a message on an event stream has to go out.
+// A page that stops reading fills the connection's buffers and a write then
+// blocks, where neither the page going away nor EndStreams can reach it; the
+// deadline ends the stream instead.
+const streamWriteTimeout = 10 * time.Second
+
 // events is an open page's event stream: GET /events?after=V, where V is the
 // version the page was drawn from. It sends the store's version as a message
 // whenever it is not the last one the page has, at once if the store has
@@ -75,18 +82,28 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
+	rc := http.NewResponseController(w)
+	// The server's read timeout bounds reading a request; the stream only
+	// watches for the page going away, so it lifts that deadline itself.
+	_ = rc.SetReadDeadline(time.Time{})
+	// Each write has streamWrite to go out, as does the end of the response
+	// the server writes once the handler returns.
+	send := func(msg string) error {
+		_ = rc.SetWriteDeadline(time.Now().Add(s.streamWrite))
+		if _, err := io.WriteString(w, msg); err != nil {
+			return err
+		}
+		return rc.Flush()
+	}
+	defer func() { _ = rc.SetWriteDeadline(time.Now().Add(s.streamWrite)) }()
 	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w).Flush
-	if flush() != nil {
+	if send("") != nil {
 		return
 	}
 	for {
 		v, moved := s.changes()
 		if v != after {
-			if _, err := fmt.Fprintf(w, "id: %s\ndata: %s\n\n", v, v); err != nil {
-				return
-			}
-			if flush() != nil {
+			if send(fmt.Sprintf("id: %s\ndata: %s\n\n", v, v)) != nil {
 				return
 			}
 			after = v

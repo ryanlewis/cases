@@ -2,19 +2,24 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ryanlewis/cases/internal/store"
 )
@@ -524,4 +529,92 @@ func TestFormsGrowWithTheirText(t *testing.T) {
 			t.Errorf("prefs.js lacks %s", want)
 		}
 	}
+}
+
+// stalledPost sends a post to path on addr with only part of its body, and
+// returns the connection.
+func stalledPost(t *testing.T, addr, path string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	head := "POST " + path + " HTTP/1.1\r\nHost: " + testAddr + "\r\n" +
+		"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nrevision=1"
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// closedWithin fails the test unless the server closes conn within d.
+func closedWithin(t *testing.T, conn net.Conn, d time.Duration) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(d))
+	if _, err := io.Copy(io.Discard, conn); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection is still open after %v", d)
+	}
+}
+
+// startServe runs serve on a fresh loopback listener with the timeouts
+// given, and returns its address, what it returns, and the cancel that
+// shuts it down.
+func startServe(t *testing.T, h http.Handler, read, grace time.Duration) (string, <-chan error, context.CancelFunc) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served, finished := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(finished)
+		served <- serve(ctx, ln, h, nil, read, grace)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-finished
+	})
+	return ln.Addr().String(), served, cancel
+}
+
+// A post whose body stalls partway is dropped at the read timeout, rather
+// than holding its handler and connection.
+func TestServeDropsAStalledPost(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindFYI])
+	addr, _, _ := startServe(t, a.handler, 200*time.Millisecond, 5*time.Second)
+	closedWithin(t, stalledPost(t, addr, "/cases/"+c.ID+"/answer"), 3*time.Second)
+}
+
+// A shutdown that times out closes the connections still open, so nothing
+// outlives Serve.
+func TestServeClosesWhatShutdownLeaves(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindFYI])
+	started := make(chan struct{})
+	var once sync.Once
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		a.handler.ServeHTTP(w, r)
+	})
+	addr, served, cancel := startServe(t, h, time.Minute, 200*time.Millisecond)
+	conn := stalledPost(t, addr, "/cases/"+c.ID+"/answer")
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the post never reached its handler")
+	}
+
+	cancel()
+	select {
+	case err := <-served:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Serve returned %v, want the shutdown's timeout", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+	closedWithin(t, conn, 3*time.Second)
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -227,11 +228,172 @@ func TestEventStreamEndsWhenThePageGoes(t *testing.T) {
 	}
 }
 
+// stallListener hands out connections whose writes stall once stall is
+// closed, as when the page stops reading and the connection's buffers fill:
+// a stalled write waits out its deadline, or for the connection to close.
+type stallListener struct {
+	net.Listener
+	stall chan struct{}
+}
+
+func (l *stallListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &stallConn{Conn: c, stall: l.stall, closed: make(chan struct{})}, nil
+}
+
+type stallConn struct {
+	net.Conn
+	stall     <-chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+	mu        sync.Mutex
+	deadline  time.Time
+}
+
+func (c *stallConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *stallConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *stallConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func (c *stallConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.stall:
+	default:
+		return c.Conn.Write(p)
+	}
+	c.mu.Lock()
+	d := c.deadline
+	c.mu.Unlock()
+	var expired <-chan time.Time
+	if !d.IsZero() {
+		timer := time.NewTimer(time.Until(d))
+		defer timer.Stop()
+		expired = timer.C
+	}
+	select {
+	case <-expired:
+		return 0, os.ErrDeadlineExceeded
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+// A stream whose page has stopped reading ends when a message cannot go out
+// within its write deadline, rather than holding its handler and connection
+// where neither the page going away nor EndStreams can reach them.
+func TestEventStreamEndsWhenThePageStopsReading(t *testing.T) {
+	a := newApp(t)
+	a.server.streamWrite = 100 * time.Millisecond
+	stall := make(chan struct{})
+	gone := make(chan struct{})
+	var once sync.Once
+	ts := httptest.NewUnstartedServer(a.handler)
+	ts.Listener = &stallListener{Listener: ts.Listener, stall: stall}
+	ts.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateClosed {
+			once.Do(func() { close(gone) })
+		}
+	}
+	base := serveApp(t, a, ts)
+	// Close waits for the handler; should it still be stuck, cut it loose
+	// so the test fails rather than hangs.
+	t.Cleanup(ts.CloseClientConnections)
+	openStream(t, base+"/events?after="+pageVersion(t, a.get(t, "/")), "")
+
+	close(stall)
+	a.open(t, openRecords[store.KindFYI])
+	if err := a.server.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stream's handler is still waiting on a page that stopped reading")
+	}
+}
+
+// The server's read timeout, which bounds a post's body, does not end an
+// event stream that outlives it.
+func TestEventStreamOutlivesTheReadTimeout(t *testing.T) {
+	a := newApp(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, ln, a.handler, a.server.EndStreams, 100*time.Millisecond, 5*time.Second) }()
+	t.Cleanup(func() {
+		cancel()
+		<-served
+	})
+	s := openStream(t, "http://"+ln.Addr().String()+"/events?after="+pageVersion(t, a.get(t, "/")), "")
+	select {
+	case err := <-s.ended:
+		t.Fatalf("the stream ended (%v) at the read timeout", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	a.open(t, openRecords[store.KindFYI])
+	if err := a.server.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := s.next(t), pageVersion(t, a.get(t, "/")); got != want {
+		t.Errorf("message %q, want %q", got, want)
+	}
+}
+
+// Serve closes the connections left open when its listener fails, event
+// streams among them, rather than leave them to the process's exit.
+func TestServeClosesStreamsWhenTheListenerFails(t *testing.T) {
+	a := newApp(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- Serve(t.Context(), ln, a.handler, a.server.EndStreams) }()
+	s := openStream(t, "http://"+ln.Addr().String()+"/events?after="+pageVersion(t, a.get(t, "/")), "")
+
+	_ = ln.Close()
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Error("Serve returned nil for a failed listener")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not return when its listener failed")
+	}
+	select {
+	case <-s.ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stream is still open after Serve returned")
+	}
+}
+
 // Serve, given EndStreams, ends the open streams as it shuts down, so it
 // does not wait out its shutdown timeout on them, and the streams end
-// cleanly: the browser then reconnects to the next serve.
+// cleanly: the browser then reconnects to the next serve. That holds for a
+// stream whose last message went out longer ago than a write may take.
 func TestServeEndsOpenStreams(t *testing.T) {
 	a := newApp(t)
+	a.server.streamWrite = 100 * time.Millisecond
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +404,7 @@ func TestServeEndsOpenStreams(t *testing.T) {
 	go func() { served <- Serve(ctx, ln, a.handler, a.server.EndStreams) }()
 	s := openStream(t, "http://"+ln.Addr().String()+"/events?after=0000000000000000", "")
 	s.next(t) // the version, at once, as for any page drawn before it
+	time.Sleep(3 * a.server.streamWrite)
 
 	cancel()
 	select {
