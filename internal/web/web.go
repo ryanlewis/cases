@@ -141,14 +141,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /cases/{id}/resume", s.resume)
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /notifications", s.notifications)
+	mux.HandleFunc("GET /favicon.svg", s.favicon)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
 	return s.logRequests(s.guard(mux))
 }
 
 // IsPoll reports whether r is one of the requests an open tab makes on its
-// own: its event stream, an htmx refresh or a notifications check.
+// own: its event stream, an htmx refresh, the tab icon a page or refresh points
+// at, or a notifications check.
 func IsPoll(r *http.Request) bool {
-	return r.Header.Get("HX-Request") == "true" || r.URL.Path == "/events" || r.URL.Path == "/notifications"
+	switch r.URL.Path {
+	case "/events", "/notifications", "/favicon.svg":
+		return true
+	}
+	return r.Header.Get("HX-Request") == "true"
 }
 
 // Serve runs handler on ln until ctx is cancelled, then shuts down. The
