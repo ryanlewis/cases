@@ -4,7 +4,7 @@ CLI and local web inbox for a store of cases raised by an agent and answered by 
 
 ## Workflow
 
-- Personal repo at github.com/ryanlewis/cases (private). Commit to `main` and push; CI runs on push and pull requests.
+- Personal repo at github.com/ryanlewis/cases (public). Commit to `main` and push; CI runs on push and pull requests.
 - **DO** use Conventional Commits.
 - **NEVER** edit or delete events in a store, by hand or with `sqlite3`. Changes to the record format must keep reading records written by earlier versions; a schema change raises `schemaVersion` in `internal/store/sqlite.go`, and a store with a higher version is refused.
 - **DO** update `modernc.org/libc` together with `modernc.org/sqlite`: the driver only works with the libc version its own go.mod pins.
