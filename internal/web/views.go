@@ -20,6 +20,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
@@ -43,10 +44,28 @@ const htmxSHA256 = "71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145
 // markdown renders bodies. The default renderer omits raw HTML and blanks
 // dangerous link targets, so a body cannot inject markup. The GFM table
 // extension is added so status/comparison tables in bodies render as tables.
+// It writes no column alignment itself, which it would as an inline style the
+// CSP blocks; alignCells gives the cells a class instead.
 var markdown = goldmark.New(
-	goldmark.WithExtensions(extension.Table),
-	goldmark.WithParserOptions(parser.WithASTTransformers(util.Prioritized(newTab{}, 100))),
+	goldmark.WithExtensions(extension.NewTable(extension.WithTableCellAlignMethod(extension.TableCellAlignNone))),
+	goldmark.WithParserOptions(parser.WithASTTransformers(
+		util.Prioritized(newTab{}, 100),
+		util.Prioritized(alignCells{}, 100),
+	)),
 )
+
+// alignCells marks the cells of an aligned table column with a class, align-left,
+// align-center or align-right, which the stylesheet aligns.
+type alignCells struct{}
+
+func (alignCells) Transform(doc *ast.Document, _ text.Reader, _ parser.Context) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if c, ok := n.(*east.TableCell); ok && entering && c.Alignment != east.AlignNone {
+			c.SetAttributeString("class", "align-"+c.Alignment.String())
+		}
+		return ast.WalkContinue, nil
+	})
+}
 
 // newTab makes links that leave the inbox open in a new tab. The attributes
 // are set on the parsed tree here, never taken from the body: goldmark's
