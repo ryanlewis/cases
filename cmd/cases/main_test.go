@@ -34,6 +34,13 @@ func runCases(t *testing.T, stdin string, args ...string) result {
 // arguments name, opened for the one command, as for runCases.
 func runCasesWith(t *testing.T, cases store.Store, stdin string, args ...string) result {
 	t.Helper()
+	return runCasesDeps(t, cases, nil, stdin, args...)
+}
+
+// runCasesDeps is runCasesWith with set, when not nil, called on the Deps
+// before the command runs.
+func runCasesDeps(t *testing.T, cases store.Store, set func(*Deps), stdin string, args ...string) result {
+	t.Helper()
 	var cli CLI
 	var stdout, stderr bytes.Buffer
 	cfg, cfgErr := loadConfig(args)
@@ -64,6 +71,9 @@ func runCasesWith(t *testing.T, cases store.Store, stdin string, args ...string)
 		Stderr: &stderr,
 		Poll:   10 * time.Millisecond,
 		Config: cfg,
+	}
+	if set != nil {
+		set(deps)
 	}
 	err = ctx.Run(deps)
 	return result{stdout.String(), stderr.String(), err}

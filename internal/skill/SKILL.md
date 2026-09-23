@@ -11,7 +11,7 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 - **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is a file on disk that keeps every event, and is shown in a browser. Name the secret or say where it lives instead.
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
 - **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
-- `serve`, `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked.
+- `serve`, `service install` / `service uninstall` (which set serve up as a login service), `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked. Bare `cases service` only reads, and you may run it.
 - **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case "<id>"`.
 
 ## The store
@@ -151,6 +151,7 @@ cases status [--json]
   - Exit 1 with `not running` on stderr: no inbox is running, including one that crashed. Do not start one; tell the human they can answer from `cases serve` or the terminal.
   - Exit 1 with an `Error:` line: the check failed, usually because the inbox's state file is damaged or unreadable (the message names it). Report it to the human; do not fix or delete the file.
 - Running means the process is alive and accepts connections. It cannot tell a hung inbox from a healthy one.
+- `cases service [--json]` says whether the inbox is set up as a login service, whether launchd or systemd has it, and whether it answers, with a `Problem:` line for each disagreement. It only reads. Exit 1 means it is not installed, loaded and answering; report that to the human rather than installing or restarting anything.
 - Only if the `cases` CLI cannot run at all: the state file is `$XDG_STATE_HOME/cases/serve-<slug>-<hash>.json` (default `~/.local/state/cases`), with the same fields as `--json`. A crash can leave it behind, so it may be stale; `cases status` is the authority.
 
 ### `cases pickup`, `cases note`, `cases close`, `cases withdraw`
