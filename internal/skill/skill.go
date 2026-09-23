@@ -10,7 +10,9 @@ package skill
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -177,13 +179,18 @@ func (s Status) String() string {
 	}
 }
 
-// Check compares the agent's files under dir with the bundled rendering.
-func Check(a Agent, dir string) Status {
+// Check compares the agent's files under dir with the bundled rendering. Only
+// a file that does not exist counts as absent: any other error reading one is
+// returned, with Stale, since what is there cannot be known to match.
+func Check(a Agent, dir string) (Status, error) {
 	present, same := 0, 0
 	for name, content := range a.Files() {
 		got, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return Stale, err
 		}
 		present++
 		if bytes.Equal(got, content) {
@@ -192,11 +199,11 @@ func Check(a Agent, dir string) Status {
 	}
 	switch {
 	case present == 0:
-		return NotInstalled
+		return NotInstalled, nil
 	case same == len(a.Files()):
-		return Installed
+		return Installed, nil
 	default:
-		return Stale
+		return Stale, nil
 	}
 }
 

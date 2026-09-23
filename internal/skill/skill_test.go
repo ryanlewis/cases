@@ -1,6 +1,8 @@
 package skill
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,8 +270,8 @@ func TestInstallExistsUninstall(t *testing.T) {
 				t.Errorf("InstalledFiles = %v, want [SKILL.md]", got)
 			}
 
-			if got := Check(a, dir); got != Installed {
-				t.Errorf("after Install, Check = %v, want installed", got)
+			if got, err := Check(a, dir); err != nil || got != Installed {
+				t.Errorf("after Install, Check = %v, %v, want installed", got, err)
 			}
 
 			// Install is idempotent (overwrites)
@@ -298,22 +300,22 @@ func TestCheckAndInstallCompareBytes(t *testing.T) {
 			a, _ := Lookup(name)
 			path := filepath.Join(dir, "SKILL.md")
 
-			if got := Check(a, dir); got != NotInstalled {
-				t.Errorf("empty dir: Check = %v, want not installed", got)
+			if got, err := Check(a, dir); err != nil || got != NotInstalled {
+				t.Errorf("empty dir: Check = %v, %v, want not installed", got, err)
 			}
 
 			if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if got := Check(a, dir); got != Stale {
-				t.Errorf("different SKILL.md: Check = %v, want stale", got)
+			if got, err := Check(a, dir); err != nil || got != Stale {
+				t.Errorf("different SKILL.md: Check = %v, %v, want stale", got, err)
 			}
 
 			if err := Install(a, dir); err != nil {
 				t.Fatalf("Install: %v", err)
 			}
-			if got := Check(a, dir); got != Installed {
-				t.Errorf("after Install: Check = %v, want installed", got)
+			if got, err := Check(a, dir); err != nil || got != Installed {
+				t.Errorf("after Install: Check = %v, %v, want installed", got, err)
 			}
 
 			// A matching file is not written again, so its mtime stays put.
@@ -330,6 +332,31 @@ func TestCheckAndInstallCompareBytes(t *testing.T) {
 			}
 			if !fi.ModTime().Equal(old) {
 				t.Errorf("identical Install rewrote SKILL.md: mtime %v, want %v", fi.ModTime(), old)
+			}
+		})
+	}
+}
+
+// A file that is there but cannot be read is not an absent one: Check
+// returns the error rather than NotInstalled.
+func TestCheckReportsUnreadableFile(t *testing.T) {
+	for _, name := range allAgents {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			a, _ := Lookup(name)
+			path := filepath.Join(dir, "SKILL.md")
+			if err := os.WriteFile(path, []byte("mine\n"), 0o200); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.ReadFile(path); err == nil {
+				t.Skip("mode 0200 does not stop this user reading the file")
+			}
+			got, err := Check(a, dir)
+			if err == nil || errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Check = %v, %v, want the read error", got, err)
+			}
+			if got == NotInstalled {
+				t.Error("Check called an unreadable skill not installed")
 			}
 		})
 	}
