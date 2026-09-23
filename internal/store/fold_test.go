@@ -631,6 +631,32 @@ func TestAnswerNeedNotSeeALabelAmend(t *testing.T) {
 	}
 }
 
+// AmendSeq names the last amend that changed the question, the one an answer
+// must have seen: an amend that only adds labels leaves it where it was.
+func TestAmendSeq(t *testing.T) {
+	labels := agent(EventAmend, AmendRecord{Labels: []string{"round 3"}})
+	for _, tt := range []struct {
+		name  string
+		steps []step
+		want  int
+	}{
+		{name: "never amended", steps: []step{agent(EventOpen, openOf(KindDecision))}, want: 0},
+		{name: "only labels", steps: []step{agent(EventOpen, openOf(KindDecision)), labels}, want: 0},
+		{name: "an option, then labels", steps: []step{agent(EventOpen, openOf(KindDecision)), agent(EventAmend, AmendRecord{Options: []string{"Vendor it"}}), labels}, want: 2},
+		{name: "a body, then a note", steps: []step{agent(EventOpen, openOf(KindQuestion)), agent(EventAmend, AmendRecord{Body: "Now with the log."}), noteStep}, want: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, err := fold(t, tt.steps...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.AmendSeq(); got != tt.want {
+				t.Errorf("AmendSeq = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 // The answer is checked against the case as amended, not as it was opened.
 func TestAnswerIsCheckedAgainstTheAmendedCase(t *testing.T) {
 	approval := openOf(KindApproval)

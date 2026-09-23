@@ -33,6 +33,12 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type testApp struct {
 	db      *store.DB
 	server  *Server
@@ -393,9 +399,7 @@ func TestRequestsAreLogged(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
-	a.log.mu.Lock()
-	log := a.log.buf.String()
-	a.log.mu.Unlock()
+	log := a.log.String()
 	if !strings.Contains(log, "GET /done 200") || strings.Contains(log, "/fragments/inbox") {
 		t.Errorf("log = %q", log)
 	}
@@ -489,7 +493,10 @@ func TestFormsGrowWithTheirText(t *testing.T) {
 	if strings.Contains(body, `type="text"`) {
 		t.Error("case page still has a single-line text input")
 	}
-	for _, want := range []string{`<textarea name="note.` + c.Rows[0].ID + `" rows="1">`, `<textarea name="note" rows="3">`} {
+	for _, want := range []string{
+		`<textarea name="note.` + c.Rows[0].ID + `" rows="1" id="` + fieldID("note."+c.Rows[0].ID) + `" hx-preserve>`,
+		`<textarea name="note" rows="3" id="` + fieldID("note") + `" hx-preserve>`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("case page lacks %s", want)
 		}

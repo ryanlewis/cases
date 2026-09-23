@@ -217,8 +217,8 @@ main > .card { padding: .75rem 1rem; margin: 0 0 .5rem; border: 1px solid var(--
 main > .empty { margin: 0; }
 
 /* Inbox zero: one statement across the page in place of two empty columns.
-   It rises in once when / loads; the polled list inside it is swapped
-   without the section, so the reveal does not replay every two seconds. */
+   It rises in once when / loads; the list inside it is refreshed without
+   the section, so the reveal does not replay on each refresh. */
 .zero { padding-top: 1rem; animation: zero-in .4s ease-out both; }
 /* The panel keeps the width main gave it and sits in the middle of the page;
    narrower than that, it spans the page as before. The width holds it there

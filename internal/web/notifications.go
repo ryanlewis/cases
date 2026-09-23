@@ -35,8 +35,9 @@ func (s *Server) notifications(w http.ResponseWriter, r *http.Request) {
 }
 
 // Poll reads the store through the server's poller, which also feeds the
-// notifier. serve calls it on a ticker so notifications are queued while no
-// tab is asking.
+// notifier and wakes the event streams when the store has changed. serve
+// calls it on a ticker, so notifications are queued, and open pages learn of
+// changes, without any tab asking.
 func (s *Server) Poll() error {
 	_, err := s.cases()
 	return err

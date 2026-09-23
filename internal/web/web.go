@@ -1,6 +1,8 @@
 // Package web serves the case store as a small local web app: an inbox, a
 // case page with a response form shaped by kind, and a done list. Pages are
-// rendered on the server; htmx only refreshes the inbox and the thread.
+// rendered on the server. An open page holds an event stream that says when
+// the store has changed, and htmx then refreshes the inbox, the tally and
+// the case shown.
 package web
 
 import (
@@ -11,6 +13,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -53,13 +56,25 @@ type Server struct {
 	// address and its localhost spelling, on the listen port.
 	hosts map[string]bool
 
-	mu     sync.Mutex // guards poller, warned and notifier
+	mu     sync.Mutex // guards the fields from poller to moved
 	poller store.CasePoller
 	warned map[string]bool
 	// notifier sees every poll and queues a notification on feed for each
 	// case that lands on the human.
 	notifier *notify.Engine
 	feed     *notify.Feed
+	// polled is set once a poll has read the store, and seen is the cases
+	// the last one read.
+	polled bool
+	seen   []*store.Case
+	// version is the version of the cases the last poll read, and moved is
+	// closed when a poll finds they have changed, which wakes the event
+	// streams.
+	version string
+	moved   chan struct{}
+	// stop is closed by EndStreams.
+	stop     chan struct{}
+	stopOnce sync.Once
 
 	logMu sync.Mutex
 }
@@ -85,6 +100,10 @@ func New(cases store.Store, listen string, log io.Writer) (*Server, error) {
 		poller: cases.NewPoller(),
 		warned: map[string]bool{},
 		feed:   notify.NewFeed(),
+		// Until a poll reads the store, it is taken to be empty.
+		version: versionOf(nil),
+		moved:   make(chan struct{}),
+		stop:    make(chan struct{}),
 	}
 	s.notifier = notify.New(s.feed, nil)
 	names := []string{host, "localhost"}
@@ -116,23 +135,30 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /fragments/tally", s.tallyFragment)
 	mux.HandleFunc("GET /done", s.done)
 	mux.HandleFunc("GET /cases/{id}", s.casePage)
-	mux.HandleFunc("GET /cases/{id}/thread", s.threadFragment)
+	mux.HandleFunc("GET /cases/{id}/view", s.caseFragment)
+	mux.HandleFunc("GET /cases/{id}/thread", s.oldThread)
 	mux.HandleFunc("POST /cases/{id}/answer", s.answer)
 	mux.HandleFunc("POST /cases/{id}/resume", s.resume)
+	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /notifications", s.notifications)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
 	return s.logRequests(s.guard(mux))
 }
 
-// IsPoll reports whether r is one of the requests an open tab repeats on its
-// own: an htmx refresh or a notifications check.
+// IsPoll reports whether r is one of the requests an open tab makes on its
+// own: its event stream, an htmx refresh or a notifications check.
 func IsPoll(r *http.Request) bool {
-	return r.Header.Get("HX-Request") == "true" || r.URL.Path == "/notifications"
+	return r.Header.Get("HX-Request") == "true" || r.URL.Path == "/events" || r.URL.Path == "/notifications"
 }
 
-// Serve runs handler on ln until ctx is cancelled, then shuts down.
-func Serve(ctx context.Context, ln net.Listener, handler http.Handler) error {
+// Serve runs handler on ln until ctx is cancelled, then shuts down. The
+// shutdown calls onShutdown first, if it is not nil, to end requests that
+// would not end on their own, such as the event streams EndStreams ends.
+func Serve(ctx context.Context, ln net.Listener, handler http.Handler, onShutdown func()) error {
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	if onShutdown != nil {
+		srv.RegisterOnShutdown(onShutdown)
+	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
@@ -189,9 +215,14 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the writer's Flush, which the
+// event stream needs.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // logRequests writes one line per request. Successful polls are left out: an
-// open tab refreshes by htmx every two seconds and asks for notifications every
-// five, and they would bury everything else.
+// open tab holds an event stream, refreshes by htmx each time the store
+// changes and asks for notifications every five seconds, and they would bury
+// everything else.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -210,15 +241,19 @@ func (s *Server) cases() ([]*store.Case, error) {
 	defer s.mu.Unlock()
 	cases, bad, err := s.poller.Poll()
 	if errors.Is(err, fs.ErrNotExist) {
-		// An empty first poll still counts, so the first case to arrive
-		// is new.
-		s.notifier.Observe(nil)
-		return nil, nil
+		cases, bad, err = nil, nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	s.notifier.Observe(cases)
+	// The poller hands back the same cases while the store is unchanged, and
+	// the notifier and the version have seen them then. An empty first poll
+	// still counts, so the first case to arrive is new.
+	if !s.polled || !slices.Equal(cases, s.seen) {
+		s.polled, s.seen = true, cases
+		s.notifier.Observe(cases)
+		s.see(cases)
+	}
 	for _, b := range bad {
 		if msg := b.Error(); !s.warned[msg] {
 			s.warned[msg] = true

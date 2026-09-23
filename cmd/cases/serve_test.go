@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -90,6 +91,56 @@ func TestServeAnswersAndStops(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not stop")
+	}
+}
+
+// An open page is told of a case the CLI opens by serve's own reads of the
+// store, without asking, and serve stops at once with the page's event
+// stream still open rather than waiting out its shutdown timeout on it.
+func TestServePushesChangesAndStopsWithAStreamOpen(t *testing.T) {
+	storePath := newStore(t)
+	openDecision(t, storePath)
+	base, stop := startServe(t, storePath)
+
+	resp, err := http.Get(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	events := regexp.MustCompile(`data-events="/(events\?after=[0-9a-f]+)"`).FindStringSubmatch(string(page))
+	if events == nil {
+		t.Fatalf("the inbox names no event stream:\n%s", page)
+	}
+	stream, err := http.Get(base + events[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	ids := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(stream.Body)
+		for sc.Scan() {
+			if id, ok := strings.CutPrefix(sc.Text(), "id: "); ok {
+				select {
+				case ids <- id:
+				default:
+				}
+			}
+		}
+	}()
+
+	openDecision(t, storePath)
+	select {
+	case <-ids:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the page was not told of the new case")
+	}
+
+	// Serve waiting on the stream would take its 5s shutdown timeout and
+	// return "context deadline exceeded".
+	if err := stop(); err != nil {
+		t.Errorf("serve returned %v", err)
 	}
 }
 
@@ -276,7 +327,7 @@ func TestServeQueuesNotificationsWithNoTabOpen(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		pollForNotifications(ctx, srv, 10*time.Millisecond)
+		pollStore(ctx, srv, 10*time.Millisecond)
 	}()
 
 	openDecision(t, storePath)
