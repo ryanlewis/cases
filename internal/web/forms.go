@@ -52,7 +52,7 @@ func answerFromForm(c *store.Case, f url.Values) (rec store.AnswerRecord, park b
 		for _, row := range c.Rows {
 			verdict := f.Get("verdict." + row.ID)
 			if verdict == "" {
-				return rec, false, fmt.Errorf("choose approve, hold or reject for %q", row.Label)
+				return rec, false, fmt.Errorf("choose approve, hold or don't run for %q", row.Label)
 			}
 			rec.Rows = append(rec.Rows, store.RowAnswer{ID: row.ID, Verdict: verdict, Note: strings.TrimSpace(f.Get("note." + row.ID))})
 		}

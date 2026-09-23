@@ -283,6 +283,8 @@ label { display: block; margin: .5rem 0; }
 label.choice { display: flex; align-items: center; gap: .75rem; min-height: 2.75rem; margin: 0; padding: 0 .5rem; cursor: pointer; }
 label.choice:hover { background: var(--bg-1); }
 label.choice:has(:checked) { background: var(--fg); color: var(--bg); }
+label.choice .hint { color: var(--fg-2); font-size: .8125rem; }
+label.choice:has(:checked) .hint { color: inherit; }
 /* Drawn rather than native: a native radio in dark mode is a filled grey disc
    that reads as chosen. Empty is a ring, chosen is a ring with a dot in it
    (○ / ◉): the chosen row inverts, so a solid disc there is only a blob. */

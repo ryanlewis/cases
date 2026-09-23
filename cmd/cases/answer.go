@@ -14,7 +14,7 @@ type AnswerCmd struct {
 
 	Option   int      `help:"decision: choose option N (1-based)." xor:"response" placeholder:"N"`
 	Other    bool     `help:"decision: Other, see note (needs --note)." xor:"response"`
-	Row      []string `help:"approval: a verdict per row as id=approve|hold|reject, optionally id=verdict:note. Repeat for every row." xor:"response" sep:"none" placeholder:"ID=VERDICT"`
+	Row      []string `help:"approval: a verdict per row as id=approve|hold|reject (approve: run it; hold: not now, ask again later; reject: never run this row), optionally id=verdict:note. Repeat for every row." xor:"response" sep:"none" placeholder:"ID=VERDICT"`
 	Accept   bool     `help:"signoff: accept." xor:"response"`
 	Changes  bool     `help:"signoff: request changes (needs --note)." xor:"response"`
 	Text     string   `help:"stuck: guidance for the agent. question: the reply." xor:"response"`

@@ -223,7 +223,7 @@ closing a case that has not been picked up, is refused and nothing is written.
 | Kind | Open with | Answer with |
 | --- | --- | --- |
 | `decision` | one or more `options` | `choice` (1-based option number), or `other` with a note |
-| `approval` | `rows`, each with `id`, `label`, `script` (the text itself), `link` and an optional `note` shown under the label | a verdict per row: `approve`, `hold` or `reject`, each with an optional note |
+| `approval` | `rows`, each with `id`, `label`, `script` (the text itself), `link` and an optional `note` shown under the label | a verdict per row: `approve` (run it), `hold` (not now, ask again later) or `reject` (never run this row, shown as "don't run" in the CLI and the web inbox), each with an optional note |
 | `signoff` | | `accept`, or `changes` with a note |
 | `stuck` | | guidance `text`; parking is a separate `park` event |
 | `question` | | reply `text` |
