@@ -75,6 +75,8 @@ type Server struct {
 	// stop is closed by EndStreams.
 	stop     chan struct{}
 	stopOnce sync.Once
+	// streamWrite is how long a message on an event stream has to go out.
+	streamWrite time.Duration
 
 	logMu sync.Mutex
 }
@@ -101,9 +103,10 @@ func New(cases store.Store, listen string, log io.Writer) (*Server, error) {
 		warned: map[string]bool{},
 		feed:   notify.NewFeed(),
 		// Until a poll reads the store, it is taken to be empty.
-		version: versionOf(nil),
-		moved:   make(chan struct{}),
-		stop:    make(chan struct{}),
+		version:     versionOf(nil),
+		moved:       make(chan struct{}),
+		stop:        make(chan struct{}),
+		streamWrite: streamWriteTimeout,
 	}
 	s.notifier = notify.New(s.feed, nil)
 	names := []string{host, "localhost"}
@@ -160,8 +163,21 @@ func IsPoll(r *http.Request) bool {
 // Serve runs handler on ln until ctx is cancelled, then shuts down. The
 // shutdown calls onShutdown first, if it is not nil, to end requests that
 // would not end on their own, such as the event streams EndStreams ends.
+// Connections still open when the shutdown times out are closed.
 func Serve(ctx context.Context, ln net.Listener, handler http.Handler, onShutdown func()) error {
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	return serve(ctx, ln, handler, onShutdown, readTimeout, shutdownTimeout)
+}
+
+// readTimeout bounds reading a request, body and all, so a client that stalls
+// partway through a post does not hold its handler. It does not end the event
+// stream, which lifts the deadline once its request is read.
+const readTimeout = 30 * time.Second
+
+// shutdownTimeout is how long a shutdown waits for requests to finish.
+const shutdownTimeout = 5 * time.Second
+
+func serve(ctx context.Context, ln net.Listener, handler http.Handler, onShutdown func(), read, grace time.Duration) error {
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: read}
 	if onShutdown != nil {
 		srv.RegisterOnShutdown(onShutdown)
 	}
@@ -169,11 +185,15 @@ func Serve(ctx context.Context, ln net.Listener, handler http.Handler, onShutdow
 	go func() { errc <- srv.Serve(ln) }()
 	select {
 	case err := <-errc:
+		// The listener failed: close the connections it left open, event
+		// streams among them.
+		_ = srv.Close()
 		return err
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
 		if err := srv.Shutdown(shutdown); err != nil {
+			_ = srv.Close()
 			return err
 		}
 		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
@@ -221,8 +241,8 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets http.ResponseController reach the writer's Flush, which the
-// event stream needs.
+// Unwrap lets http.ResponseController reach the writer's Flush and deadlines,
+// which the event stream needs.
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // logRequests writes one line per request. Successful polls are left out: an
