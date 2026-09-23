@@ -152,6 +152,60 @@ func TestSkillCheck(t *testing.T) {
 	}
 }
 
+// An installed skill that cannot be read is not overwritten without -y, and
+// list and check report it rather than calling it not installed.
+func TestSkillUnreadable(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	dir := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "skills", "cases")
+	path := filepath.Join(dir, "SKILL.md")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("mine\n"), 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("mode 0200 does not stop this user reading the file")
+	}
+
+	r := runCases(t, "", "skill", "install", "claude")
+	if r.err == nil || !strings.Contains(r.err.Error(), "cannot read") || !strings.Contains(r.err.Error(), "-y") {
+		t.Errorf("install over an unreadable skill: err = %v, want a refusal naming -y", r.err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "mine\n" {
+		t.Error("refused install overwrote SKILL.md")
+	}
+	if err := os.Chmod(path, 0o200); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := mustRun(t, "skill", "list"); !strings.Contains(out, dir+"  (unreadable: ") {
+		t.Errorf("list = %q, want %s unreadable", out, dir)
+	}
+	r = runCases(t, "", "skill", "check", "claude")
+	var ee *exitError
+	if !errors.As(r.err, &ee) || ee.code != 1 {
+		t.Errorf("check: err = %v, want exit 1", r.err)
+	}
+	if !strings.Contains(r.stderr, "claude: cannot read the skill at "+dir) {
+		t.Errorf("check: stderr = %q, want the unreadable skill named", r.stderr)
+	}
+
+	out := mustRun(t, "skill", "install", "claude", "-y")
+	if !strings.Contains(out, "Installed claude skill to "+dir) {
+		t.Errorf("install -y = %q", out)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != skill.SkillMD() {
+		t.Error("install -y did not overwrite the unreadable SKILL.md")
+	}
+}
+
 func TestSkillUnknownAgent(t *testing.T) {
 	r := runCases(t, "", "skill", "install", "bogus", "--path", t.TempDir())
 	if r.err == nil || !strings.Contains(r.err.Error(), "supported") {

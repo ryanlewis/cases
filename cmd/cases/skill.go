@@ -18,7 +18,7 @@ type SkillCmd struct {
 	Uninstall SkillUninstallCmd `cmd:"" help:"Remove the bundled agent skill for an AI coding agent."`
 	Show      SkillShowCmd      `cmd:"" help:"Print the skill's SKILL.md, or the files rendered for an agent."`
 	List      SkillListCmd      `cmd:"" help:"List supported agents, where the skill goes and whether it is installed, stale or not installed."`
-	Check     SkillCheckCmd     `cmd:"" help:"Exit 1 when an installed skill differs from the one in this binary."`
+	Check     SkillCheckCmd     `cmd:"" help:"Exit 1 when an installed skill differs from the one in this binary or cannot be read."`
 }
 
 type SkillInstallCmd struct {
@@ -32,7 +32,11 @@ func (c *SkillInstallCmd) Run(d *Deps) error {
 	if err != nil {
 		return err
 	}
-	switch skill.Check(agent, dir) {
+	status, err := skill.Check(agent, dir)
+	if err != nil && !c.Yes {
+		return fmt.Errorf("cannot read the skill at %s: %w; pass -y to overwrite it", dir, err)
+	}
+	switch status {
 	case skill.Installed:
 		fmt.Fprintf(d.Stdout, "%s skill at %s is already up to date\n", agent.Name(), dir)
 		return nil
@@ -116,7 +120,12 @@ func (c *SkillListCmd) Run(d *Deps) error {
 			fmt.Fprintf(d.Stdout, "%-10s (path unresolved: %v)\n", a.Name(), err)
 			continue
 		}
-		fmt.Fprintf(d.Stdout, "%-10s %s  (%s)\n", a.Name(), dir, skill.Check(a, dir))
+		status, err := skill.Check(a, dir)
+		if err != nil {
+			fmt.Fprintf(d.Stdout, "%-10s %s  (unreadable: %v)\n", a.Name(), dir, err)
+			continue
+		}
+		fmt.Fprintf(d.Stdout, "%-10s %s  (%s)\n", a.Name(), dir, status)
 	}
 	fmt.Fprintf(d.Stdout, "\nUse `cases skill install <agent>` (agents: %s)\n", skill.AgentNames())
 	return nil
@@ -126,8 +135,8 @@ type SkillCheckCmd struct {
 	Agent string `arg:"" optional:"" help:"Check only this agent (claude, codex or pi); by default check every agent."`
 }
 
-// Run prints each stale skill and exits 1 if there is one. A skill that is
-// not installed is not a failure.
+// Run prints each stale skill and exits 1 if there is one, or if a skill
+// cannot be read. A skill that is not installed is not a failure.
 func (c *SkillCheckCmd) Run(d *Deps) error {
 	agents := skill.Agents()
 	if c.Agent != "" {
@@ -137,7 +146,7 @@ func (c *SkillCheckCmd) Run(d *Deps) error {
 		}
 		agents = []skill.Agent{a}
 	}
-	stale := 0
+	failed := 0
 	for _, a := range agents {
 		dir, err := a.DefaultDir()
 		if err != nil {
@@ -149,12 +158,18 @@ func (c *SkillCheckCmd) Run(d *Deps) error {
 			fmt.Fprintf(d.Stderr, "%s: path unresolved: %v\n", a.Name(), err)
 			continue
 		}
-		if skill.Check(a, dir) == skill.Stale {
-			stale++
+		status, err := skill.Check(a, dir)
+		if err != nil {
+			failed++
+			fmt.Fprintf(d.Stderr, "%s: cannot read the skill at %s: %v\n", a.Name(), dir, err)
+			continue
+		}
+		if status == skill.Stale {
+			failed++
 			fmt.Fprintf(d.Stdout, "%s skill at %s differs from this binary; run `cases skill install %s`\n", a.Name(), dir, a.Name())
 		}
 	}
-	if stale > 0 {
+	if failed > 0 {
 		return &exitError{code: 1}
 	}
 	return nil
