@@ -9,6 +9,7 @@
 <script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js"></script>
+<script src="/static/keys.js" defer></script>
 </head>
 <body{{with .Events}} data-events="{{.}}"{{end}}>
 <header class="top">
@@ -56,6 +57,19 @@
     <button type="button" id="notify-allow" hidden>allow notifications</button>
   </fieldset>
   <div class="actions"><button type="button" id="options-reset">reset</button><button type="submit">close</button></div>
+</form>
+</dialog>
+<dialog id="keys-dialog" class="options" aria-labelledby="keys-title">
+<form method="dialog">
+  <h2 class="section" id="keys-title">keys</h2>
+  <dl class="keys">
+    <dt><kbd>⌘</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>send the answer, even from a text field</dd>
+    <dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>choose that option (decision, sign-off, stuck)</dd>
+    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>next or previous case in the inbox</dd>
+    <dt><kbd>?</kbd></dt><dd>this list</dd>
+  </dl>
+  <p class="label">only the send keys work while typing in a field.</p>
+  <div class="actions"><button type="submit">close</button></div>
 </form>
 </dialog>
 </body>
