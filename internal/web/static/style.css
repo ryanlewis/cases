@@ -138,6 +138,9 @@ dialog.options {
 }
 dialog.options form { padding: 1rem; }
 dialog.options h2.section { margin-top: 0; }
+dl.keys { display: grid; grid-template-columns: auto 1fr; gap: .5rem 1rem; margin: 0 0 1rem; }
+dl.keys dd { margin: 0; }
+kbd { font-family: var(--mono); font-size: .875em; padding: 0 .25rem; border: 1px solid var(--rule-strong); }
 dialog.options::backdrop { background: rgba(0, 0, 0, .4); background: color-mix(in srgb, var(--fg) 25%, transparent); }
 
 main { max-width: 60rem; padding: .5rem 1rem 3rem; margin-inline: auto; }

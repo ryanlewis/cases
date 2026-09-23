@@ -183,24 +183,27 @@
       if (e.target.name === NOTIFY.name && e.target.value !== "off" && permission() === "default") ask();
     });
     if (allow) allow.addEventListener("click", ask);
-    // The dialog closes itself on Escape and on its close button (a
+    // A dialog closes itself on Escape and on its close button (a
     // method=dialog form); a click that lands on the dialog element and not
     // its form is a click on the backdrop. The press must start there too, so
     // a drag that begins inside the form and ends outside does not close it.
+    // This holds for the options dialog and the keys dialog keys.js opens.
+    Array.prototype.forEach.call(document.querySelectorAll("dialog.options"), function (d) {
+      var downOnBackdrop = false;
+      d.addEventListener("pointerdown", function (e) {
+        downOnBackdrop = e.target === d;
+      });
+      d.addEventListener("click", function (e) {
+        if (e.target === d && downOnBackdrop) d.close();
+        downOnBackdrop = false;
+      });
+    });
     var dialog = document.getElementById("options-dialog");
     var open = document.getElementById("options-open");
     if (dialog && open && dialog.showModal) {
       open.addEventListener("click", function () {
         show();
         dialog.showModal();
-      });
-      var downOnBackdrop = false;
-      dialog.addEventListener("pointerdown", function (e) {
-        downOnBackdrop = e.target === dialog;
-      });
-      dialog.addEventListener("click", function (e) {
-        if (e.target === dialog && downOnBackdrop) dialog.close();
-        downOnBackdrop = false;
       });
     }
     var reset = document.getElementById("options-reset");

@@ -779,6 +779,23 @@ dropped. Links to other sites open in a new tab, with
 `http://` or `https://`, such as a file path, is shown as text, not a link. htmx is included in the binary; nothing is fetched
 from the network.
 
+#### Keys
+
+| Key | Does |
+|---|---|
+| Cmd+Enter or Ctrl+Enter | sends the open case's answer from anywhere on its page, text fields included, except a focused link, which opens in a new tab |
+| `1` to `9` | chooses that option on a decision, sign-off or stuck case: the options in the order shown, so on a decision the number after the last option is `other, see note` |
+| `j`, `k` | opens the next or previous case in the inbox list |
+| `?` | lists these keys |
+
+A key sends the form as the send button does: the browser checks the required
+fields first, and a form older than the case is refused in the same way. It
+sends once; pressing it again while the post is on its way does nothing, for
+up to 10 seconds. The other keys do nothing while the cursor is in a text
+field, while a dialog is open, or with Cmd, Ctrl or Alt held. An approval has a
+choice per row, even with one row, so the number keys leave it alone; the arrow
+keys move between a row's verdicts.
+
 ### Browser notifications
 
 An open inbox tab can show a desktop notification when a case lands on you.
