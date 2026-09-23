@@ -262,6 +262,9 @@ pre code { padding: 0; background: none; }
 .body th, .body td { padding: .25rem .75rem .25rem 0; text-align: left; vertical-align: top; }
 .body th { border-bottom: 1px solid var(--rule-strong); }
 .body td { border-bottom: 1px dashed var(--rule); }
+.body .align-left { text-align: left; }
+.body .align-center { text-align: center; }
+.body .align-right { text-align: right; }
 .links { padding-left: 0; list-style: none; font-size: .8125rem; }
 .links li::before { content: "-> "; content: "-> " / ""; color: var(--fg-3); }
 

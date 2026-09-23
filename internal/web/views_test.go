@@ -394,6 +394,36 @@ func TestBodyRendersGFMTable(t *testing.T) {
 	}
 }
 
+// TestBodyAlignsTableColumnsByClass checks that an aligned column is aligned
+// by a class the stylesheet styles, not by an inline style the CSP blocks.
+func TestBodyAlignsTableColumnsByClass(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, store.OpenRecord{
+		Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Aligned",
+		Body: "| Name | Size | Count | Note |\n| :--- | :---: | ---: | --- |\n| bun | 1.2 | 3 | ok |\n",
+	})
+
+	page := a.get(t, "/cases/"+c.ID)
+	for _, part := range []string{
+		`<th class="align-left">Name</th>`, `<th class="align-center">Size</th>`, `<th class="align-right">Count</th>`, "<th>Note</th>",
+		`<td class="align-left">bun</td>`, `<td class="align-center">1.2</td>`, `<td class="align-right">3</td>`, "<td>ok</td>",
+	} {
+		if !strings.Contains(page, part) {
+			t.Errorf("page missing %q:\n%s", part, page)
+		}
+	}
+	if strings.Contains(page, "style=") || strings.Contains(page, " align=") {
+		t.Errorf("page has an inline style or align attribute:\n%s", page)
+	}
+
+	css := a.get(t, "/static/style.css")
+	for _, rule := range []string{".body .align-left { text-align: left; }", ".body .align-center { text-align: center; }", ".body .align-right { text-align: right; }"} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("style.css lacks %s", rule)
+		}
+	}
+}
+
 func TestStuckParkAndResume(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, openRecords[store.KindStuck])
