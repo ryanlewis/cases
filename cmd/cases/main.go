@@ -52,6 +52,7 @@ type CLI struct {
 	Prune    PruneCmd    `cmd:"" help:"Move closed and withdrawn cases older than --age into the store's archive (human). Prints what it would do unless --yes."`
 	Serve    ServeCmd    `cmd:"" help:"Serve the local web inbox on a loopback address."`
 	Status   StatusCmd   `cmd:"" help:"Print where cases serve is running for the store; exits 1 when it is not."`
+	Inbox    InboxCmd    `cmd:"" help:"Open the running web inbox in the browser, or a case's page in it."`
 	Service  ServiceCmd  `cmd:"" help:"Report on, install and remove cases serve as a user service."`
 	Conf     ConfigCmd   `cmd:"" name:"config" help:"Inspect and create the config file that supplies flag defaults."`
 	Skill    SkillCmd    `cmd:"" help:"Install, show and list the bundled agent skill."`
