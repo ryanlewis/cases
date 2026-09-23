@@ -151,8 +151,8 @@ func TestListOnMissingStoreIsEmpty(t *testing.T) {
 	if out := mustRun(t, "--store", storePath, "list"); !strings.Contains(out, "No cases.") {
 		t.Errorf("list = %q, want no cases", out)
 	}
-	if out := mustRun(t, "--store", storePath, "list", "--json"); strings.TrimSpace(out) != "[]" {
-		t.Errorf("list --json = %q, want []", out)
+	if out := mustRun(t, "--store", storePath, "list", "--json"); strings.TrimSpace(out) != "{\n  \"list\": []\n}" {
+		t.Errorf("list --json = %q, want {\"list\": []}", out)
 	}
 }
 

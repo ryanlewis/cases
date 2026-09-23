@@ -26,16 +26,19 @@ func TestListOrderFilterAndJSON(t *testing.T) {
 	}
 
 	out = mustRun(t, "--store", storePath, "list", "--state", "answered", "--json")
-	var got []map[string]any
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	var envelope struct {
+		List []map[string]any `json:"list"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
+	got := envelope.List
 	if len(got) != 1 || got[0]["id"] != answered || got[0]["state"] != "answered" {
 		t.Errorf("filtered = %v", got)
 	}
 
-	if out := mustRun(t, "--store", storePath, "list", "--state", "closed,withdrawn", "--json"); strings.TrimSpace(out) != "[]" {
-		t.Errorf("empty filter = %q, want []", out)
+	if out := mustRun(t, "--store", storePath, "list", "--state", "closed,withdrawn", "--json"); strings.TrimSpace(out) != "{\n  \"list\": []\n}" {
+		t.Errorf("empty filter = %q, want {\"list\": []}", out)
 	}
 	if r := runCases(t, "", "--store", storePath, "list", "--state", "done"); r.err == nil {
 		t.Error("unknown state accepted")
@@ -83,18 +86,7 @@ func TestListByLabelAndWorker(t *testing.T) {
 
 	ids := func(args ...string) []string {
 		t.Helper()
-		var got []struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(mustRun(t, append([]string{"--store", storePath, "list", "--json"}, args...)...)), &got); err != nil {
-			t.Fatal(err)
-		}
-		var out []string
-		for _, g := range got {
-			out = append(out, g.ID)
-		}
-		slices.Sort(out)
-		return out
+		return listIDs(t, storePath, args...)
 	}
 	for _, tt := range []struct {
 		args []string
@@ -132,14 +124,16 @@ func TestListReportsBrokenCaseAndListsTheRest(t *testing.T) {
 // listIDs runs list --json with args and returns the ids it printed, sorted.
 func listIDs(t *testing.T, storePath string, args ...string) []string {
 	t.Helper()
-	var got []struct {
-		ID string `json:"id"`
+	var envelope struct {
+		List []struct {
+			ID string `json:"id"`
+		} `json:"list"`
 	}
-	if err := json.Unmarshal([]byte(mustRun(t, append([]string{"--store", storePath, "list", "--json"}, args...)...)), &got); err != nil {
+	if err := json.Unmarshal([]byte(mustRun(t, append([]string{"--store", storePath, "list", "--json"}, args...)...)), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	var out []string
-	for _, g := range got {
+	for _, g := range envelope.List {
 		out = append(out, g.ID)
 	}
 	slices.Sort(out)
