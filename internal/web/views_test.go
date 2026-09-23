@@ -1219,9 +1219,9 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 		}
 	}
 
-	// The tally refresh carries the title and the count, and no list.
+	// The tally refresh carries the title, the icon and the count, and no list.
 	frag := a.do("GET", "/fragments/tally", nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if want := "<title>(1) cases</title>\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
+	if want := "<title>(1) cases</title>\n" + `<link id="favicon" rel="icon" type="image/svg+xml" href="/favicon.svg?n=1" hx-swap-oob="true">` + "\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
 		t.Errorf("tally fragment = %q\nwant %q", frag, want)
 	}
 

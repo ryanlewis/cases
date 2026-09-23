@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
 <title>{{template "title" .}}</title>
+<link id="favicon" rel="icon" type="image/svg+xml" href="{{.Icon}}">
 <script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js"></script>
@@ -65,5 +66,6 @@
 
 {{define "tally-body"}}{{range $i, $t := .Items}}{{if $i}} · {{end}}<span{{if $t.Hot}} class="hot"{{end}}><strong>{{$t.N}}</strong> {{$t.Label}}</span>{{end}}{{end}}
 {{define "tally-fragment"}}<title>{{template "title" .}}</title>
+<link id="favicon" rel="icon" type="image/svg+xml" href="{{.Icon}}" hx-swap-oob="true">
 <span id="tally" class="label tally" hx-swap-oob="true">{{template "tally-body" .}}</span>{{end}}
 {{define "tally"}}<span id="tally" class="label tally">{{template "tally-body" .}}</span>{{end}}

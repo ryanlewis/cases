@@ -565,8 +565,9 @@ cases serve > serve.log
 # Serving /Users/you/.local/share/cases/cases.db at http://127.0.0.1:8765/
 ```
 
-A page's event stream and the refreshes it sets off, and a tab's checks for
-notifications, are not logged or counted.
+A page's event stream and the refreshes it sets off, the tab icons the page
+and its refreshes point at, and a tab's checks for notifications, are not
+logged or counted.
 
 ### Finding a running serve
 
@@ -677,8 +678,14 @@ The header counts open cases by urgency and parked cases, as in
 and only the blocking count is red. The page title starts with the number of
 open cases, of any urgency, as in `(4) cases`, so a browser tab shows
 what is waiting; parked cases are not counted, and with none open there is no
-number; the title is otherwise `cases` on every page. The counts and the
-title follow the store while the page is open, as described below.
+number; the title is otherwise `cases` on every page. The tab icon shows the
+same count: a plain `c` tile with none open, the count on a dark tile when cases
+are open (`9+` above nine), and on a red tile when any of them is blocking. A
+parked blocking case does not turn it red. The server draws the icon as SVG at
+`/favicon.svg`, so it needs no script and the page's content security policy
+allows no `data:` images; browsers that do not show SVG tab icons still have the
+title. The counts, the title and the icon follow the store while the page is
+open, as described below.
 
 - `/` selects the first case in the inbox. With no open or parked cases it
   shows one inbox zero panel instead of the columns: the cases you answered,
