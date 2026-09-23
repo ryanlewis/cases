@@ -144,9 +144,12 @@ kbd { font-family: var(--mono); font-size: .875em; padding: 0 .25rem; border: 1p
 dialog.options::backdrop { background: rgba(0, 0, 0, .4); background: color-mix(in srgb, var(--fg) 25%, transparent); }
 
 main { max-width: 60rem; padding: .5rem 1rem 3rem; margin-inline: auto; }
-main:has(> .split) { max-width: none; padding: 0; }
+/* The split spans the window, list at the left edge. Auto margins would shrink
+   main to its content where body is a flex column (wide screens below). */
+main:has(> .split) { max-width: none; padding: 0; margin-inline: 0; }
 .split > * { padding: 0 1rem 3rem; }
-.work > * { max-width: 47.5rem; margin-inline: auto; }
+/* The case sits in the middle of its column at about 70 characters a line. */
+.work > * { max-width: 40rem; margin-inline: auto; }
 
 /* Page changes cross-fade where the browser has cross-document view
    transitions, and change at once elsewhere or under reduced motion. The
