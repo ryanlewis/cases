@@ -327,4 +327,19 @@
     try { k.el.setSelectionRange(k.start, k.end); } catch (e) {}
     k.el.scrollTop = k.top;
   });
+
+  // The tally fragment carries the tab icon's link out of band. Chromium does
+  // not load the icon of a link put in place of another, which is what the
+  // swap would do, but does when the link's href changes, so the new href is
+  // copied onto the link the page has. Safari loads a page's icon once, when
+  // the page loads, and follows neither.
+  document.addEventListener("htmx:oobBeforeSwap", function (e) {
+    var d = e.detail;
+    if (!d.target || d.target.id !== "favicon" || !d.fragment.querySelector) return;
+    var next = d.fragment.querySelector("#favicon");
+    if (!next) return;
+    d.shouldSwap = false;
+    var href = next.getAttribute("href");
+    if (href && d.target.getAttribute("href") !== href) d.target.setAttribute("href", href);
+  });
 })();

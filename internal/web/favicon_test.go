@@ -72,11 +72,18 @@ func TestFaviconFollowsTheTitleCount(t *testing.T) {
 		}
 	}
 	a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyBlocking, Title: "Now"})
-	// The refreshes swap the link out of band, as they do the tally.
+	// The refreshes carry the link out of band, as they do the tally, and
+	// prefs.js cancels that swap and copies the new href onto the page's link.
 	two := `<link id="favicon" rel="icon" type="image/svg+xml" href="/favicon.svg?blocking=1&amp;n=2" hx-swap-oob="true">`
 	for _, path := range []string{"/fragments/inbox", "/fragments/tally"} {
 		if body := a.do("GET", path, nil, hx).Body.String(); !strings.Contains(body, two) {
 			t.Errorf("%s lacks %s:\n%s", path, two, body)
+		}
+	}
+	js := a.get(t, "/static/prefs.js")
+	for _, want := range []string{`"htmx:oobBeforeSwap"`, `d.target.id !== "favicon"`, `d.shouldSwap = false;`, `d.target.setAttribute("href", href)`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("prefs.js lacks %s", want)
 		}
 	}
 	if _, err := a.db.Answer(t.Context(), whenever.ID, store.AnswerRecord{Ack: true}); err != nil {
