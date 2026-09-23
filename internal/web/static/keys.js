@@ -42,9 +42,11 @@
     return el.tagName === "INPUT" && ["radio", "checkbox", "button", "submit", "reset"].indexOf(el.type) < 0;
   }
 
-  // The open case's answer form, if the page shows one.
+  // The open case's answer form, if the page shows one. On a narrow window
+  // the inbox page hides its case, form and all, and the keys leave it alone.
   function caseForm() {
-    return document.querySelector('#case form.respond[action$="/answer"]');
+    var form = document.querySelector('#case form.respond[action$="/answer"]');
+    return form && form.getClientRects().length ? form : null;
   }
 
   // The radios of the form's one set of choices, in page order, or none on

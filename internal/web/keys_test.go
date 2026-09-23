@@ -19,6 +19,7 @@ func TestKeyboardShortcuts(t *testing.T) {
 	}
 	for _, want := range []string{
 		`document.querySelector('#case form.respond[action$="/answer"]')`,
+		`return form && form.getClientRects().length ? form : null;`,
 		`form.requestSubmit(form.querySelector("#respond-send"))`,
 		`document.querySelectorAll("#inbox a.card")`,
 		`document.getElementById("keys-dialog")`,
@@ -38,6 +39,16 @@ func TestKeyboardShortcuts(t *testing.T) {
 		if !strings.Contains(body, `<dialog id="keys-dialog" class="options" aria-labelledby="keys-title">`) {
 			t.Errorf("%s: no keys dialog", target)
 		}
+	}
+
+	// On a narrow window / shows only the list, hiding the first case and its
+	// form, so the answer keys, which want a rendered form, leave it alone.
+	home := a.get(t, "/")
+	if !strings.Contains(home, `<div class="split home">`) || !strings.Contains(home, `<div class="work">`) || !strings.Contains(home, `class="respond">`) {
+		t.Error("/ does not put its case form in the work column of .split.home")
+	}
+	if css := a.get(t, "/static/style.css"); !strings.Contains(css, ".split.home .work, .split:not(.home) .list { display: none; }") {
+		t.Error("style.css no longer hides the case on a narrow /")
 	}
 
 	// Number keys pick among the one set of choices, in page order.
