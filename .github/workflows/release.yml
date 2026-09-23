@@ -9,10 +9,11 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  # The tests run in their own job, with no secrets and a read-only token, so
+  # test code and the dependencies it runs never share a job with the signing
+  # keys or the tap token.
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,39 +27,126 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-      - name: Build
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME}"
-          commit="${GITHUB_SHA:0:7}"
-          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ldflags="-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}"
-          mkdir -p dist
-          targets=(
-            "linux amd64"
-            "linux arm64"
-            "darwin amd64"
-            "darwin arm64"
-            "windows amd64"
-          )
-          for target in "${targets[@]}"; do
-            read -r os arch <<<"$target"
-            name="cases_${version}_${os}_${arch}"
-            dir="dist/${name}"
-            mkdir -p "$dir"
-            bin="cases"
-            [ "$os" = "windows" ] && bin="cases.exe"
-            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$ldflags" -o "${dir}/${bin}" ./cmd/cases
-            if [ "$os" = "windows" ]; then
-              (cd "$dir" && zip -q "../${name}.zip" "$bin")
-            else
-              tar -C "$dir" -czf "dist/${name}.tar.gz" "$bin"
-            fi
-            rm -rf "$dir"
-          done
-          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+  goreleaser:
+    needs: test
+    runs-on: ubuntu-latest
+    # The release secrets live in this environment, which only v* tags may
+    # deploy to, so workflow runs on other refs never see them.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # Egress lockdown: this job holds code-signing keys and the tap token,
+      # making it the prime exfiltration target, so a compromised dependency
+      # or action can only talk to the endpoints below. Sudo and Docker are
+      # off as well: with root, a step could remove the block rules. Some of
+      # these endpoints (GitHub's API, storage.googleapis.com, the Go module
+      # proxy) can still carry data to an attacker's account, so this narrows
+      # exfiltration rather than ruling it out. If a legitimate step starts
+      # failing on a blocked connection, the harden-runner report linked from
+      # the run names the endpoint; add it here deliberately rather than
+      # reverting to audit.
+      # notary-artifacts-prod is used only when Apple rejects a submission:
+      # quill fetches Apple's log from it before reporting the rejection.
+      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            api.github.com:443
+            appstoreconnect.apple.com:443
+            dl.google.com:443
+            fulcio.sigstore.dev:443
+            github.com:443
+            go.dev:443
+            goreleaser.com:443
+            notary-artifacts-prod.s3.amazonaws.com:443
+            notary-submissions-prod.s3.us-west-2.amazonaws.com:443
+            objects.githubusercontent.com:443
+            proxy.golang.org:443
+            raw.githubusercontent.com:443
+            rekor.sigstore.dev:443
+            release-assets.githubusercontent.com:443
+            storage.googleapis.com:443
+            sum.golang.org:443
+            timestamp.apple.com:80
+            tuf-repo-cdn.sigstore.dev:443
+            uploads.github.com:443
+            *.actions.githubusercontent.com:443
 
-      - name: Release
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # No cache in the release build: a poisoned cache entry written from
+          # another ref would flow straight into the published binaries.
+          cache: false
+
+      # goreleaser signs every release that is not a snapshot and stops
+      # before archiving if the certificate is missing. But with an empty
+      # notary secret it signs and skips notarization, and it pushes the cask
+      # only after the release is out, so check all six secrets before
+      # anything is built. The step sees only whether each secret is set,
+      # never its value.
+      - name: Ensure release secrets are present
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "${GITHUB_REF_NAME}"
+          HAVE_HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+          HAVE_MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 != '' }}
+          HAVE_MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD != '' }}
+          HAVE_MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID != '' }}
+          HAVE_MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID != '' }}
+          HAVE_MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY != '' }}
+        run: |
+          missing=""
+          for name in HOMEBREW_TAP_GITHUB_TOKEN MACOS_SIGN_P12 MACOS_SIGN_PASSWORD MACOS_NOTARY_ISSUER_ID MACOS_NOTARY_KEY_ID MACOS_NOTARY_KEY; do
+            have="HAVE_${name}"
+            if [ "${!have}" != "true" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing from the release environment:${missing}. Refusing to publish unsigned or unnotarized binaries, or a release without its Homebrew cask."
+            exit 1
+          fi
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean
+        # The release secrets go to this step only, never job-wide, so no
+        # other step, nor anything it downloads, can read them from the
+        # environment. (GITHUB_TOKEN is the exception: the other steps get it
+        # through their default token input.) goreleaser builds and signs in
+        # one run, so go build sees the secrets too; with CGO_ENABLED=0 and no
+        # hooks it runs no dependency code.
+        env:
+          # Release the tag that triggered the run. Left to itself, goreleaser
+          # picks the highest tag on the commit, and git sorts v1.0.0-rc.1
+          # above v1.0.0, so tagging an rc commit v1.0.0 would release the rc.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+      # goreleaser publishes the release before it pushes the cask, so a
+      # failure there leaves a public release. Attest whenever goreleaser got
+      # as far as writing the checksums.
+      - name: Attest build provenance
+        if: ${{ success() || (failure() && hashFiles('dist/checksums.txt') != '') }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt

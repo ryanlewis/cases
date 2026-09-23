@@ -16,17 +16,34 @@ it was written. No server is needed.
 
 ## Install
 
-Download a release binary for your platform and verify it against the
-published checksums (needs `gh` for the private repository):
+With Homebrew, on macOS or Linux:
 
 ```sh
-gh release download vX.Y.Z -R ryanlewis/cases -p 'cases_vX.Y.Z_<os>_<arch>.*' -p SHA256SUMS
-sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf cases_vX.Y.Z_<os>_<arch>.tar.gz   # unzip the .zip on windows
+brew install ryanlewis/tap/cases
+```
+
+Or download the archive for your platform from the
+[latest release](https://github.com/ryanlewis/cases/releases/latest) and
+verify it against the published checksums:
+
+```sh
+gh release download vX.Y.Z -R ryanlewis/cases -p 'cases_X.Y.Z_<os>_<arch>.*' -p checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+tar -xzf cases_X.Y.Z_<os>_<arch>.tar.gz cases   # unzip the .zip on windows
 install cases /usr/local/bin/cases
 ```
 
-The binary includes SQLite; nothing else needs installing.
+GitHub also keeps a build provenance attestation for each archive, which
+shows that this repository's release workflow built it from the tag:
+
+```sh
+gh attestation verify cases_X.Y.Z_<os>_<arch>.tar.gz -R ryanlewis/cases \
+  --signer-workflow ryanlewis/cases/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z
+```
+
+The macOS binaries are signed and notarized. The binary includes SQLite;
+nothing else needs installing.
 
 Or install from a checkout with Go on the path:
 
@@ -904,9 +921,37 @@ graph (`golang.org/x/vuln` and its own dependencies) shows up in go.mod and
 go.sum alongside the runtime dependencies.
 
 To cut a release, push a semver tag: `git tag vX.Y.Z && git push origin
-vX.Y.Z`. `.github/workflows/release.yml` builds binaries for linux, darwin
-and windows, and publishes them with a `SHA256SUMS` file as a GitHub
-release.
+vX.Y.Z`. `.github/workflows/release.yml` runs the tests, then goreleaser
+(`.goreleaser.yaml`) builds binaries for linux, darwin and windows, signs and
+notarizes the darwin ones, publishes them with a `checksums.txt` file as a
+GitHub release, attests their build provenance and updates the cask in
+[ryanlewis/homebrew-tap](https://github.com/ryanlewis/homebrew-tap). A
+prerelease tag such as `vX.Y.Z-rc.1` is published as a GitHub prerelease and
+leaves the cask alone. The release job takes the signing, notarization and
+tap secrets from the `release` environment and stops before building if any
+is missing.
+
+Set up the `release` environment before pushing the first tag: a run that
+names a missing environment creates it with no protection rules. Give it a
+deployment rule that allows only `v*` tags, and these secrets:
+
+- `MACOS_SIGN_P12`: the Developer ID Application certificate and its private
+  key as a `.p12` file, base64-encoded
+- `MACOS_SIGN_PASSWORD`: the password of the `.p12`
+- `MACOS_NOTARY_ISSUER_ID` and `MACOS_NOTARY_KEY_ID`: the issuer ID and key
+  ID of an App Store Connect API key (the Developer role is enough)
+- `MACOS_NOTARY_KEY`: that key's `.p8` file, base64-encoded; its PEM text
+  pasted as is fails at notarization
+- `HOMEBREW_TAP_GITHUB_TOKEN`: a fine-grained token with read and write
+  access to the contents of ryanlewis/homebrew-tap only
+
+```sh
+base64 -i cert.p12 | gh secret set MACOS_SIGN_P12 --env release -R ryanlewis/cases
+base64 -i AuthKey_<key-id>.p8 | gh secret set MACOS_NOTARY_KEY --env release -R ryanlewis/cases
+```
+
+`goreleaser check` validates the config. `goreleaser release --snapshot
+--clean` builds everything into `dist/` without signing or publishing.
 
 ## License
 

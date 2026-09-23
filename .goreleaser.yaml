@@ -1,0 +1,125 @@
+version: 2
+
+project_name: cases
+
+builds:
+  # &build_id is the anchor the notarize block uses to pick this build.
+  - id: &build_id cases
+    main: ./cmd/cases
+    binary: cases
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    # The variables the Makefile sets, in the same form: the tag, the short
+    # commit and the UTC build time.
+    ldflags:
+      - -s -w
+      - -X main.version=v{{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: cases
+    name_template: "cases_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+
+# Sign and notarize the darwin binaries in place before archiving, so the
+# archives (and therefore the checksums and provenance attestations) contain
+# the signed Mach-O. goreleaser does this with quill, which runs on the Linux
+# runner: no macOS runner or keychain needed. Snapshot builds skip it, so they
+# work without secrets. Every other run signs, and stops before archiving if
+# the certificate is missing; the preflight step in
+# .github/workflows/release.yml also checks the notary and tap secrets.
+notarize:
+  macos:
+    - enabled: "{{ not .IsSnapshot }}"
+      # The build's id, through the anchor: an id that matches no build makes
+      # goreleaser skip signing with only a warning.
+      ids:
+        - *build_id
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        # Block until Apple accepts the submission. This runs before archiving
+        # and publishing, so a rejected or timed-out notarization fails the
+        # release with nothing published, and the job can be re-run.
+        wait: true
+        # quill makes the notary token live 2 minutes longer than this, and
+        # Apple documents 20 minutes as the longest token lifetime, so 18m is
+        # the most that stays within it. A submission usually takes under a
+        # minute.
+        timeout: 18m
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# The previous tag, which sets the range of the release notes, is the last
+# stable release: prerelease tags are skipped when it is looked up (the
+# release's own tag is matched exactly, so rc tags still release), and on a
+# commit with both vX.Y.Z-rc.N and vX.Y.Z the final release sorts higher.
+# Otherwise the notes for vX.Y.Z would list only the changes since its last rc.
+git:
+  prerelease_suffix: "-"
+  ignore_tags:
+    - "*-*"
+
+changelog:
+  use: github-native
+
+release:
+  draft: false
+  prerelease: auto
+  # A re-run after the release went public (say the cask push failed)
+  # replaces every asset, so it can go on to push the cask and attest.
+  # Without this the first upload fails because the asset exists. The re-run
+  # uploads new bytes under the same tag, and immutable releases would block
+  # it.
+  replace_existing_artifacts: true
+
+homebrew_casks:
+  - name: cases
+    binaries:
+      - cases
+    repository:
+      owner: ryanlewis
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/ryanlewis/cases
+    description: Pass questions from a coding agent to a human and get the answer back
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore(brew): {{ .ProjectName }} {{ .Tag }}"
+    # Prerelease tags (vX.Y.Z-rc.N) leave the cask alone, as they leave the
+    # latest GitHub release alone, so brew users stay on the stable version.
+    skip_upload: auto
+    # No de-quarantine hook: the binary is signed and notarized (see the
+    # notarize block above), so Gatekeeper passes it. A bare Mach-O binary
+    # cannot have a ticket stapled, so the first run needs the network for
+    # Gatekeeper's online notarization lookup.
