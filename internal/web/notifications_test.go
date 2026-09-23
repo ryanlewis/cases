@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,5 +127,43 @@ func TestNotificationsWhenTheStoreArrivesLater(t *testing.T) {
 	a.open(t, openRecords[store.KindFYI])
 	if p := a.notifications(t, "/notifications"); len(p.Items) != 1 {
 		t.Errorf("the first case in a new store: %d items, want 1", len(p.Items))
+	}
+}
+
+// A store that goes missing and comes back does not make its cases new
+// again.
+func TestNotificationsWhenTheStoreIsPutBack(t *testing.T) {
+	a := newApp(t)
+	path := filepath.Join(t.TempDir(), "cases.db")
+	a.db = newDB(t, path)
+	s, err := New(a.db, testAddr, a.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.server, a.handler = s, s.Handler()
+	if err := a.server.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	rec := openRecords[store.KindDecision]
+	rec.Urgency = store.UrgencyBlocking
+	a.open(t, rec)
+	if p := a.notifications(t, "/notifications"); p.Latest != 1 {
+		t.Fatalf("latest %d, want 1", p.Latest)
+	}
+	aside := path + ".aside"
+	if err := os.Rename(path, aside); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.server.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(aside, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.server.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if p := a.notifications(t, "/notifications"); p.Latest != 1 {
+		t.Errorf("latest %d after the store came back, want 1", p.Latest)
 	}
 }
