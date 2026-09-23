@@ -11,6 +11,9 @@
 // seconds for cases that landed on the human and shows each as a desktop
 // notification. The last id shown is kept per browser, with the server's boot
 // id, so tabs share it and a restarted serve starts it again.
+//
+// A page that shows the inbox or a case follows the store through the event
+// stream it names in data-events on the body; see the end of this file.
 (function () {
   "use strict";
 
@@ -49,7 +52,8 @@
   window.addEventListener("pageshow", function (e) { if (e.persisted) applyAll(); });
 
   // The server marks external links target=_blank. With links=same, a click
-  // drops the target first; listening on the document covers polled swaps.
+  // drops the target first; listening on the document covers swapped-in
+  // content.
   document.addEventListener("click", function (e) {
     if (root.dataset.links !== "same" || !e.target.closest) return;
     var a = e.target.closest('a[target="_blank"]');
@@ -210,5 +214,114 @@
       });
     }
     show();
+  });
+
+  // The event stream sends the store's version each time it changes, and
+  // each new version fires store-changed on the body, which the page's htmx
+  // regions refresh on. The browser reconnects a dropped stream by itself, as
+  // when serve restarts, and says which version it had.
+  //
+  // A browser allows six connections to one address, shared by all its tabs,
+  // and a stream holds one for as long as it is open: six streams would leave
+  // none for the pages' own requests. So only a tab that is shown holds a
+  // stream. It passes each version on to the other tabs over a broadcast
+  // channel, so a tab in the background still follows the store, and a tab
+  // shown again opens its stream from the last version it had, which serve
+  // answers at once if the store has moved since.
+  document.addEventListener("DOMContentLoaded", function () {
+    var url = document.body.dataset.events;
+    if (!url || !window.EventSource) return;
+    var at = new URL(url, location.href);
+    var version = at.searchParams.get("after") || "";
+    var channel = window.BroadcastChannel ? new BroadcastChannel("cases-store") : null;
+    var stream = null;
+    function refresh() {
+      document.body.dispatchEvent(new CustomEvent("store-changed"));
+    }
+    function seen(v) {
+      if (v === version) return;
+      version = v;
+      refresh();
+    }
+    function open() {
+      if (stream || (channel && document.hidden)) return;
+      at.searchParams.set("after", version);
+      stream = new EventSource(at.pathname + at.search);
+      var dropped = false;
+      stream.onerror = function () { dropped = true; };
+      // A refresh set off just before the stream dropped may have failed
+      // with it, as when serve restarts, and the version it was for counts
+      // as seen: ask again once the stream is back.
+      stream.onopen = function () {
+        if (dropped) refresh();
+        dropped = false;
+      };
+      stream.onmessage = function (e) {
+        if (channel) channel.postMessage(e.data);
+        seen(e.data);
+      };
+    }
+    function close() {
+      if (stream) stream.close();
+      stream = null;
+    }
+    if (channel) {
+      channel.onmessage = function (e) { seen(e.data); };
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) close();
+        else open();
+      });
+    }
+    open();
+
+    // A form sent leaves the page, but the write it makes reaches the stream
+    // first, and a refresh that sets off could send the browser back to the
+    // case instead of where the post redirects. So once a form goes (not the
+    // options dialog's), the page's refreshes are dropped, one already on its
+    // way included. A page still here a while later, as when the post was
+    // opened in another tab or stopped, or shown again from the browser's
+    // back-forward cache, follows the store again.
+    var leaving = null;
+    function stay() {
+      clearTimeout(leaving);
+      leaving = null;
+      refresh();
+    }
+    document.addEventListener("submit", function (e) {
+      if (e.target.method === "dialog") return;
+      clearTimeout(leaving);
+      leaving = setTimeout(stay, 10000);
+    });
+    ["htmx:beforeRequest", "htmx:beforeOnLoad"].forEach(function (name) {
+      document.addEventListener(name, function (e) {
+        if (leaving) e.preventDefault();
+      });
+    });
+    window.addEventListener("pageshow", function (e) {
+      if (!e.persisted) return;
+      // The browser may have closed the stream while the page was away.
+      if (stream && stream.readyState === EventSource.CLOSED) close();
+      open();
+      if (leaving) stay();
+    });
+  });
+
+  // A refresh of the case view keeps the form's fields as the human left
+  // them (hx-preserve). A browser without moveBefore takes a field out of
+  // the page to move it, which loses its focus and caret, so they are put
+  // back.
+  var kept = null;
+  document.addEventListener("htmx:beforeSwap", function () {
+    var el = document.activeElement;
+    kept = el && el.hasAttribute && el.hasAttribute("hx-preserve") ?
+      { el: el, start: el.selectionStart, end: el.selectionEnd, top: el.scrollTop } : null;
+  });
+  document.addEventListener("htmx:afterSwap", function () {
+    var k = kept;
+    kept = null;
+    if (!k || document.activeElement === k.el || !document.contains(k.el)) return;
+    k.el.focus({ preventScroll: true });
+    try { k.el.setSelectionRange(k.start, k.end); } catch (e) {}
+    k.el.scrollTop = k.top;
   });
 })();

@@ -7,7 +7,7 @@
 {{else}}
 <div class="split{{if .Home}} home{{end}}">
 {{with .Done}}<aside class="list" aria-label="done">
-<div hx-get="/fragments/tally" hx-trigger="every 2s" hx-swap="none" hidden></div>
+<div hx-get="/fragments/tally" hx-trigger="store-changed from:body" hx-sync="this:replace" hx-swap="none" hidden></div>
 {{template "done-list" .}}
 </aside>{{else}}<aside class="list" aria-label="inbox">
 {{template "inbox-list" .Inbox}}
@@ -21,6 +21,8 @@
 
 {{define "case"}}
 {{$c := .Case}}
+{{/* The page's event stream fires store-changed on the body each time the store changes, and the view asks whether its case has moved on from the state and revision it was drawn at; see caseFragment. It also asks once a minute, in case a refresh was lost. The fields the human fills in, and the line saying a form was refused, carry ids and hx-preserve, so a refresh keeps them as they are (see fieldID); the buttons carry ids, so htmx puts the focus back on one. settle:0ms has htmx take up the new view in the same step as the swap: after its default delay, the view would miss a store-changed fired in between. */}}
+<div id="case" hx-get="/cases/{{$c.ID | pathEscape}}/view?state={{$c.State}}&amp;revision={{$c.Revision}}&amp;form={{.Revision}}{{if .Home}}&amp;home=1{{end}}" hx-trigger="store-changed from:body, every 60s" hx-sync="this:replace" hx-swap="outerHTML settle:0ms">
 <article class="case">
   <div class="meta urgency-{{$c.Urgency}}">
     <span class="badge urgency">{{$c.Urgency}}</span>
@@ -40,19 +42,19 @@
   {{end}}
 </article>
 
-{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<p class="error" role="alert" id="refusal" hx-preserve{{if not .Error}} hidden{{end}}>{{.Error}}</p>
 
 {{if eq $c.State "open"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/answer" class="respond">
   {{$form := .Form}}
-  <input type="hidden" name="revision" value="{{$c.Revision}}">
+  <input type="hidden" name="revision" value="{{.Revision}}">
   {{if eq $c.Kind "decision"}}
   <fieldset>
     <legend>choose one</legend>
     {{range $i, $o := $c.Options}}{{$v := inc $i | print}}
-    <label class="choice"><input type="radio" required name="choice" value="{{$v}}"{{if checked $form "choice" $v}} checked{{end}}> {{$o}}</label>
+    <label class="choice"><input type="radio" required name="choice" value="{{$v}}"{{if checked $form "choice" $v}} checked{{end}} id="{{choiceID "choice" $v}}" hx-preserve> {{$o}}</label>
     {{end}}
-    <label class="choice"><input type="radio" required name="choice" value="other"{{if checked $form "choice" "other"}} checked{{end}}> other, see note</label>
+    <label class="choice"><input type="radio" required name="choice" value="other"{{if checked $form "choice" "other"}} checked{{end}} id="{{choiceID "choice" "other"}}" hx-preserve> other, see note</label>
   </fieldset>
   {{else if eq $c.Kind "approval"}}
   {{range $c.Rows}}{{$verdict := print "verdict." .ID}}{{$note := print "note." .ID}}
@@ -62,52 +64,53 @@
     <p>{{if webLink .Link}}<a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Link}}</a>{{else}}{{.Link}}{{end}}</p>
     <pre>{{.Script}}</pre>
     <div class="verdicts">
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}}> approve <span class="hint">run it</span></label>
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}}> hold <span class="hint">not now; ask again later</span></label>
-      <label class="choice"><input type="radio" required name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}}> don't run <span class="hint">never run this row</span></label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="approve"{{if checked $form $verdict "approve"}} checked{{end}} id="{{choiceID $verdict "approve"}}" hx-preserve> approve <span class="hint">run it</span></label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="hold"{{if checked $form $verdict "hold"}} checked{{end}} id="{{choiceID $verdict "hold"}}" hx-preserve> hold <span class="hint">not now; ask again later</span></label>
+      <label class="choice"><input type="radio" required name="{{$verdict}}" value="reject"{{if checked $form $verdict "reject"}} checked{{end}} id="{{choiceID $verdict "reject"}}" hx-preserve> don't run <span class="hint">never run this row</span></label>
     </div>
-    <label>note on this row <textarea name="{{$note}}" rows="1">{{formValue $form $note}}</textarea></label>
+    <label>note on this row <textarea name="{{$note}}" rows="1" id="{{fieldID $note}}" hx-preserve>{{formValue $form $note}}</textarea></label>
   </fieldset>
   {{end}}
   {{else if eq $c.Kind "signoff"}}
   <fieldset>
     <legend>sign off</legend>
-    <label class="choice"><input type="radio" required name="signoff" value="accept"{{if checked $form "signoff" "accept"}} checked{{end}}> accept</label>
-    <label class="choice"><input type="radio" required name="signoff" value="changes"{{if checked $form "signoff" "changes"}} checked{{end}}> request changes (comment required)</label>
+    <label class="choice"><input type="radio" required name="signoff" value="accept"{{if checked $form "signoff" "accept"}} checked{{end}} id="{{choiceID "signoff" "accept"}}" hx-preserve> accept</label>
+    <label class="choice"><input type="radio" required name="signoff" value="changes"{{if checked $form "signoff" "changes"}} checked{{end}} id="{{choiceID "signoff" "changes"}}" hx-preserve> request changes (comment required)</label>
   </fieldset>
   {{else if eq $c.Kind "stuck"}}
   <fieldset>
     <legend>unblock</legend>
-    <label class="choice"><input type="radio" name="stuck" value="text"{{if checked $form "stuck" "text"}} checked{{end}}> give guidance</label>
-    <label>guidance <textarea name="text" rows="4">{{formValue $form "text"}}</textarea></label>
-    <label class="choice"><input type="radio" name="stuck" value="drop"{{if checked $form "stuck" "drop"}} checked{{end}}> drop it</label>
+    <label class="choice"><input type="radio" name="stuck" value="text"{{if checked $form "stuck" "text"}} checked{{end}} id="{{choiceID "stuck" "text"}}" hx-preserve> give guidance</label>
+    <label>guidance <textarea name="text" rows="4" id="{{fieldID "text"}}" hx-preserve>{{formValue $form "text"}}</textarea></label>
+    <label class="choice"><input type="radio" name="stuck" value="drop"{{if checked $form "stuck" "drop"}} checked{{end}} id="{{choiceID "stuck" "drop"}}" hx-preserve> drop it</label>
   </fieldset>
   {{else if eq $c.Kind "question"}}
-  <label>reply <textarea name="text" rows="4" required>{{formValue $form "text"}}</textarea></label>
+  <label>reply <textarea name="text" rows="4" required id="{{fieldID "text"}}" hx-preserve>{{formValue $form "text"}}</textarea></label>
   {{else if eq $c.Kind "fyi"}}
   <input type="hidden" name="ack" value="1">
   {{end}}
-  <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the agent{{end}} <textarea name="note" rows="3">{{formValue $form "note"}}</textarea></label>
+  <label>{{if eq $c.Kind "signoff"}}comment{{else}}note to the agent{{end}} <textarea name="note" rows="3" id="{{fieldID "note"}}" hx-preserve>{{formValue $form "note"}}</textarea></label>
   <div class="actions">
-    <button type="submit" class="primary">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
-    {{if eq $c.Kind "stuck"}}<button type="submit" name="park" value="1" formnovalidate>park</button>{{else}}<button type="submit" name="drop" value="1" formnovalidate>drop</button>{{end}}
+    <button type="submit" class="primary" id="respond-send">{{if eq $c.Kind "fyi"}}acknowledge{{else}}send{{end}}</button>
+    {{if eq $c.Kind "stuck"}}<button type="submit" name="park" value="1" formnovalidate id="respond-park">park</button>{{else}}<button type="submit" name="drop" value="1" formnovalidate id="respond-drop">drop</button>{{end}}
   </div>
 </form>
 {{else if eq $c.State "parked"}}
 <form method="post" action="/cases/{{$c.ID | pathEscape}}/resume" class="respond">
-  <input type="hidden" name="revision" value="{{$c.Revision}}">
+  <input type="hidden" name="revision" value="{{.Revision}}">
   <div class="actions"><button type="submit">resume</button></div>
 </form>
 {{end}}
 
 {{template "thread" .}}
+</div>
 {{end}}
 
 {{define "thread"}}
-<section id="thread" hx-get="/cases/{{.Case.ID | pathEscape}}/thread?state={{.Case.State}}{{if .Home}}&amp;home=1{{end}}" hx-trigger="every 2s" hx-swap="outerHTML">
+<section id="thread">
   <h2 class="section">thread</h2>
   <ol class="thread">
-  {{/* The poll replaces the thread; hx-preserve keeps a details the human opened as it is. The id holds a hash of the text, so a details whose text changes, as when an amend is stored before a later one's number, is replaced. */}}
+  {{/* A refresh of the case view replaces the thread; hx-preserve keeps a details the human opened as it is. The id holds a hash of the text, so a details whose text changes, as when an amend is stored before a later one's number, is replaced. */}}
   {{range .Thread}}{{$seq := .Seq}}
     <li class="event author-{{.Author}}">
       <div class="meta"><span class="who">[{{.Author}}]</span> <span>{{.Type}}</span> <span class="age">{{stamp .At}}, {{age .At}}</span></div>

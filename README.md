@@ -565,7 +565,7 @@ cases serve > serve.log
 # Serving /Users/you/.local/share/cases/cases.db at http://127.0.0.1:8765/
 ```
 
-Page refreshes that run every two seconds, and a tab's checks for
+A page's event stream and the refreshes it sets off, and a tab's checks for
 notifications, are not logged or counted.
 
 ### Finding a running serve
@@ -677,8 +677,8 @@ The header counts open cases by urgency and parked cases, as in
 and only the blocking count is red. The page title starts with the number of
 open cases, of any urgency, as in `(4) cases`, so a browser tab shows
 what is waiting; parked cases are not counted, and with none open there is no
-number; the title is otherwise `cases` on every page. The inbox poll keeps it
-current.
+number; the title is otherwise `cases` on every page. The counts and the
+title follow the store while the page is open, as described below.
 
 - `/` selects the first case in the inbox. With no open or parked cases it
   shows one inbox zero panel instead of the columns: the cases you answered,
@@ -728,23 +728,41 @@ event is one of those three and the id names a case in the store, and it stays
 in the URL, so a reload shows it again. If the form is refused, the same case
 is shown again with the error.
 
-Each form carries the case's revision from when the page was loaded: the
-number of events the case had. If an event has been added to the case since,
-the form is refused and nothing is written. The case is shown again as it is now, so the
+Each form carries the case's revision from when the case was drawn: the
+number of events the case had. While the page is open, the case is drawn again
+as events are added, and the form's revision with it, unless an amend has
+changed the question (see below). If the form's revision is not the case's,
+because an event landed just as the form was sent, the page had lost touch
+with serve, or the question changed, the form is refused and nothing is
+written. The case is shown again as it is now, so the
 thread can be read before sending again; if the case is still open, the form
-keeps what was typed. This stops a tab left open from answering a case that was
-answered somewhere else and then reopened by a note, or a case that has been
-amended since the page was loaded. `cases answer`, `cases resume` and the agent's write commands do the same
+keeps what was typed. This stops a tab from answering a case that was answered
+somewhere else and then reopened by a note before the tab has shown it, or a
+case whose question has changed since the form was drawn. `cases answer`, `cases resume` and the agent's write commands do the same
 when given `--revision N`.
 
-The header counts sit beside the `inbox` and `done` links. The list, the count
-and the thread refresh every two seconds; beside a done case the done list does
-not, as on `/done`, but the count does. The page
-reloads itself if the case changes state while it is open; on `/` it reloads
-`/`, which selects whichever case is first. A change that leaves the state as
-it was, such as a note or an amend on an open case, only updates the thread, so
-what has been typed is kept; sending the form is then refused as described
-above.
+The header counts sit beside the `inbox` and `done` links. A page that shows
+the inbox or a case follows the store. Serve reads the store every second, and
+the page holds an event stream (`/events`) on which serve says when the store
+has changed, at most once a second. The list, the count and the case then
+refresh; beside a done case the done list does not, and `/done` does not follow
+the store at all. The list and the case also check once a minute, which keeps
+the ages on the list right. The page reloads itself if the case changes state
+while it is open; on `/` it reloads `/`, which selects whichever case is first.
+A change that leaves the state as it was, such as a note or an amend on an open
+case, draws the case again in place: its header, the form and the thread. The
+form keeps what has been typed and chosen in it, and a line saying a form was
+refused stays. The form takes the case's new revision, so a note that has come
+in on the page does not stop it being sent, except after an amend that changes
+the question (anything but labels): then the form keeps the revision it had,
+so its next send is refused and the case shown again to be checked. If serve
+restarts, the page reconnects by itself and catches up.
+
+Only a tab that is shown holds its stream open: browsers allow six connections
+to one address over plain HTTP, and six streams would leave none for the pages
+themselves. It passes what it hears to the browser's other inbox tabs, so a
+tab in the background follows the store too, and a tab shown again catches up
+at once.
 
 The app only answers requests addressed to its own host and port, refuses form
 posts from other sites (checked with `Sec-Fetch-Site` and `Origin`), and sends
@@ -776,7 +794,7 @@ for your own resume, for a case that was answered or withdrawn before
 serve saw it, or for cases already in the store when serve started. Clicking
 it opens the case in that tab.
 
-Serve reads the store every two seconds and keeps the last 50 notifications in
+Serve reads the store every second and keeps the last 50 notifications in
 memory, numbered from 1. Each page with notifications turned on asks
 `/notifications?after=N` every five seconds and shows the new ones. The
 number shown last is kept in the browser with serve's boot id. A tab with no

@@ -70,14 +70,14 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Errorf("title is not the waiting count and the name:\n%s", body)
 	}
 	if !strings.Contains(body, `<div class="split home">`) || !strings.Contains(body, `action="/cases/`+oldBlocking.ID+`/resume"`) ||
-		!strings.Contains(body, `hx-get="/cases/`+oldBlocking.ID+`/thread?state=parked&amp;home=1"`) {
+		!strings.Contains(body, `hx-get="/cases/`+oldBlocking.ID+`/view?state=parked&amp;revision=2&amp;form=2&amp;home=1"`) {
 		t.Errorf("/ does not show the first case:\n%s", body)
 	}
 	if !strings.Contains(body, `selected" href="/cases/`+oldBlocking.ID+`" aria-current="page">`) {
 		t.Error("first case is not selected on /")
 	}
-	if !strings.Contains(body, `hx-get="/fragments/inbox?selected=`+oldBlocking.ID+`"`) || !strings.Contains(body, `hx-trigger="every 2s"`) {
-		t.Error("inbox does not poll with the selection")
+	if !strings.Contains(body, `hx-get="/fragments/inbox?selected=`+oldBlocking.ID+`" hx-trigger="store-changed from:body, every 60s"`) {
+		t.Error("inbox does not refresh with the selection")
 	}
 
 	frag := a.do("GET", "/fragments/inbox", nil, map[string]string{"HX-Request": "true"})
@@ -107,7 +107,7 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Error("excerpt shows more than three lines")
 	}
 
-	// The polled list keeps the selection and the count in the title.
+	// The refreshed list keeps the selection and the count in the title.
 	sel := a.get(t, "/fragments/inbox?selected="+today.ID)
 	if !strings.Contains(sel, `class="card urgency-today selected" href="/cases/`+today.ID+`" aria-current="page"`) ||
 		strings.Count(sel, "selected") != 2 || !strings.Contains(sel, `hx-get="/fragments/inbox?selected=`+today.ID+`"`) ||
@@ -122,10 +122,10 @@ func TestInboxOrderAndContent(t *testing.T) {
 		t.Errorf("case page lacks the list with the case selected:\n%s", page)
 	}
 
-	// A case opened after the page loaded shows up on the next poll.
+	// A case opened after the page loaded shows up on the next refresh.
 	fresh := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyWhenever, Title: "Fresh"})
 	if got := a.get(t, "/fragments/inbox"); !strings.Contains(got, fresh.ID) {
-		t.Error("poll did not pick up a new case")
+		t.Error("refresh did not pick up a new case")
 	}
 }
 
@@ -158,13 +158,13 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 		},
 		{
 			kind:      store.KindStuck,
-			formParts: []string{`name="stuck" value="text"`, `name="text"`, `name="stuck" value="drop"`, `name="park" value="1" formnovalidate>park</button>`},
+			formParts: []string{`name="stuck" value="text"`, `name="text"`, `name="stuck" value="drop"`, `name="park" value="1" formnovalidate id="respond-park">park</button>`},
 			form:      url.Values{"stuck": {"text"}, "text": {"use the mirror"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
 		{
 			kind:      store.KindQuestion,
-			formParts: []string{`<textarea name="text" rows="4" required>`, "reply"},
+			formParts: []string{`<textarea name="text" rows="4" required id="` + fieldID("text") + `" hx-preserve>`, "reply"},
 			form:      url.Values{"text": {"the staging one"}},
 			wantState: store.StateAnswered, wantFile: "0002-human-answer.json",
 		},
@@ -218,7 +218,7 @@ func TestEachKindRendersAndAnswers(t *testing.T) {
 // half-filled form sends a drop and nothing else, and a stale page is refused
 // like any other answer.
 func TestDropAnswersEveryKind(t *testing.T) {
-	const button = `<button type="submit" name="drop" value="1" formnovalidate>drop</button>`
+	const button = `<button type="submit" name="drop" value="1" formnovalidate id="respond-drop">drop</button>`
 	origin := map[string]string{"Origin": "http://" + testAddr}
 	for kind, rec := range openRecords {
 		t.Run(string(kind), func(t *testing.T) {
@@ -307,7 +307,7 @@ func TestAmendedCase(t *testing.T) {
 }
 
 // The thread shows the body and context an amend replaced, each in a details
-// element the poll keeps as the human left it: the body as markdown with raw
+// element a refresh of the case view keeps as the human left it: the body as markdown with raw
 // HTML dropped, and the context escaped. A case that had no body before has
 // no previous body to show.
 func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
@@ -317,7 +317,7 @@ func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
 	if _, err := a.db.Amend(t.Context(), c.ID, store.AmendRecord{Body: "Now plain.", Context: "Release 1.4.1"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"/cases/" + c.ID, "/cases/" + c.ID + "/thread?state=open"} {
+	for _, target := range []string{"/cases/" + c.ID, "/cases/" + c.ID + "/view?state=open"} {
 		page := a.get(t, target)
 		for _, want := range []string{
 			`<p>replaced the body</p>`,
@@ -347,8 +347,8 @@ func TestThreadShowsWhatAnAmendReplaced(t *testing.T) {
 
 // An amend stored after a later one, as a hand edit or another tool could
 // store it, changes what the later one replaced. The details under the later
-// one then gets a new id, so the poll does not keep the old text in its
-// place.
+// one then gets a new id, so a refresh of the case view does not keep the old
+// text in its place.
 func TestThreadDetailsFollowTheText(t *testing.T) {
 	a := newApp(t)
 	c := a.open(t, store.OpenRecord{Kind: store.KindFYI, Urgency: store.UrgencyToday, Title: "Heads up", Body: "First."})
@@ -356,7 +356,7 @@ func TestThreadDetailsFollowTheText(t *testing.T) {
 		t.Helper()
 		storetest.InsertEvent(t, a.db.Path, c.ID, seq, "agent", "amend", data)
 	}
-	thread := "/cases/" + c.ID + "/thread?state=open"
+	thread := "/cases/" + c.ID + "/view?state=open"
 
 	arrive(3, `{"body":"Third."}`)
 	stale := `<details id="previous-body-3-` + textID("First.") + `" hx-preserve>`
@@ -521,7 +521,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 		{store.KindDecision, url.Values{"note": {"hm"}}, "choose an option", "hm"},
 		{store.KindDecision, url.Values{"choice": {"other"}}, "other needs a note", ""},
 		{store.KindDecision, url.Values{"choice": {"7"}}, "choice 7 is not an option", ""},
-		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "note.deps": {"fine"}}, "choose approve, hold or don&#39;t run for &#34;Migrate&#34;", `<textarea name="note.deps" rows="1">fine</textarea>`},
+		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "note.deps": {"fine"}}, "choose approve, hold or don&#39;t run for &#34;Migrate&#34;", `<textarea name="note.deps" rows="1" id="` + fieldID("note.deps") + `" hx-preserve>fine</textarea>`},
 		{store.KindApproval, url.Values{"verdict.deps": {"approve"}, "verdict.mig": {"maybe"}}, "verdict &#34;maybe&#34;", ""},
 		{store.KindSignoff, url.Values{"signoff": {"changes"}}, "requesting changes needs a note", `value="changes" checked`},
 		{store.KindStuck, url.Values{"stuck": {"text"}}, "write the guidance", ""},
@@ -537,7 +537,7 @@ func TestInvalidAnswerWritesNothing(t *testing.T) {
 				t.Fatalf("status %d", w.Code)
 			}
 			body := w.Body.String()
-			if !strings.Contains(body, tt.wantErr) || !strings.Contains(body, `class="error"`) {
+			if !strings.Contains(refusal(t, body), tt.wantErr) {
 				t.Errorf("body lacks error %q:\n%s", tt.wantErr, body)
 			}
 			if tt.keeps != "" && !strings.Contains(body, tt.keeps) {
@@ -560,7 +560,7 @@ func TestAnswerOnAClosedCaseOrUnknownCase(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "cannot answer a case that is withdrawn") {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
-	for _, target := range []string{"/cases/nope", "/cases/nope/thread"} {
+	for _, target := range []string{"/cases/nope", "/cases/nope/view"} {
 		if w := a.do("GET", target, nil, nil); w.Code != http.StatusNotFound {
 			t.Errorf("GET %s: %d", target, w.Code)
 		}
@@ -604,7 +604,7 @@ func TestStaleTabCannotAnswerAReopenedCase(t *testing.T) {
 	// Tab B gets the case as it is now, with what it typed, and a form at the
 	// current revision.
 	body := w.Body.String()
-	for _, want := range []string{`<p class="error" role="alert">` + staleForm + `</p>`, "Pin to which <strong>patch</strong>?", "float it"} {
+	for _, want := range []string{`<p class="error" role="alert" id="refusal" hx-preserve>` + staleForm + `</p>`, "Pin to which <strong>patch</strong>?", "float it"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("refused page missing %q:\n%s", want, body)
 		}
@@ -702,9 +702,27 @@ func TestStaleRefusalShowsTheCaseAsItIsNow(t *testing.T) {
 	}
 }
 
-func TestThreadFragment(t *testing.T) {
+// The case view refreshes when its case changes. A page drawn while the case
+// was open shows it open still after an answer and a note that reopened it,
+// so the view is drawn again in place: the header, the thread and a form at
+// the case's revision, which sends without a 409 because the human has seen
+// the case as it now is. A view at the case's revision is left as it is, and
+// a change of state loads the page again.
+func TestCaseViewRefresh(t *testing.T) {
 	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	hx := map[string]string{"HX-Request": "true"}
 	c := a.open(t, openRecords[store.KindDecision])
+	page := a.get(t, "/cases/"+c.ID)
+	if want := `<div id="case" hx-get="/cases/` + c.ID + `/view?state=open&amp;revision=1&amp;form=1" hx-trigger="store-changed from:body, every 60s" hx-sync="this:replace" hx-swap="outerHTML settle:0ms">`; !strings.Contains(page, want) {
+		t.Errorf("case page lacks %s", want)
+	}
+	view := "/cases/" + c.ID + "/view?state=open&revision=1"
+	if w := a.do("GET", view, nil, hx); w.Code != http.StatusNoContent || w.Body.Len() != 0 {
+		t.Errorf("unchanged case: %d %q, want 204 and nothing", w.Code, w.Body.String())
+	}
+
+	// Answered in another tab, picked up, and reopened by the agent's note.
 	if _, err := a.db.Answer(t.Context(), c.ID, store.AnswerRecord{Choice: 1, Note: "ship it"}); err != nil {
 		t.Fatal(err)
 	}
@@ -714,35 +732,277 @@ func TestThreadFragment(t *testing.T) {
 	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Which **patch**?"}); err != nil {
 		t.Fatal(err)
 	}
-
-	page := a.get(t, "/cases/"+c.ID)
-	if !strings.Contains(page, `hx-get="/cases/`+c.ID+`/thread?state=open"`) {
-		t.Error("case page does not poll its thread")
+	w := a.do("GET", view, nil, hx)
+	frag := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("changed case: %d %s", w.Code, frag)
 	}
-	// A page rendered while the case was first open polls the same way: the
-	// answer and the note that reopened the case leave the state as the page
-	// shows it, so the thread updates in place and the form keeps what was
-	// typed. Sending that form is refused (TestStaleTabCannotAnswerAReopenedCase).
-	frag := a.get(t, "/cases/"+c.ID+"/thread?state=open")
-	for _, want := range []string{"chose 1. Pin", "note: ship it", "by bun-pins", "Which <strong>patch</strong>?", "human", "agent"} {
+	for _, want := range []string{
+		`<div id="case" hx-get="/cases/` + c.ID + `/view?state=open&amp;revision=4&amp;form=4"`,
+		"<h1>Pin bun?</h1>",
+		`action="/cases/` + c.ID + `/answer"`,
+		"chose 1. Pin", "note: ship it", "by bun-pins", "Which <strong>patch</strong>?",
+	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("thread missing %q:\n%s", want, frag)
+			t.Errorf("view missing %q:\n%s", want, frag)
 		}
 	}
-	if strings.Contains(frag, "<html") {
-		t.Error("thread fragment is a full page")
+	if strings.Contains(frag, "<html") || strings.Contains(frag, `aria-label="inbox"`) {
+		t.Error("the view is a full page, or has the list")
+	}
+	if rev := pageRevision(t, frag); rev != 4 {
+		t.Errorf("view's form revision = %d, want 4", rev)
+	}
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"choice": {"2"}}, pageRevision(t, frag)), origin); w.Code != http.StatusSeeOther {
+		t.Fatalf("answer from the refreshed view: %d %s", w.Code, w.Body.String())
 	}
 
-	// The page was rendered while answered; the case has since reopened, so
-	// the fragment sends the browser back to the case page with a GET.
-	w := a.do("GET", "/cases/"+c.ID+"/thread?state=answered", nil, map[string]string{"HX-Request": "true"})
-	if w.Header().Get("HX-Redirect") != "/cases/"+c.ID || w.Header().Get("HX-Refresh") != "" {
-		t.Errorf("stale state: %d, headers %v", w.Code, w.Header())
+	// Answered now: the view sends the browser to the case page with a GET,
+	// and on / to /, which shows whichever case is first now.
+	w = a.do("GET", "/cases/"+c.ID+"/view?state=open&revision=4", nil, hx)
+	if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/cases/"+c.ID || w.Header().Get("HX-Refresh") != "" {
+		t.Errorf("changed state: %d, headers %v", w.Code, w.Header())
 	}
-	// On / it sends the browser to /, which shows whichever case is first now.
-	w = a.do("GET", "/cases/"+c.ID+"/thread?state=answered&home=1", nil, map[string]string{"HX-Request": "true"})
+	w = a.do("GET", "/cases/"+c.ID+"/view?state=open&revision=4&home=1", nil, hx)
 	if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/" {
-		t.Errorf("stale state on /: %d, headers %v", w.Code, w.Header())
+		t.Errorf("changed state on /: %d, headers %v", w.Code, w.Header())
+	}
+}
+
+// fieldIDs are the ids of the fields a page's form keeps when its case view
+// is drawn again (hx-preserve) whose id starts with prefix, in page order.
+func fieldIDs(t *testing.T, page, prefix string) []string {
+	t.Helper()
+	var ids []string
+	for _, m := range regexp.MustCompile(`id="([^"]*)" hx-preserve[ >]`).FindAllStringSubmatch(page, -1) {
+		if !regexp.MustCompile(`^[a-z][a-z0-9-]*$`).MatchString(m[1]) {
+			t.Errorf("id %q is not a plain CSS selector", m[1])
+		}
+		if strings.HasPrefix(m[1], prefix+"-") {
+			ids = append(ids, m[1])
+		}
+	}
+	return ids
+}
+
+// refusalLine is the line a page's case view says a form was refused on.
+var refusalLine = regexp.MustCompile(`<p class="error" role="alert" id="refusal" hx-preserve( hidden)?>([^<]*)</p>`)
+
+// refusal returns what the refusal line on a page says, or "" when it is
+// hidden. It fails the test when the line is missing, or hidden with text.
+func refusal(t *testing.T, page string) string {
+	t.Helper()
+	m := refusalLine.FindStringSubmatch(page)
+	if m == nil || (m[1] != "") != (m[2] == "") {
+		t.Fatalf("page has no refusal line, or a wrong one:\n%s", page)
+	}
+	return m[2]
+}
+
+// The fields keep their ids when the case view is drawn again, so htmx keeps
+// them as the human left them: the text typed and the choices made. The form
+// takes the case's new revision, except after an amend that changes the
+// question: then it keeps the one it had through later refreshes, so its
+// next send is refused and the case shown again to be checked, with what was
+// sent, and sending from there goes through.
+func TestCaseViewKeepsTheFormAsLeft(t *testing.T) {
+	a := newApp(t)
+	origin := map[string]string{"Origin": "http://" + testAddr}
+	c := a.open(t, openRecords[store.KindApproval])
+	page := a.get(t, "/cases/"+c.ID)
+	texts, choices := fieldIDs(t, page, "field"), fieldIDs(t, page, "choice")
+	// A note on each of the two rows and the note to the agent; three
+	// verdicts on each row.
+	if len(texts) != 3 || len(choices) != 6 {
+		t.Fatalf("%d text fields and %d choices, want 3 and 6:\n%s", len(texts), len(choices), page)
+	}
+	all := append(slices.Clone(texts), choices...)
+	slices.Sort(all)
+	if len(slices.Compact(all)) != 9 {
+		t.Errorf("ids are not unique: %v", all)
+	}
+	refresh := func(view, form int) string {
+		t.Helper()
+		return a.get(t, fmt.Sprintf("/cases/%s/view?state=open&revision=%d&form=%d", c.ID, view, form))
+	}
+	drawn := func(frag string, view, form int) {
+		t.Helper()
+		if want := fmt.Sprintf("/view?state=open&amp;revision=%d&amp;form=%d", view, form); !strings.Contains(frag, want) {
+			t.Errorf("view does not ask with %s", want)
+		}
+		if got := pageRevision(t, frag); got != form {
+			t.Errorf("form revision = %d, want %d", got, form)
+		}
+	}
+
+	// A note from the agent, and an amend that only adds labels, leave the
+	// question as it was.
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "The migration is the slow one."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Amend(t.Context(), c.ID, store.AmendRecord{Labels: []string{"round 2"}}); err != nil {
+		t.Fatal(err)
+	}
+	frag := refresh(1, 1)
+	if got := fieldIDs(t, frag, "field"); !slices.Equal(got, texts) {
+		t.Errorf("text fields after a note = %v, want %v", got, texts)
+	}
+	if got := fieldIDs(t, frag, "choice"); !slices.Equal(got, choices) {
+		t.Errorf("choices after a note = %v, want %v", got, choices)
+	}
+	drawn(frag, 3, 3)
+
+	// An amend that adds a row changes the question. The fields there were
+	// keep their ids, the row's are new, and the form keeps revision 3.
+	row := store.Row{ID: "deploy", Label: "Deploy", Script: "make deploy", Link: "https://example.com/deploy"}
+	if _, err := a.db.Amend(t.Context(), c.ID, store.AmendRecord{Rows: []store.Row{row}}); err != nil {
+		t.Fatal(err)
+	}
+	frag = refresh(3, 3)
+	gotTexts, gotChoices := fieldIDs(t, frag, "field"), fieldIDs(t, frag, "choice")
+	if len(gotTexts) != 4 || len(gotChoices) != 9 || !slices.Contains(gotTexts, fieldID("note.deploy")) {
+		t.Errorf("after the amend: text fields %v, choices %v", gotTexts, gotChoices)
+	}
+	for _, id := range append(slices.Clone(texts), choices...) {
+		if !slices.Contains(append(slices.Clone(gotTexts), gotChoices...), id) {
+			t.Errorf("field %s lost its id in the amend", id)
+		}
+	}
+	drawn(frag, 4, 3)
+	// A later note leaves the form where it was.
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Deploy last."}); err != nil {
+		t.Fatal(err)
+	}
+	frag = refresh(4, 3)
+	drawn(frag, 5, 3)
+
+	form := url.Values{"verdict.deps": {"approve"}, "verdict.mig": {"hold"}, "verdict.deploy": {"hold"}, "note.deploy": {"after the release"}}
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, pageRevision(t, frag)), origin)
+	if w.Code != http.StatusConflict || refusal(t, w.Body.String()) != staleForm {
+		t.Fatalf("send from the held form: %d, want 409 with the stale form line\n%s", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); pageRevision(t, body) != 5 || !strings.Contains(body, ">after the release</textarea>") {
+		t.Errorf("refused page is not at revision 5 with what was sent:\n%s", body)
+	}
+	if w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, 5), origin); w.Code != http.StatusSeeOther {
+		t.Errorf("sent again: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Every field the case view keeps carries the id made from its own name and
+// value, so a refresh keeps each in its place, and no two share one.
+func TestFormIDsMatchTheirFields(t *testing.T) {
+	a := newApp(t)
+	radio := regexp.MustCompile(`<input type="radio"[^>]* name="([^"]+)" value="([^"]+)"[^>]* id="([^"]+)" hx-preserve>`)
+	textarea := regexp.MustCompile(`<textarea name="([^"]+)"[^>]* id="([^"]+)" hx-preserve>`)
+	for kind, rec := range openRecords {
+		c := a.open(t, rec)
+		page := a.get(t, "/cases/"+c.ID)
+		start := strings.Index(page, `class="respond"`)
+		form := page[start : start+strings.Index(page[start:], "</form>")]
+		ids := map[string]bool{}
+		unique := func(id string) {
+			if ids[id] {
+				t.Errorf("%s: id %s is used twice", kind, id)
+			}
+			ids[id] = true
+		}
+		radios := radio.FindAllStringSubmatch(form, -1)
+		for _, m := range radios {
+			if want := choiceID(m[1], m[2]); m[3] != want {
+				t.Errorf("%s: radio %s=%s has id %s, want %s", kind, m[1], m[2], m[3], want)
+			}
+			unique(m[3])
+		}
+		texts := textarea.FindAllStringSubmatch(form, -1)
+		for _, m := range texts {
+			if want := fieldID(m[1]); m[2] != want {
+				t.Errorf("%s: textarea %s has id %s, want %s", kind, m[1], m[2], want)
+			}
+			unique(m[2])
+		}
+		if len(radios) != strings.Count(form, `type="radio"`) || len(texts) != strings.Count(form, "<textarea") {
+			t.Errorf("%s: a field the view does not keep:\n%s", kind, form)
+		}
+	}
+}
+
+// The line saying a form was refused is in the case view on every page,
+// hidden and empty unless a form was refused, and a view drawn again carries
+// it that way: htmx keeps the page's own line in its place (hx-preserve), so
+// a refresh does not wipe a refusal the human has not read.
+func TestRefusalLineOutlivesARefresh(t *testing.T) {
+	a := newApp(t)
+	c := a.open(t, openRecords[store.KindDecision])
+	if got := refusal(t, a.get(t, "/cases/"+c.ID)); got != "" {
+		t.Errorf("a page no form was sent from says %q", got)
+	}
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"choice": {"1"}}, 0), nil)
+	if w.Code != http.StatusConflict || refusal(t, w.Body.String()) != staleForm {
+		t.Fatalf("stale send: %d\n%s", w.Code, w.Body.String())
+	}
+	if _, err := a.db.Note(t.Context(), c.ID, store.NoteRecord{Body: "Pin to which patch?"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := refusal(t, a.get(t, "/cases/"+c.ID+"/view?state=open&revision=1&form=1")); got != "" {
+		t.Errorf("the view drawn again says %q, want an empty line for htmx to keep the page's in place of", got)
+	}
+}
+
+// A tab served before pages followed the store asks
+// /cases/{id}/thread?state=S every two seconds until it is reloaded. It gets
+// 204, which is not logged, until the case changes state, and then goes to
+// the case page, or to / from /.
+func TestOldThreadPoll(t *testing.T) {
+	a := newApp(t)
+	hx := map[string]string{"HX-Request": "true"}
+	c := a.open(t, openRecords[store.KindFYI])
+	old := "/cases/" + c.ID + "/thread?state=open"
+	if w := a.do("GET", old, nil, hx); w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "" || w.Body.Len() != 0 {
+		t.Errorf("unchanged: %d, headers %v", w.Code, w.Header())
+	}
+	if _, err := a.db.Answer(t.Context(), c.ID, store.AnswerRecord{Ack: true}); err != nil {
+		t.Fatal(err)
+	}
+	if w := a.do("GET", old, nil, hx); w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/cases/"+c.ID {
+		t.Errorf("changed state: %d, headers %v", w.Code, w.Header())
+	}
+	if w := a.do("GET", old+"&home=1", nil, hx); w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/" {
+		t.Errorf("changed state on /: %d, headers %v", w.Code, w.Header())
+	}
+	if w := a.do("GET", "/cases/nope/thread?state=open", nil, hx); w.Code != http.StatusNotFound {
+		t.Errorf("unknown case: %d", w.Code)
+	}
+	if log := a.log.String(); strings.Contains(log, c.ID+"/thread") {
+		t.Errorf("the old tab's requests are logged:\n%s", log)
+	}
+}
+
+// noteOnGet is a store that has the agent write a note on a case just after
+// the case is read, as when a note lands while a form is being sent.
+type noteOnGet struct{ store.Store }
+
+func (s noteOnGet) Get(ctx context.Context, id string) (*store.Case, error) {
+	c, err := s.Store.Get(ctx, id)
+	if err == nil {
+		_, err = s.Note(ctx, id, store.NoteRecord{Body: "Written while the form was sent."})
+	}
+	return c, err
+}
+
+// A refused form's page shows the case as it was read, so a note that lands
+// just after is not on it. The page's event stream starts from the list read
+// before the case, so it reports the note at once.
+func TestRefusedPageFollowsAChangeMadeWhileItWasSent(t *testing.T) {
+	a := newAppWith(t, func(s store.Store) store.Store { return noteOnGet{s} })
+	c := a.open(t, openRecords[store.KindStuck])
+	// Guidance chosen and not written: refused before anything is written.
+	w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(url.Values{"stuck": {"text"}}, 1), nil)
+	if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), "Written while the form was sent.") {
+		t.Fatalf("status %d, or the note already on the page:\n%s", w.Code, w.Body.String())
+	}
+	if pageVersion(t, w.Body.String()) == pageVersion(t, a.get(t, "/")) {
+		t.Error("the refused page starts its stream at the version with the note, so it is not told of it")
 	}
 }
 
@@ -934,11 +1194,11 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 				t.Errorf("%s has %s", target, not)
 			}
 		}
-		// The list has no poll of its own; the thread and the tally poll.
-		tallyPoll := `<div hx-get="/fragments/tally" hx-trigger="every 2s" hx-swap="none" hidden></div>`
-		threadPoll := `hx-get="/cases/` + tc.c.ID + `/thread?state=` + string(tc.state) + `"`
-		if n := strings.Count(body, `hx-get=`); n != 2 || !strings.Contains(body, tallyPoll) || !strings.Contains(body, threadPoll) {
-			t.Errorf("%s has %d polls, want only the tally and the thread", target, n)
+		// The list is not refreshed; the tally and the case view are.
+		tallyRefresh := `<div hx-get="/fragments/tally" hx-trigger="store-changed from:body" hx-sync="this:replace" hx-swap="none" hidden></div>`
+		caseRefresh := `hx-get="/cases/` + tc.c.ID + `/view?state=` + string(tc.state) + `&amp;revision=`
+		if n := strings.Count(body, `hx-get=`); n != 2 || !strings.Contains(body, tallyRefresh) || !strings.Contains(body, caseRefresh) {
+			t.Errorf("%s has %d refreshing regions, want only the tally and the case view", target, n)
 		}
 		if tc.ids != nil {
 			// The list, then the case's own link in the recorded line or thread, if any.
@@ -953,13 +1213,13 @@ func TestDoneCaseSitsBesideTheDoneList(t *testing.T) {
 			}
 		}
 		// A change of state reloads the same case page, which picks the list again.
-		w := a.do("GET", target+"/thread?state=open", nil, map[string]string{"HX-Request": "true"})
+		w := a.do("GET", target+"/view?state=open&revision=1", nil, map[string]string{"HX-Request": "true"})
 		if w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != target {
-			t.Errorf("%s thread poll after a state change: %d, headers %v", target, w.Code, w.Header())
+			t.Errorf("%s case view after a state change: %d, headers %v", target, w.Code, w.Header())
 		}
 	}
 
-	// The tally poll carries the title and the count, and no list.
+	// The tally refresh carries the title and the count, and no list.
 	frag := a.do("GET", "/fragments/tally", nil, map[string]string{"HX-Request": "true"}).Body.String()
 	if want := "<title>(1) cases</title>\n" + `<span id="tally" class="label tally" hx-swap-oob="true"><span><strong>1</strong> today</span></span>`; frag != want {
 		t.Errorf("tally fragment = %q\nwant %q", frag, want)
@@ -985,7 +1245,7 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	a := newApp(t)
 	body := a.get(t, "/")
 	if !strings.Contains(body, "<h1>inbox zero.</h1>") || !strings.Contains(body, `hx-get="/fragments/inbox?empty=1"`) {
-		t.Fatalf("empty / does not poll for a first case:\n%s", body)
+		t.Fatalf("empty / does not refresh for a first case:\n%s", body)
 	}
 	hx := map[string]string{"HX-Request": "true"}
 	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `hx-get="/fragments/inbox?empty=1"`) || !strings.Contains(w.Body.String(), "<h1>inbox zero.</h1>") {
@@ -995,7 +1255,7 @@ func TestEmptyHomeReloadsWhenACaseArrives(t *testing.T) {
 	if w := a.do("GET", "/fragments/inbox?empty=1", nil, hx); w.Code != http.StatusNoContent || w.Header().Get("HX-Redirect") != "/" {
 		t.Errorf("case arrived: %d, headers %v", w.Code, w.Header())
 	}
-	// A case page never polls with empty=1.
+	// A case page never refreshes with empty=1.
 	if w := a.do("GET", "/fragments/inbox", nil, hx); w.Code != http.StatusOK {
 		t.Errorf("plain fragment: %d", w.Code)
 	}
@@ -1171,7 +1431,7 @@ func TestEmptyAnswersAreRefused(t *testing.T) {
 				a := newApp(t)
 				c := a.open(t, openRecords[kind])
 				w := a.do("POST", "/cases/"+c.ID+"/answer", withRevision(form, 1), nil)
-				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `class="error"`) {
+				if w.Code != http.StatusUnprocessableEntity || refusal(t, w.Body.String()) == "" {
 					t.Errorf("status %d, want 422 with an error:\n%s", w.Code, w.Body.String())
 				}
 				if files := a.eventFiles(t, c.ID); len(files) != 1 {
@@ -1384,7 +1644,7 @@ func TestInboxZeroCountsWhatWasGotThrough(t *testing.T) {
 	if strings.Contains(body, `class="split`) || strings.Contains(body, "nothing has needed you yet.") || strings.Contains(body, "no open cases.") {
 		t.Errorf("/ at inbox zero still shows the columns or the fresh-store line:\n%s", body)
 	}
-	// The poll renders the same panel.
+	// The refresh renders the same panel.
 	frag := a.do("GET", "/fragments/inbox?empty=1", nil, map[string]string{"HX-Request": "true"}).Body.String()
 	if !strings.Contains(frag, "<p>you got through <strong>2</strong> cases today, <strong>4</strong> this week.</p>") {
 		t.Errorf("fragment lacks the panel:\n%s", frag)
@@ -1472,7 +1732,7 @@ func TestTitleCountsCasesWaitingOnTheHuman(t *testing.T) {
 		}
 	}
 
-	// The poll carries the new count once a case is answered, and a bare
+	// The refresh carries the new count once a case is answered, and a bare
 	// title once none is waiting.
 	if _, err := a.db.Answer(t.Context(), first.ID, store.AnswerRecord{Ack: true}); err != nil {
 		t.Fatal(err)

@@ -79,6 +79,11 @@ type Case struct {
 // case only cases has written it is also the latest event's sequence number.
 func (c *Case) Revision() int { return c.events }
 
+// AmendSeq is the sequence number of the last amend that changed the
+// question, the one a later answer must have seen, or 0 when there is none.
+// An amend that only adds labels does not count.
+func (c *Case) AmendSeq() int { return c.amendSeq }
+
 // TransitionError is an event the case's current state does not allow.
 type TransitionError struct {
 	Event EventType

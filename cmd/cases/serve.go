@@ -89,7 +89,8 @@ func (c *ServeCmd) Run(d *Deps) error {
 	var requests atomic.Int64
 	handler := srv.Handler()
 	counted := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Leave out the refreshes and notification checks an open tab makes.
+		// Leave out the event streams, refreshes and notification checks an
+		// open tab makes.
 		if !web.IsPoll(r) {
 			requests.Add(1)
 		}
@@ -111,7 +112,7 @@ func (c *ServeCmd) Run(d *Deps) error {
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
-		pollForNotifications(ctx, srv, notifyPoll)
+		pollStore(ctx, srv, storePoll)
 	}()
 	// Serve returns before ctx ends when the listener fails; stop the poll
 	// and wait for it either way.
@@ -119,18 +120,18 @@ func (c *ServeCmd) Run(d *Deps) error {
 		quit()
 		<-polled
 	}()
-	return web.Serve(ctx, ln, counted)
+	return web.Serve(ctx, ln, counted, srv.EndStreams)
 }
 
-// notifyPoll is how often serve reads the store for notifications when no tab
-// is asking.
-const notifyPoll = 2 * time.Second
+// storePoll is how often serve reads the store by itself, for the
+// notifications and the event streams of the pages open on it.
+const storePoll = time.Second
 
-// pollForNotifications reads the store through the server every interval
-// until ctx ends, so cases that land on the human are queued for the browser
-// while no tab is open. A failed read is left to the requests and the status
-// screen to report.
-func pollForNotifications(ctx context.Context, srv *web.Server, interval time.Duration) {
+// pollStore reads the store through the server every interval until ctx
+// ends, so cases that land on the human are queued for the browser while no
+// tab is open, and open pages are told when the store changes. A failed read
+// is left to the requests and the status screen to report.
+func pollStore(ctx context.Context, srv *web.Server, interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {

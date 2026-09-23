@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +111,18 @@ func textID(s string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// fieldID is the id of the text field name in the response form, and
+// choiceID the id of the radio button for value in the group name. The case
+// view keeps the elements with these ids when it refreshes (hx-preserve), so
+// what the human has typed and chosen stays as it was.
+func fieldID(name string) string {
+	return "field-" + textID(name)
+}
+
+func choiceID(name, value string) string {
+	return "choice-" + textID(name+"="+value)
+}
+
 // isWebLink reports whether a case or row link is an http or https URL. Other
 // links, such as a filesystem path, are shown as text: they would not open.
 func isWebLink(s string) bool {
@@ -125,6 +138,8 @@ var funcs = template.FuncMap{
 	"markdown":   renderMarkdown,
 	"pathEscape": url.PathEscape,
 	"textID":     textID,
+	"fieldID":    fieldID,
+	"choiceID":   choiceID,
 	"webLink":    isWebLink,
 	"stamp": func(t time.Time) string {
 		if t.IsZero() {
@@ -166,6 +181,9 @@ func init() {
 type page struct {
 	tally
 	Nav string // the header link to mark as current
+	// Events is the event stream a page that follows the store opens; empty
+	// on a page that does not.
+	Events string
 }
 
 // tally is the header's counts: open cases by urgency, and parked cases.
@@ -228,13 +246,13 @@ type card struct {
 }
 
 // inboxData is the list column. Selected is the id of the case beside it, so
-// the polled list keeps it selected.
+// the refreshed list keeps it selected.
 type inboxData struct {
 	page
 	Cards    []card
 	Selected string
 	// Empty is set on / when it was rendered with no case to show, so the
-	// polled list reloads / once a case arrives.
+	// refreshed list reloads / once a case arrives.
 	Empty bool
 	// Zero is what was got through, set with Empty while the inbox is empty.
 	Zero *zeroStats
@@ -452,8 +470,8 @@ func (s *Server) inboxFragment(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "case", "inbox-fragment", d)
 }
 
-// tallyFragment is polled by a done case's page, whose list does not poll,
-// to keep the header tally and the title's count current.
+// tallyFragment keeps the header tally and the title's count current on a
+// done case's page, whose list is not refreshed.
 func (s *Server) tallyFragment(w http.ResponseWriter, r *http.Request) {
 	cases, err := s.cases()
 	if err != nil {
@@ -597,7 +615,8 @@ type threadEntry struct {
 }
 
 // caseData is the list column and the working area. Case is nil when the
-// inbox is empty. Home is set on /, where a stale thread reloads / instead.
+// inbox is empty. Home is set on /, where a change of state sends the case
+// view to / instead.
 // Done is set in place of Inbox when the case is done: the done list is
 // beside it.
 type caseData struct {
@@ -608,6 +627,9 @@ type caseData struct {
 	// Recorded is set when the page is where a post went after writing.
 	Recorded *recorded
 	Case     *store.Case
+	// Revision is the revision the page's form carries: the case's, but see
+	// caseFragment.
+	Revision int
 	Thread   []threadEntry
 	Error    string
 	Form     url.Values
@@ -657,12 +679,15 @@ func (s *Server) casePage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, cases []*store.Case, home bool, rec *recorded, msg string, form url.Values) {
 	d := caseData{Home: home, Recorded: rec, Error: msg, Form: form}
+	if c != nil {
+		d.Revision = c.Revision()
+	}
 	switch {
 	case c != nil && isDone(c):
 		// A done case sits beside the done list, under the filter it is on.
-		// The list does not poll, as on /done, but the tally and title count do;
-		// the thread poll reloads the page when the case changes state,
-		// which picks the list again.
+		// The list is not refreshed, as on /done, but the tally and title
+		// count are; the case view reloads the page when the case changes
+		// state, which picks the list again.
 		show := "all"
 		if inFlight(c) {
 			show = "inflight"
@@ -681,19 +706,26 @@ func (s *Server) renderCase(w http.ResponseWriter, status int, c *store.Case, ca
 		}
 		d.page = d.Inbox.page
 	}
+	// The page's event stream starts from the cases the page was drawn
+	// from. The case shown can be read after them, as a refused form reads
+	// it, so the stream reports at once a change the list lacks, and the page
+	// refreshes once more than it needs to when the case has it already.
+	d.Events = eventsURL(cases)
 	s.render(w, status, "case", "layout.html", d)
 }
 
-// threadFragment is polled by the case page. When the case has moved to a
-// state other than the one the page was rendered in, the form on the page is
-// stale, so it sends htmx to the case page with a fresh GET. A reload would
-// be wrong: the page may be the re-rendered result of a failed POST, and
-// reloading it would post the form again. On / (home=1) it sends htmx to /,
-// which shows whichever case is now first. A change that leaves the state as
-// it was, such as an answer and then a note that reopens the case, only
-// updates the thread, so what the human has typed is kept: the form's
-// revision is out of date by then, and sending it gets a 409.
-func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
+// caseFragment refreshes the case view on a page when the store changes, and
+// once a minute: GET /cases/{id}/view?state=S&revision=R&form=F, the state
+// and revision the view was drawn at and the revision its form carries. A
+// case that has moved to another state sends htmx to a fresh GET (see
+// leftState). A case at revision R answers 204 and the view stays as it is.
+// Otherwise the whole view is drawn again, the header, the form and the
+// thread, and htmx keeps the form's fields as the human left them (see
+// fieldID). The form carries the case's revision, so a human who saw a note
+// arrive can send, except after an amend that changed the question
+// (AmendSeq): the form then keeps revision F, so its next send is refused and
+// the case shown again to be checked, as for any form older than the case.
+func (s *Server) caseFragment(w http.ResponseWriter, r *http.Request) {
 	c, _, err := s.find(r.PathValue("id"))
 	if err != nil {
 		s.fail(w, err)
@@ -703,17 +735,58 @@ func (s *Server) threadFragment(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	home := r.URL.Query().Get("home") == "1"
-	if string(c.State) != r.URL.Query().Get("state") {
-		target := "/cases/" + url.PathEscape(c.ID)
-		if home {
-			target = "/"
-		}
-		w.Header().Set("HX-Redirect", target)
+	q := r.URL.Query()
+	if leftState(w, q, c) {
+		return
+	}
+	if revisionParam(q) == c.Revision() {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.render(w, http.StatusOK, "case", "thread", caseData{Home: home, Case: c, Thread: thread(c)})
+	d := caseData{Home: q.Get("home") == "1", Case: c, Revision: c.Revision(), Thread: thread(c)}
+	if form, err := strconv.Atoi(q.Get("form")); err == nil && c.AmendSeq() > form {
+		d.Revision = form
+	}
+	s.render(w, http.StatusOK, "case", "case", d)
+}
+
+// leftState sends htmx to a fresh GET of the case page, or of / when the page
+// is / (home=1), if c is no longer in the state the page was drawn in
+// (state=S), and reports whether it did: the form on the page is for the
+// state it was drawn in. A reload would be wrong: the page may be the
+// re-rendered result of a failed POST, and reloading it would post the form
+// again.
+func leftState(w http.ResponseWriter, q url.Values, c *store.Case) bool {
+	if string(c.State) == q.Get("state") {
+		return false
+	}
+	target := "/cases/" + url.PathEscape(c.ID)
+	if q.Get("home") == "1" {
+		target = "/"
+	}
+	w.Header().Set("HX-Redirect", target)
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+// oldThread answers a page served before pages followed the store, such as
+// one left open while serve is upgraded: until it is reloaded, it asks GET
+// /cases/{id}/thread?state=S every two seconds. It is sent to the case page
+// once the case changes state, as before, and otherwise gets 204, so its
+// requests are not logged as errors.
+func (s *Server) oldThread(w http.ResponseWriter, r *http.Request) {
+	c, _, err := s.find(r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !leftState(w, r.URL.Query(), c) {
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // writeContext is the context a form's write to the store runs in: the
@@ -750,11 +823,13 @@ func (s *Server) loadForPost(w http.ResponseWriter, r *http.Request) (*store.Cas
 }
 
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	// The list is read before the case, so a page drawn from both after a
+	// refusal has its event stream report a change that lands between them.
+	cases, _ := s.cases()
 	c, ok := s.loadForPost(w, r)
 	if !ok {
 		return
 	}
-	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
 	// A form from a page older than the case is refused before its answer is
 	// read, so a mistake in the form cannot show the page again at the new
@@ -784,11 +859,11 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
+	cases, _ := s.cases() // before the case, as in answer
 	c, ok := s.loadForPost(w, r)
 	if !ok {
 		return
 	}
-	cases, _ := s.cases()
 	next := nextCase(cases, c.ID)
 	if _, err := s.store.Resume(writeContext(r), c.ID, store.AuthorHuman, store.ResumeRecord{Actor: s.Actor}, store.AtRevision(revisionParam(r.PostForm))); err != nil {
 		s.refuse(w, r, c, cases, err, nil)
