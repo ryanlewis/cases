@@ -1,0 +1,377 @@
+[
+  {
+    "description": "rows fold in seq order and each event records the state before it",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:03:00Z"}},
+      {"seq": 4, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:04:00Z"}},
+      {"seq": 5, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:05:00Z"}},
+      {"seq": 6, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:06:00Z"}},
+      {"seq": 7, "author": "agent", "event": "resume", "data": {"resumed_at": "2026-09-15T09:07:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "revision": 7,
+      "updated_at": "2026-09-15T09:07:00Z",
+      "problems": [],
+      "events": [
+        {"seq": 1, "author": "agent", "event": "open", "file": "0001-agent-open.json", "from": null, "at": "2026-09-15T09:01:00Z"},
+        {"seq": 2, "author": "agent", "event": "note", "file": "0002-agent-note.json", "from": "open", "at": "2026-09-15T09:02:00Z"},
+        {"seq": 3, "author": "human", "event": "answer", "file": "0003-human-answer.json", "from": "open", "at": "2026-09-15T09:03:00Z"},
+        {"seq": 4, "author": "agent", "event": "pickup", "file": "0004-agent-pickup.json", "from": "answered", "at": "2026-09-15T09:04:00Z"},
+        {"seq": 5, "author": "agent", "event": "note", "file": "0005-agent-note.json", "from": "pickedup", "at": "2026-09-15T09:05:00Z"},
+        {"seq": 6, "author": "human", "event": "park", "file": "0006-human-park.json", "from": "open", "at": "2026-09-15T09:06:00Z"},
+        {"seq": 7, "author": "agent", "event": "resume", "file": "0007-agent-resume.json", "from": "parked", "at": "2026-09-15T09:07:00Z"}
+      ]
+    }
+  },
+  {
+    "description": "a malformed row and a row by an unknown author are skipped and still counted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": tru"},
+      {"seq": 3, "author": "bob", "event": "note", "data": {"body": "hi", "noted_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "revision": 3,
+      "events": [{"seq": 1}],
+      "problems": [
+        {"seq": 2, "file": "0002-human-answer.json", "category": "malformed"},
+        {"seq": 3, "file": "0003-bob-note.json", "category": "author"}
+      ]
+    }
+  },
+  {
+    "description": "an unknown event is skipped",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "comment", "data": {"body": "x"}}
+    ],
+    "expect": {"state": "open", "revision": 2, "events": [{"seq": 1}], "problems": [{"seq": 2, "category": "unknown"}]}
+  },
+  {
+    "description": "a row the state does not allow is skipped and later rows still fold",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "close", "data": {"outcome": "Done.", "closed_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {
+      "state": "answered",
+      "revision": 3,
+      "events": [{"seq": 1}, {"seq": 3}],
+      "problems": [{"seq": 2, "category": "transition"}]
+    }
+  },
+  {
+    "description": "a row that breaks its event's rules is skipped",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"choice": 9, "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "human", "event": "answer", "data": {"choice": 1, "answered_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {
+      "state": "answered",
+      "answer": {"choice": 1, "answered_at": "2026-09-15T09:03:00Z"},
+      "problems": [{"seq": 2, "category": "invalid"}]
+    }
+  },
+  {
+    "description": "a record that is not an object is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "[]"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "an empty record is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": ""}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "text after the record is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true} x"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "a field of the wrong type is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"choice\": \"2\"}"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "a number with a fraction part, even .0, is malformed where a whole number goes",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"choice\": 2.0}"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "a time without an offset is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true, \"answered_at\": \"2026-09-15T09:02:00\"}"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "an empty time is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true, \"answered_at\": \"\"}"}
+    ],
+    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "white space after the record is not text after it",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true, \"answered_at\": \"2026-09-15T09:02:00Z\"}\n\n"}
+    ],
+    "expect": {"state": "answered", "problems": []}
+  },
+  {
+    "description": "a record's time may have any offset",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T11:02:00+02:00"}}
+    ],
+    "expect": {
+      "answer": {"ack": true, "answered_at": "2026-09-15T09:02:00Z"},
+      "updated_at": "2026-09-15T09:02:00Z",
+      "events": [{"seq": 1, "at": "2026-09-15T09:01:00Z"}, {"seq": 2, "at": "2026-09-15T09:02:00Z"}]
+    }
+  },
+  {
+    "description": "updated_at is the latest event time, not the last row's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "First.", "noted_at": "2026-09-15T09:05:00Z"}},
+      {"seq": 3, "author": "agent", "event": "note", "data": {"body": "Second.", "noted_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {"updated_at": "2026-09-15T09:05:00Z"}
+  },
+  {
+    "description": "a skipped row's time does not count",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "close", "data": {"outcome": "Done.", "closed_at": "2026-09-15T09:09:00Z"}}
+    ],
+    "expect": {"updated_at": "2026-09-15T09:01:00Z", "problems": [{"seq": 2, "category": "transition"}]}
+  },
+  {
+    "description": "fields this version does not know are kept in the event's data",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "colour": "teal", "extra": {"n": 1}, "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "problems": [],
+      "events": [
+        {"seq": 1, "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "colour": "teal", "extra": {"n": 1}, "opened_at": "2026-09-15T09:01:00Z"}}
+      ]
+    }
+  },
+  {
+    "description": "an actor from a later build folds and keeps its extra fields",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\":true,\"actor\":{\"id\":\"u_123\",\"name\":\"Ryan\",\"kind\":\"member\"},\"answered_at\":\"2026-09-17T10:00:00Z\"}"}
+    ],
+    "expect": {
+      "state": "answered",
+      "answer": {"ack": true, "actor": {"name": "Ryan", "kind": "member"}, "answered_at": "2026-09-17T10:00:00Z"},
+      "events": [
+        {"seq": 1},
+        {"seq": 2, "actor": {"name": "Ryan", "kind": "member"}, "data": {"ack": true, "actor": {"id": "u_123", "name": "Ryan", "kind": "member"}, "answered_at": "2026-09-17T10:00:00Z"}}
+      ]
+    }
+  },
+  {
+    "description": "each event keeps its actor, and the answer keeps the human's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "actor": {"name": "bun-pins", "kind": "agent"}, "for": "Ryan", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"choice": 2, "actor": {"name": "Ryan", "kind": "human"}, "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "data": {"picked_up_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {
+      "state": "pickedup",
+      "for": "Ryan",
+      "actor": {"name": "bun-pins", "kind": "agent"},
+      "answer": {"choice": 2, "actor": {"name": "Ryan", "kind": "human"}, "answered_at": "2026-09-15T09:02:00Z"},
+      "pickup": {"picked_up_at": "2026-09-15T09:03:00Z"},
+      "events": [
+        {"seq": 1, "actor": {"name": "bun-pins", "kind": "agent"}},
+        {"seq": 2, "actor": {"name": "Ryan", "kind": "human"}},
+        {"seq": 3, "actor": null}
+      ]
+    }
+  },
+  {
+    "description": "a row whose actor has no name is skipped",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"ack": true, "actor": {"name": "", "kind": "human"}, "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "problems": [{"seq": 2, "category": "invalid"}]}
+  },
+  {
+    "description": "an open written before labels existed folds",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "{\"kind\":\"fyi\",\"urgency\":\"whenever\",\"title\":\"Old case\",\"worker\":\"w1\",\"brief\":\"BRIEF.md\",\"opened_at\":\"2026-09-01T10:00:00Z\"}"}
+    ],
+    "expect": {"state": "open", "labels": [], "worker": "w1", "brief": "BRIEF.md", "problems": []}
+  },
+  {
+    "description": "records an earlier build wrote, byte for byte, fold as that build showed them",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "{\n  \"kind\": \"decision\",\n  \"urgency\": \"today\",\n  \"title\": \"Pin bun or float\",\n  \"body\": \"# Pin bun?\\n\\nWe use bun 1.2 in CI.\\n\\n- **Pin**: stable\\n- Float: \\u003cnewer\\u003e \\u0026 riskier\\n\",\n  \"options\": [\n    \"Pin to 1.2.3\",\n    \"Float\"\n  ],\n  \"links\": [\n    \"https://example.com/pr\"\n  ],\n  \"labels\": [\n    \"round-3\"\n  ],\n  \"context\": \"Release 1.4\",\n  \"opened_at\": \"2026-09-16T22:15:41.605108Z\"\n}\n"},
+      {"seq": 2, "author": "agent", "event": "amend", "raw": "{\n  \"body\": \"# Pin bun?\\n\\nNow with the lockfile diff.\\n\",\n  \"links\": [\n    \"https://example.com/log\"\n  ],\n  \"context\": \"Release 1.4.1\\nafter the freeze\",\n  \"amended_at\": \"2026-09-16T22:15:41.632062Z\"\n}\n"},
+      {"seq": 3, "author": "agent", "event": "amend", "raw": "{\n  \"links\": [\n    \"https://example.com/diff\"\n  ],\n  \"amended_at\": \"2026-09-16T22:15:41.652736Z\"\n}\n"},
+      {"seq": 4, "author": "agent", "event": "amend", "raw": "{\n  \"labels\": [\n    \"review\"\n  ],\n  \"amended_at\": \"2026-09-16T22:15:41.668651Z\"\n}\n"}
+    ],
+    "expect": {
+      "state": "open",
+      "revision": 4,
+      "problems": [],
+      "amend_seq": 3,
+      "kind": "decision",
+      "title": "Pin bun or float",
+      "body": "# Pin bun?\n\nNow with the lockfile diff.\n",
+      "context": "Release 1.4.1\nafter the freeze",
+      "options": ["Pin to 1.2.3", "Float"],
+      "links": ["https://example.com/pr", "https://example.com/log", "https://example.com/diff"],
+      "labels": ["round-3", "review"],
+      "opened_at": "2026-09-16T22:15:41.605108Z",
+      "updated_at": "2026-09-16T22:15:41.668651Z"
+    }
+  },
+  {
+    "description": "a case with no events does not fold",
+    "events": [],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "an open that is not JSON does not fold",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "not json"}
+    ],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "an open of an unknown kind does not fold",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "poll", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "an open by the human does not fold",
+    "events": [
+      {"seq": 1, "author": "human", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "an open with a blank title does not fold",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": " ", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "a later open is used when the first was skipped",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "poll", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "kind": "fyi",
+      "revision": 2,
+      "events": [{"seq": 2}],
+      "problems": [{"seq": 1, "category": "unknown"}]
+    }
+  },
+  {
+    "description": "the event is checked first: an unknown event by an unknown author with a broken record is unknown",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "bob", "event": "comment", "raw": "not json"}
+    ],
+    "expect": {"problems": [{"seq": 2, "category": "unknown"}]}
+  },
+  {
+    "description": "the author is checked before the record is read",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "note", "raw": "not json"}
+    ],
+    "expect": {"problems": [{"seq": 2, "category": "author"}]}
+  },
+  {
+    "description": "the record is read before the state is checked",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "close", "raw": "not json"}
+    ],
+    "expect": {"problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "the actor is checked before the state",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "pickup", "data": {"actor": {"name": "", "kind": "agent"}, "picked_up_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"problems": [{"seq": 2, "category": "invalid"}]}
+  },
+  {
+    "description": "the state is checked before the record's rules",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "close", "data": {"outcome": "", "closed_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"problems": [{"seq": 2, "category": "transition"}]}
+  },
+  {
+    "description": "the state is checked before an answer's rules",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"choice": 2, "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "human", "event": "answer", "data": {"choice": 9, "answered_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {"state": "answered", "problems": [{"seq": 3, "category": "transition"}]}
+  },
+  {
+    "description": "seqs may have gaps, and each event is named by its own seq",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 5, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T09:05:00Z"}}
+    ],
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "events": [{"seq": 1, "file": "0001-agent-open.json"}, {"seq": 5, "file": "0005-human-answer.json"}]
+    }
+  },
+  {
+    "description": "a seq past 9999 names its file with every digit",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 12345, "author": "agent", "event": "note", "data": {"body": "Still here.", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"events": [{"seq": 1}, {"seq": 12345, "file": "12345-agent-note.json"}]}
+  }
+]

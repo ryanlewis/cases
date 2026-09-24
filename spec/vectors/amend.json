@@ -1,0 +1,371 @@
+[
+  {
+    "description": "a body replaces the case's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Now with the logs."}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "open", "revision": 2, "body": "Now with the logs.", "amend_seq": 2}
+  },
+  {
+    "description": "a context replaces the case's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"context": "PR #12"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "open", "revision": 2, "context": "PR #12", "amend_seq": 2}
+  },
+  {
+    "description": "links are added after the case's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/log"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 2,
+      "links": ["https://example.com/pr", "https://example.com/log"],
+      "amend_seq": 2
+    }
+  },
+  {
+    "description": "options are added after the case's and keep their numbers",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"options": ["Vendor it"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "open", "revision": 2, "options": ["Pin", "Float", "Vendor it"], "amend_seq": 2}
+  },
+  {
+    "description": "rows are added after the case's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}, {"id": "d", "label": "Deploy", "script": "make deploy", "link": "https://example.com/d"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 2,
+      "rows": [
+        {"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"},
+        {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"},
+        {"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"},
+        {"id": "d", "label": "Deploy", "script": "make deploy", "link": "https://example.com/d"}
+      ],
+      "amend_seq": 2
+    }
+  },
+  {
+    "description": "labels are added after the case's and leave amend_seq alone",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"labels": ["round 3"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "open", "revision": 2, "labels": ["feat-labels", "round 3"], "amend_seq": 0}
+  },
+  {
+    "description": "the body the case has is accepted beside a link",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Body.", "links": ["https://example.com/log"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 2,
+      "body": "Body.",
+      "links": ["https://example.com/pr", "https://example.com/log"],
+      "amend_seq": 2
+    }
+  },
+  {
+    "description": "the context the case has is accepted beside a new body",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Now with the logs.", "context": "Release 1.4"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "open", "revision": 2, "body": "Now with the logs.", "context": "Release 1.4", "amend_seq": 2}
+  },
+  {
+    "description": "an amend with nothing in it is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a blank label is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"labels": ["round 3", ""]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a label the case has is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"labels": ["round 3", "feat-labels"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a label given twice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"labels": ["round 3", "round 3"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a body of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": " \n", "links": ["https://example.com/log"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a context of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"context": "  "}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "options on an approval case are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"options": ["x"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "rows on a decision case are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a blank option is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"options": ["Vendor it", " "]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id the case has is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}, {"id": "b", "label": "Deploy", "script": "make deploy", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id given twice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}, {"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id with = is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c=d", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c=d"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row without a script is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"rows": [{"id": "c", "label": "Deploy", "link": "https://example.com/c"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an empty link is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": [""]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a link of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/log", "  "]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an option the case has is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"options": ["Vendor it", "Pin"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an option given twice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"options": ["Vendor it", "Vendor it"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a link the case has is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/pr"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a link given twice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/log", "https://example.com/log"]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "the body the case has, alone, changes nothing and is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Body."}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "the body and context the case has change nothing and are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "links": ["https://example.com/pr"], "context": "Release 1.4", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Body.", "context": "Release 1.4"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an amend cannot change the title or urgency",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"title": "New title", "urgency": "blocking", "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "title": "Nightly build moved",
+      "urgency": "today",
+      "amend_seq": 0,
+      "problems": [{"seq": 2, "category": "invalid"}]
+    }
+  },
+  {
+    "description": "an amend cannot change who the case is for",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "for": "Ryan", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"for": "Sam", "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "for": "Ryan", "problems": [{"seq": 2, "category": "invalid"}]}
+  },
+  {
+    "description": "each amend changes only what it sets, and the open event keeps what it said",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"body": "Three scripts now.", "rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}], "links": ["https://example.com/log"], "context": "Release 1.4.1", "amended_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "amend", "data": {"links": ["https://example.com/diff"], "amended_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "revision": 3,
+      "amend_seq": 3,
+      "body": "Three scripts now.",
+      "context": "Release 1.4.1",
+      "rows": [
+        {"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"},
+        {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"},
+        {"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}
+      ],
+      "links": ["https://example.com/pr", "https://example.com/log", "https://example.com/diff"],
+      "events": [
+        {"seq": 1, "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "opened_at": "2026-09-15T09:01:00Z"}},
+        {"seq": 2, "event": "amend"},
+        {"seq": 3, "event": "amend"}
+      ]
+    }
+  },
+  {
+    "description": "a refused amend changes nothing, not even its valid fields",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "links": ["https://example.com/pr"], "context": "Release 1.4", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"body": "Three scripts now.", "rows": [{"id": "c", "label": "Deploy", "script": "make deploy", "link": "https://example.com/c"}], "links": ["https://example.com/log"], "context": "Release 1.4.1", "amended_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "amend", "data": {"links": ["https://example.com/diff"], "amended_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"body": "Four scripts.", "links": ["https://example.com/x"], "rows": [{"id": "c", "label": "Again", "script": "true", "link": "https://example.com/c"}]}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "labels from an amend follow the case's",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"labels": ["round 3", "review"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"labels": ["feat-labels", "round 3", "review"], "amend_seq": 0}
+  },
+  {
+    "description": "the same labels sent again are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "labels": ["feat-labels"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"labels": ["round 3", "review"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"labels": ["round 3"]}, "now": "2026-09-15T09:03:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "amend_seq is 0 on a case never amended",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect": {"amend_seq": 0}
+  },
+  {
+    "description": "amend_seq stays 0 after an amend that only adds labels",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"labels": ["round 3"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"amend_seq": 0}
+  },
+  {
+    "description": "amend_seq stays at an amend that added an option when labels follow",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "amend", "data": {"labels": ["round 3"], "amended_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {"amend_seq": 2}
+  },
+  {
+    "description": "amend_seq counts an amend that sets the body the case has beside a link",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"body": "Body.", "links": ["https://example.com/log"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"amend_seq": 2}
+  },
+  {
+    "description": "amend_seq stays where it was after a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"body": "Now with the log.", "amended_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "expect": {"amend_seq": 2, "state": "open"}
+  }
+]

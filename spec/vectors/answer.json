@@ -1,0 +1,519 @@
+[
+  {
+    "description": "decision: a choice",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"choice": 1, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "decision: the last choice, with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 2, "note": "fine"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"choice": 2, "note": "fine", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "decision: other with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"other": true, "note": "neither"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"other": true, "note": "neither", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "decision: other without a note is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"other": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: other with a note of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"other": true, "note": "  "}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: a choice past the last option is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 3}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: a negative choice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": -1}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: a choice and other together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1, "other": true, "note": "x"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: a note alone is no response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"note": "hm"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "decision: ack is not a decision response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: a verdict on every row",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold", "note": "later"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold", "note": "later"}], "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "approval: reject is a verdict",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "reject", "note": "not on Friday"}, {"id": "b", "verdict": "approve"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"rows": [{"id": "a", "verdict": "reject", "note": "not on Friday"}, {"id": "b", "verdict": "approve"}], "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "approval: a row without a verdict is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "reject"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: a row the case does not have is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "approve"}, {"id": "c", "verdict": "approve"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: a row answered twice is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "a", "verdict": "hold"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: a verdict other than approve, hold or reject is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "yes"}, {"id": "b", "verdict": "approve"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: verdicts are matched exactly, so Approve is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "Approve"}, {"id": "b", "verdict": "approve"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: an empty list of rows is no response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [], "note": "x"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "approval: choice is not an approval response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "signoff: accept",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "accept"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"signoff": "accept", "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "signoff: changes with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "changes", "note": "rename it"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"signoff": "changes", "note": "rename it", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "signoff: changes without a note is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "changes"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "signoff: changes with a note of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "changes", "note": " "}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "signoff: a value other than accept or changes is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "ok"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "signoff: values are matched exactly, so Accept is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "Accept"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "stuck: text",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "use v2"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"text": "use v2", "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "stuck: drop",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"drop": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "stuck: text of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "  "}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "stuck: text and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: text",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "the staging one"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"text": "the staging one", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "question: text with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "the staging one", "note": "ask again if it moves"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"text": "the staging one", "note": "ask again if it moves", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "question: drop",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"drop": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "question: a note alone is no response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"note": "hm"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: text of only white space is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": " \n "}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: text and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: choice is not a question response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "choice": 1}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: other is not a question response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "other": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: rows are not a question response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold", "note": "later"}]}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: signoff is not a question response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "signoff": "accept"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "question: ack is not a question response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "ack": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "fyi: ack with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "note": "thanks"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"ack": true, "note": "thanks", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "fyi: an empty answer is no response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "fyi: ack false is no response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": false}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "fyi: text is not an fyi response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "text": "x"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: a decision case, with a note",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true, "note": "not needed"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 2,
+      "answer": {"drop": true, "note": "not needed", "answered_at": "2026-09-15T09:02:00Z"}
+    }
+  },
+  {
+    "description": "drop: a choice and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1, "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: other and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"other": true, "drop": true, "note": "x"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: an approval case",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"drop": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "drop: rows and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold", "note": "later"}], "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: a signoff case",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"drop": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "drop: changes and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "changes", "note": "x", "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: an fyi case",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"state": "answered", "revision": 2, "answer": {"drop": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "drop: ack and drop together are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "drop: drop with a field the kind never takes is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "x", "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "amended: a verdict on every row, the added one too",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"rows": [{"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold"}]}, "now": "2026-09-15T09:03:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 3,
+      "answer": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "hold"}], "answered_at": "2026-09-15T09:03:00Z"}
+    }
+  },
+  {
+    "description": "amended: verdicts on only the rows the case opened with are refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"rows": [{"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}]}, "now": "2026-09-15T09:03:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "amended: a row the amended case does not have is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"rows": [{"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "approve"}, {"id": "c", "verdict": "approve"}]}, "now": "2026-09-15T09:03:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "amended: a choice of the added option",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 3}, "now": "2026-09-15T09:03:00Z"},
+    "expect": {"state": "answered", "revision": 3, "answer": {"choice": 3, "answered_at": "2026-09-15T09:03:00Z"}}
+  },
+  {
+    "description": "amended: a choice past the added option is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 4}, "now": "2026-09-15T09:03:00Z"},
+    "expect_error": {"category": "invalid"}
+  }
+]
