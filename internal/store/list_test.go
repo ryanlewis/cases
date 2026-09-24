@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestLoadToleratesMalformedRows(t *testing.T) {
@@ -200,14 +204,16 @@ func TestPollerSeesNewEventsAndCases(t *testing.T) {
 	}
 }
 
-// The poller's first check is the highest change and the number of cases.
-// Taking a case out and putting another in keeps the number of cases, and
-// when the case taken out held the highest change, only a change that is
-// never used again moves it.
+// Taking out the case that holds the highest change and putting another in
+// changes the case ids, which the poller's first check reads. The poller then
+// folds again only the cases with an event above the highest change it had,
+// so an event written to a case that stays must still get a change above it:
+// a change is never used twice, even once the case that held it is gone. The
+// write comes before the new case, which would otherwise take that change.
 func TestPollerSeesACaseReplacedByAnother(t *testing.T) {
 	d := newDB(t)
 	ctx := t.Context()
-	older, err := d.Create(ctx, openOf(KindFYI))
+	older, err := d.Create(ctx, openOf(KindStuck))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +225,26 @@ func TestPollerSeesACaseReplacedByAnother(t *testing.T) {
 	if got := states(t, p); len(got) != 2 {
 		t.Fatalf("first poll: %v", got)
 	}
-	for _, remove := range []func(string) error{
-		func(id string) error { return d.Delete(ctx, id) },
-		func(id string) error { return d.Archive(ctx, id) },
+	for _, step := range []struct {
+		remove func(id string) error
+		write  func() error
+		want   State
+	}{
+		{
+			func(id string) error { return d.Delete(ctx, id) },
+			func() error { _, err := d.Park(ctx, older.ID, ParkRecord{}); return err },
+			StateParked,
+		},
+		{
+			func(id string) error { return d.Archive(ctx, id) },
+			func() error { _, err := d.Resume(ctx, older.ID, AuthorHuman, ResumeRecord{}); return err },
+			StateOpen,
+		},
 	} {
-		if err := remove(newest.ID); err != nil {
+		if err := step.remove(newest.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := step.write(); err != nil {
 			t.Fatal(err)
 		}
 		replaced, err := d.Create(ctx, OpenRecord{Kind: KindStuck, Urgency: UrgencyToday, Title: "Replacement " + newest.ID})
@@ -231,8 +252,8 @@ func TestPollerSeesACaseReplacedByAnother(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := states(t, p)
-		if len(got) != 2 || got[older.ID] != StateOpen || got[replaced.ID] != StateOpen {
-			t.Fatalf("after replacing %s: %v", newest.ID, got)
+		if len(got) != 2 || got[older.ID] != step.want || got[replaced.ID] != StateOpen {
+			t.Fatalf("after replacing %s: %v, want %s %s", newest.ID, got, older.ID, step.want)
 		}
 		newest = replaced
 	}
@@ -258,26 +279,140 @@ func TestPollerSeesACasePutBackFromTheArchive(t *testing.T) {
 	if got := states(t, p); len(got) != 1 {
 		t.Fatalf("after archive: %v", got)
 	}
-	tx, err := pool(t, d).BeginTx(ctx, nil)
+	putBack(t, d, c.ID)
+	if got := states(t, p); len(got) != 2 || got[c.ID] != StateOpen {
+		t.Errorf("after putting it back: %v", got)
+	}
+}
+
+// Between two polls, one case is moved to the archive, as prune does, and
+// another is put back from it. The number of cases is as it was, and so is the
+// highest change: the case that holds it stays, and the case put back keeps
+// the changes its events had. The case taken out is the newest row, so the
+// case put back gets its rowid. The poller must still see the swap.
+func TestPollerSeesACaseArchivedAndAnotherPutBack(t *testing.T) {
+	d := newDB(t)
+	ctx := t.Context()
+	var ids []string
+	for _, kind := range []Kind{KindFYI, KindStuck, KindQuestion} {
+		c, err := d.Create(ctx, openOf(kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, c.ID)
+	}
+	restored, holder, removed := ids[0], ids[1], ids[2]
+	if _, err := d.Note(ctx, holder, NoteRecord{Body: "Still stuck."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Archive(ctx, restored); err != nil {
+		t.Fatal(err)
+	}
+	p := poller(d)
+	if got := states(t, p); len(got) != 2 || got[holder] != StateOpen || got[removed] != StateOpen {
+		t.Fatalf("first poll: %v", got)
+	}
+
+	if err := d.Archive(ctx, removed); err != nil {
+		t.Fatal(err)
+	}
+	putBack(t, d, restored)
+	if got := states(t, p); len(got) != 2 || got[holder] != StateOpen || got[restored] != StateOpen {
+		t.Errorf("after the swap: %v, want %s and %s", got, holder, restored)
+	}
+}
+
+// A poll whose refresh fails part-way may already have dropped cases from
+// its cache. The next poll must read every case again, even when the store is
+// back as the poller last read it, so that the ids and the highest change
+// alone say nothing changed. The failure is a real SQLite error: with one
+// connection in the pool and its limit on bound parameters lowered to 1, only
+// the fold of the two new cases by name fails.
+func TestPollerReadsEveryCaseAfterAFailedRefresh(t *testing.T) {
+	d := newDB(t)
+	ctx := t.Context()
+	create := func(kind Kind) string {
+		t.Helper()
+		c, err := d.Create(ctx, openOf(kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	create(KindFYI)
+	create(KindStuck)
+	archived := create(KindQuestion)
+	p := poller(d)
+	if got := states(t, p); len(got) != 3 {
+		t.Fatalf("first poll: %v", got)
+	}
+
+	if err := d.Archive(ctx, archived); err != nil {
+		t.Fatal(err)
+	}
+	added := []string{create(KindFYI), create(KindStuck)}
+	db := pool(t, d)
+	db.SetMaxOpenConns(1)
+	was := limitParams(t, db, 1)
+	if _, _, err := p.Poll(); err == nil {
+		t.Fatal("poll with one parameter allowed: no error")
+	}
+	limitParams(t, db, was)
+
+	for _, id := range added {
+		if err := d.Delete(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putBack(t, d, archived)
+	cases, bad, err := p.Poll()
+	if err != nil || len(bad) > 0 || len(cases) != 3 {
+		t.Fatalf("poll after the failed one: %d cases, bad %v, err %v", len(cases), bad, err)
+	}
+	for i, c := range cases {
+		if c == nil {
+			t.Errorf("poll after the failed one: case %d is nil", i)
+		}
+	}
+}
+
+// limitParams sets the most parameters a statement may bind on the pool's
+// one connection to n, and returns the limit it had.
+func limitParams(t *testing.T, db *sql.DB, n int) int {
+	t.Helper()
+	conn, err := db.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = conn.Close() }()
+	was, err := sqlite.Limit(conn, sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return was
+}
+
+// putBack moves the case id from the archive back into the store in one
+// transaction, as the README's restore does.
+func putBack(t *testing.T, d *DB, id string) {
+	t.Helper()
+	tx, err := pool(t, d).BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	for _, stmt := range []string{
 		`INSERT INTO cases (id, opened_at) SELECT id, opened_at FROM archive_cases WHERE id = ?1`,
 		`INSERT INTO events (change, case_id, seq, author, event, at, data) SELECT change, case_id, seq, author, event, at, data FROM archive_events WHERE case_id = ?1`,
 		`DELETE FROM archive_events WHERE case_id = ?1`,
 		`DELETE FROM archive_cases WHERE id = ?1`,
 	} {
-		if _, err := tx.ExecContext(ctx, stmt, c.ID); err != nil {
+		if _, err := tx.ExecContext(t.Context(), stmt, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
-	}
-	if got := states(t, p); len(got) != 2 || got[c.ID] != StateOpen {
-		t.Errorf("after putting it back: %v", got)
 	}
 }
 
