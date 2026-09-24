@@ -393,7 +393,7 @@ func limitParams(t *testing.T, db *sql.DB, n int) int {
 }
 
 // putBack moves the case id from the archive back into the store in one
-// transaction, as the README's restore does.
+// transaction, as the restore in docs/store.md does.
 func putBack(t *testing.T, d *DB, id string) {
 	t.Helper()
 	tx, err := pool(t, d).BeginTx(t.Context(), nil)

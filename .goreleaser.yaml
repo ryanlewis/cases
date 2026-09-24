@@ -38,6 +38,7 @@ archives:
         formats: [zip]
     files:
       - README.md
+      - docs/*.md
       - LICENSE*
 
 # Sign and notarize the darwin binaries in place before archiving, so the
