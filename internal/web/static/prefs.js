@@ -328,6 +328,26 @@
     k.el.scrollTop = k.top;
   });
 
+  // The recorded line folds from its own height, however far it wraps, so
+  // style.css clips none of it.
+  document.addEventListener("animationstart", function (e) {
+    var el = e.target;
+    if (e.animationName !== "recorded-out" || !el.classList || !el.classList.contains("recorded")) return;
+    el.style.setProperty("--recorded-h", el.scrollHeight + "px");
+  });
+
+  // The recorded line goes by itself when style.css's recorded-out animation
+  // ends: it leaves the page, and its query leaves the address as its dismiss
+  // link would take it, so a reload does not show it again. It never takes
+  // the focus.
+  document.addEventListener("animationend", function (e) {
+    var el = e.target;
+    if (e.animationName !== "recorded-out" || !el.classList || !el.classList.contains("recorded")) return;
+    var dismiss = el.querySelector(".dismiss a");
+    if (dismiss) history.replaceState(history.state, "", dismiss.getAttribute("href"));
+    el.remove();
+  });
+
   // The tally fragment carries the tab icon's link out of band. Chromium does
   // not load the icon of a link put in place of another, which is what the
   // swap would do, but does when the link's href changes, so the new href is

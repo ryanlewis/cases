@@ -776,9 +776,12 @@ inbox. The redirect carries `event` (`answer`, `park` or `resume`) and
 `recorded` (the case id), and the page it lands on starts with one line saying
 what was recorded on which case, linked to it, with a `dismiss` link that
 reloads the page without those two parameters. The line is shown only when the
-event is one of those three and the id names a case in the store, and it stays
-in the URL, so a reload shows it again. If the form is refused, the same case
-is shown again with the error.
+event is one of those three and the id names a case in the store. The line
+slides in, stays six seconds (longer while the pointer is over it or it has
+the focus), then fades and folds away, and the two parameters leave the
+address with it, so a reload after that does not show it again. Under reduced
+motion it only fades. If the form is refused, the same case is shown again
+with the error.
 
 Each form carries the case's revision from when the case was drawn: the
 number of events the case had. While the page is open, the case is drawn again
