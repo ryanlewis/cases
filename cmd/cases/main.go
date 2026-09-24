@@ -275,3 +275,18 @@ func (d *Deps) done(c *store.Case) error {
 	fmt.Fprintf(d.Stdout, "%s %s\n", c.ID, c.State)
 	return nil
 }
+
+// nowState is what a command that writes at the revision it read adds to the
+// error for a write refused as stale: the state the case is in now, read
+// again, so the reader can tell what changed. It is empty for any other
+// error, and when the case cannot be read.
+func (d *Deps) nowState(id string, err error) string {
+	if !errors.Is(err, store.ErrStale) {
+		return ""
+	}
+	cur, err := d.Cases.Get(context.Background(), id)
+	if err != nil {
+		return ""
+	}
+	return "; it is now " + string(cur.State)
+}

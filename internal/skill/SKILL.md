@@ -4,13 +4,13 @@ Use the `cases` CLI when you cannot go on without a person: a choice between opt
 
 ## Safety
 
-- **Safe to run freely**: `list`, `show`, `wait`, `status`, `inbox --print`, `config path`, `config show`, `skill list`, `skill show`. They only read.
-- **Agent writes**: `open`, `amend`, `pickup`, `note`, `close`, `withdraw`. Each one adds an event to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. `Error: database is locked` means other writes, such as a long `cases sweep`, kept the store busy for more than 5 seconds; nothing was written, so run the command again. An error saying a `-wal` or `-shm` file `from an earlier store is still there` means the store file was removed while something still had it open: do not delete anything, and tell the human. Other errors exit 1.
+- **Safe to run freely**: `list`, `show`, `wait` without `--pickup`, `status`, `inbox --print`, `config path`, `config show`, `skill list`, `skill show`. They only read.
+- **Agent writes**: `open`, `amend`, `pickup` (and `wait --pickup`, which prints a case it could not pick up as `answered`), `note`, `close`, `withdraw`. Each one adds an event to the case, and nothing can undo it: closed and withdrawn cases stay as the decision log. A write the case's state does not allow is refused with `Error: cannot <event> a case that is <state>`, writes nothing and exits 3. Exit 3 does not mean the write was already done: read the case with `show --json` to see its state. `Error: database is locked` means other writes, such as a long `cases sweep`, kept the store busy for more than 5 seconds; nothing was written, so run the command again. An error saying a `-wal` or `-shm` file `from an earlier store is still there` means the store file was removed while something still had it open: do not delete anything, and tell the human. Other errors exit 1.
 - **Human writes — never run them**: `answer` and `resume`. Answering your own case, or resuming it with `resume --agent`, fakes the human's decision. If you think you know the answer, you do not need a case.
 - **Never open or edit the database file; use the commands.** The state is worked out from the events stored in it, so a change made any other way corrupts the record. Do not run `sqlite3` on it, and do not move, copy over or delete it or the `-wal` and `-shm` files beside it.
 - **Never put secrets or sensitive information in a case**: tokens, passwords, keys, private personal data or customer data. That covers the title, body, options, rows, context, notes and outcome. The store is a file on disk that keeps every event, and is shown in a browser. Name the secret or say where it lives instead.
 - **One question per case.** Two questions in one case get one answer. Open a second case instead.
-- **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it.
+- **Do not open duplicates.** Before opening, read the table from `cases list --state open,answered,pickedup,parked` for a case of yours on the same question; each row shows the case's labels and title. Name the states: a bare `cases list` shows only open and parked cases. If your case is still open and needs changing, amend it; if it is `pickedup`, act on its answer and close it.
 - `serve`, `service install` / `service uninstall` (which set serve up as a login service), `config init` and `skill install` / `skill uninstall` / `skill check` are for the human. Do not run them unasked. Bare `cases service` only reads, and you may run it.
 - `cases inbox` without `--print` opens a browser on the human's machine: do not run it unless asked. `cases inbox --print` only prints a URL, and you may run it freely.
 - **Never run `sweep` or `prune`.** `sweep` withdraws every open case that matches, other agents' included; `prune` moves closed and withdrawn cases out of the store, or deletes them. They are for the human. A closed or withdrawn case you still need may be pruned; `show` then fails with `no case "<id>"`.
@@ -38,7 +38,7 @@ open --amend--> open                       (a change before the answer)
 
 ## Kinds
 
-| Kind | Use it for | Open with | The answer (`answer` in `show --answer`) |
+| Kind | Use it for | Open with | The answer (`answer` in `wait` lines and `show --answer`) |
 | --- | --- | --- | --- |
 | `decision` | Choosing between options | `--option TEXT`, one per option (at least one) | `choice`: the 1-based option number. Or `other: true` with the human's `note`. "Other, see note" is always offered, so do not add it. |
 | `approval` | Running scripts or gated actions | `--row JSON`, one per row (at least one) | `rows`: one `{id, verdict, note}` per row. `verdict` is `approve`, `hold` or `reject`. |
@@ -107,18 +107,19 @@ cases amend ID [--body TEXT | --body-file FILE|-] [--option TEXT]... [--row JSON
 ### `cases wait`
 
 ```sh
-cases wait [--for agent|human] [--since TIME|ID] [--timeout DURATION] [--id ID]... \
-  [--kind KIND]... [--label TEXT]... [--worker NAME]...
+cases wait [--pickup [--by NAME]] [--since TIME|ID] [--timeout DURATION] [--id ID]... \
+  [--kind KIND]... [--label TEXT]... [--worker NAME]... [--for agent|human]
 ```
 
-- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, without `revision` and `url`. Each line also has `fresh` and `next_since`.
-- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer that records an earlier time than the `--since` you passed, so do not skip a case on `fresh` alone: an `answered` case you have not picked up still needs you.
+- Blocks until a human answers, parks or resumes a case, then prints every case waiting on the agent as JSON, one object per line, and exits 0. Each line is the same case object as `show --json`, `revision` included, without `url`. Each line also has `fresh` and `next_since`.
+- `--pickup` picks up each `answered` case before printing it, as `cases pickup --by NAME` does, so its line says `pickedup` and has the `revision` after the pickup. It picks up every answered case that matches, so scope it to your own: `--id`, or `--label` with `--worker` set to your session name. No later `wait` prints a case it picked up.
+- `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer that records an earlier time than the `--since` you passed, so do not skip a case on `fresh` alone: a case `wait` picked up still needs you.
 - `next_since` is the same on every line: pass it as `--since` when you run `wait` again.
 - Run it in the background; it can take hours.
 - `--id ID` (repeatable) waits on those cases only. **Always pass `--id` or `--label` for your own cases.** Without either, `wait` wakes on any case in the store, including other agents' cases.
 - `--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those kinds or labels, or from any of those workers. A case must match every filter given, `--id` included. `--kind` alone does not scope `wait` to your own cases; pair it with `--id` or `--label`. A filter that matches none of your cases waits until the timeout, as an `--id` that is never answered does, so check the label you pass is the one you opened with.
 - By default only human events written after `wait` starts can wake it. An answer that lands between `cases open` and `cases wait` would be missed, so pass `--since` with the id `cases open` printed: `wait` then counts every event since that case was opened. `--since` also takes an RFC 3339 time such as `2026-09-16T09:12:03Z`. An id that is not in the store is an error (exit 1).
-- `--timeout` takes a Go duration (`30m`, `2h`). When it passes with nothing to report, `wait` prints one line to stderr and **exits 2**. Other errors exit 1. The default, 0, waits forever.
+- `--timeout` takes a Go duration (`30m`, `2h`). When it passes with nothing to report, `wait` prints one line to stderr and **exits 2**: run it again with the same `--since`. Other errors exit 1. The default, 0, waits forever.
 - `--for human` waits for cases waiting on the human instead. It is for the human's notifiers; you do not need it.
 
 ### `cases show` and `cases list`
@@ -165,9 +166,9 @@ cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]... [--revi
 cases withdraw ID [--reason TEXT] [--revision N]
 ```
 
-- `--revision N` refuses the write, and writes nothing, if the case has changed since you read it at revision N. Take N from the `revision` in the `show --answer` or `show --json` you acted on (`wait` lines do not carry it). **Always pass it on `note` and `close`**: a note on a case the human has answered since you read it reopens the case and throws that answer away. If the write is refused as stale, read the case again with `show --answer` before deciding what to do. `amend`, `pickup` and `withdraw` take it too.
+- `--revision N` refuses the write, and writes nothing, if the case has changed since you read it at revision N. Take N from the `revision` in the `wait` line, `show --answer` or `show --json` you acted on. **Always pass it on `note` and `close`**: a note on a case the human has answered since you read it reopens the case and throws that answer away. If the write is refused as stale, read the case again with `show --answer` before deciding what to do. `amend`, `pickup` and `withdraw` take it too.
 
-- `pickup` records that you have read the answer. Do it before you act, so the human can see the answer was received.
+- `pickup` records that you have read the answer. Do it before you act, so the human can see the answer was received. `wait --pickup` does it for you.
 - `note` adds a follow-up in markdown. Use it to ask a clarifying question about the answer; the case goes back to `open` for another answer.
 - `close` records the outcome in markdown: what you did, and anything that did not go as planned. The outcome must not be empty. `--link` (repeatable) points at the evidence: a commit, PR or log.
 - `withdraw` an open case that no longer needs an answer, for example because you found the answer yourself. `--reason` tells the human why. You cannot withdraw a case once it is answered; pick it up and close it instead.
@@ -175,31 +176,30 @@ cases withdraw ID [--reason TEXT] [--revision N]
 
 ## Workflow
 
+A case takes two turns. In the first, open the case and wait for its answer in one command, run in the background:
+
 ```sh
 id=$(cases open --kind decision --urgency today --worker bun-pins \
   --title "Pin bun or float?" --body-file question.md \
-  --option "Pin to 1.2.3" --option "Float and fix the lockfile")
-
-# In the background. Exit 2 means the timeout passed: run it again.
-# To wait again after it returns, pass --since the next_since it printed.
-cases wait --id "$id" --since "$id" --timeout 2h
-
-cases show "$id" --answer          # read .state, .answer and .revision
-rev=3                              # the .revision you read
-cases pickup "$id" --by bun-pins --revision "$rev"
-# ... act on the answer ...
-# Your pickup was one more event, so the case is now at rev + 1.
-cases close "$id" --outcome "Pinned bun to 1.2.3 in abc123." --revision "$((rev + 1))" --link https://github.com/o/r/pull/12
+  --option "Pin to 1.2.3" --option "Float and fix the lockfile") &&
+  cases wait --id "$id" --since "$id" --pickup --by bun-pins
 ```
 
-Check the inbox at two points:
+While it waits, `cases list --worker NAME` shows the case's id, to amend or withdraw it. If the command stops with no answer, run only its `cases wait` part again: all of it would open a second case.
 
-- Right after `cases open`, run `cases show ID --json`: if `url` is set, give the human that link to the case; if it is empty, no inbox is running, so tell them the case id and that they can answer from `cases serve` or the terminal.
-- When `wait` times out twice in a row, run `cases status`: if the inbox is not running, tell the human, so they can start it or answer from the terminal, then wait again.
+In the same turn, run `cases status` on its own: if it exits 1, no inbox is running, so tell the human they can answer from `cases serve` or the terminal.
 
-When `wait` returns, read the case's `state` and act on it:
+In the second turn, when the command finishes, read its output from the notice or the background output file: one line per case, an answered one already picked up. If that output is gone, find the case with `cases list --state pickedup --worker NAME` and read it with `cases show ID --answer`. Act on the answer, and chain the close onto your last command with the line's `id` and `revision`:
 
-- `answered` — pick it up and follow the answer:
+```sh
+git commit -qam "Pin bun to 1.2.3" &&
+  cases close 2026-09-24T09-12-03Z-pin-bun-or-float --revision 3 \
+    --outcome "Pinned bun to 1.2.3 in abc123." --link https://github.com/o/r/pull/12
+```
+
+Read each line's `state` and act on it:
+
+- `pickedup` — `wait` picked it up for you. Follow the answer:
   - `drop: true`, on any kind: stop that work and do not act on the case. Close with what you stopped, and the `note` if there is one.
   - `decision`: do option `choice` (options are numbered from 1). For `other`, do what the `note` says.
   - `approval`: run only the rows with `approve`. Do not run `hold` or `reject` rows. Say in the outcome which rows ran and what they did.
@@ -207,9 +207,10 @@ When `wait` returns, read the case's `state` and act on it:
   - `stuck`: follow the `text`. Close with what you did.
   - `question`: use the `text`. Close with what you did with it.
   - `fyi`: close with a short outcome, for example "Acknowledged".
-- `parked` — the human has set the work aside. Stop the work, do not pick up, and wait again with `--since` set to the `next_since` that `wait` printed. With the old `--since`, `wait` returns at once on the same park; with none, a resume that lands before `wait` starts is missed. The next event will be a `resume`.
+- `answered` — `wait` could not pick it up, usually because the case changed after it read it; stderr says why. Read it again with `cases show ID --answer`. If it is still `answered` at revision N, pick it up with `--revision N`, follow the answer, and close with `--revision` N+1. If it is `pickedup`, another wait of yours took it: act on it only once. If it is `open`, wait again.
+- `parked` — the human has set the work aside. Stop the work and wait again with `--since` set to the `next_since` that `wait` printed. With the old `--since`, `wait` returns at once on the same park; with none, a resume that lands before `wait` starts is missed. The next event will be a `resume`.
 - `open` after a resume — re-read your instructions and the thread, then wait for the answer, again with `--since` set to the new `next_since`. If you are no longer stuck, withdraw the case.
 
-A session that opens several cases gives them all the same `--label`, such as the name of its work, and waits with `--label` rather than one `--id` per case, so a case it opens later is covered without restarting `wait`; its first `--since` is the id of the first case it opened.
+A session that opens several cases gives them all the same `--label`, such as the name of its work, and its session name as `--worker`. It runs one `wait` with both, in place of the `cases wait` part of each command, so a case it opens later is covered without restarting `wait`; its first `--since` is the id of the first case it opened. Do not also run `wait --id` on those cases: of two `--pickup` waits on one case, the one that loses may never wake.
 
-If the answer is unclear, `pickup` and then `note` with the question, rather than guessing. Close every case you pick up: an unclosed case looks to the human like work still in progress.
+If the answer is unclear, `note` the case with your question rather than guessing, and wait again in one background command: `cases note ID --body-file q.md --revision N && cases wait --id ID --since NEXT_SINCE --pickup --by NAME`, or the note alone when a label wait already covers the case. Close every case you pick up: an unclosed case looks to the human like work still in progress.

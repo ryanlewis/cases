@@ -68,13 +68,7 @@ func (c *SweepCmd) Run(d *Deps) error {
 		withdrawn, err := d.Cases.Withdraw(context.Background(), cs.ID, store.WithdrawRecord{Reason: c.Reason}, store.AtRevision(cs.Revision()))
 		time.Sleep(writePause)
 		if err != nil {
-			line := cs.ID + ": " + err.Error()
-			if errors.Is(err, store.ErrStale) {
-				if cur, err := d.Cases.Get(context.Background(), cs.ID); err == nil {
-					line += "; it is now " + string(cur.State)
-				}
-			}
-			failed = append(failed, line)
+			failed = append(failed, cs.ID+": "+err.Error()+d.nowState(cs.ID, err))
 			continue
 		}
 		_ = d.done(withdrawn)

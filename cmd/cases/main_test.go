@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -77,6 +78,33 @@ func runCasesDeps(t *testing.T, cases store.Store, set func(*Deps), stdin string
 	}
 	err = ctx.Run(deps)
 	return result{stdout.String(), stderr.String(), err}
+}
+
+// changeFirst is the store with one case changed just before a command
+// withdraws it (sweep) or picks it up (wait --pickup), as another writer can
+// between the command reading the case and writing to it.
+type changeFirst struct {
+	store.Store
+	id     string
+	change func(ctx context.Context, s store.Store, id string) error
+}
+
+func (c changeFirst) Withdraw(ctx context.Context, id string, rec store.WithdrawRecord, pre ...store.Precondition) (*store.Case, error) {
+	if id == c.id {
+		if err := c.change(ctx, c.Store, id); err != nil {
+			return nil, err
+		}
+	}
+	return c.Store.Withdraw(ctx, id, rec, pre...)
+}
+
+func (c changeFirst) Pickup(ctx context.Context, id string, rec store.PickupRecord, pre ...store.Precondition) (*store.Case, error) {
+	if id == c.id {
+		if err := c.change(ctx, c.Store, id); err != nil {
+			return nil, err
+		}
+	}
+	return c.Store.Pickup(ctx, id, rec, pre...)
 }
 
 // mustRun runs a command that is expected to succeed and returns its stdout.

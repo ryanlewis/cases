@@ -26,10 +26,10 @@ type pruner interface {
 	Delete(ctx context.Context, id string, pre ...store.Precondition) error
 }
 
-// writePause is how long sweep and prune wait after each write. A write from
-// elsewhere, such as an agent's note, polls for the store's lock with growing
-// pauses between tries, and without a gap it can miss every moment a long run
-// of writes lets the lock go, and fail.
+// writePause is how long sweep, prune and wait --pickup wait after each
+// write. A write from elsewhere, such as an agent's note, polls for the
+// store's lock with growing pauses between tries, and without a gap it can
+// miss every moment a long run of writes lets the lock go, and fail.
 const writePause = time.Millisecond
 
 // Run moves each matching case into the store's archive tables, or deletes it
