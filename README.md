@@ -533,9 +533,15 @@ and `--older-than DURATION` takes only cases opened longer ago than that (on
 `list` it reads the last event instead).
 Withdraw is only allowed on an open case, so a matching case that is answered
 or parked is listed as left and not changed. Each withdraw is the same `agent`
-withdraw event `cases withdraw` writes, and goes through the same check. If one is refused, for example because the case
-changed state in the meantime, sweep carries on with the rest, then names the
-cases it could not withdraw and exits 1.
+withdraw event `cases withdraw` writes, and goes through the same check. It is
+made at the revision `sweep --yes` read when it listed the cases, as with
+`--revision`, so a case that has an event written while sweep runs, such as an
+answer or an amend, is refused and left as it is, even if it is open again.
+`--yes` lists the cases again rather than using what a dry run printed, so it
+also withdraws a matching case that changed or was opened after the dry run.
+To withdraw only a case as you read it, use `cases withdraw ID --revision N`.
+If one is refused, sweep carries on with the rest, then names the cases it
+could not withdraw, with the state a changed case is now in, and exits 1.
 
 `prune` takes closed and withdrawn cases whose last event is older than
 `--age` (a Go duration; default `720h`, or the `prune-age` config key; `0`

@@ -142,40 +142,71 @@ func TestSweepFilters(t *testing.T) {
 	}
 }
 
-// answerFirst is the store with the human answering one case just before
-// sweep withdraws it, as can happen between sweep listing the cases and
-// withdrawing them.
-type answerFirst struct {
+// changeFirst is the store with one case changed just before sweep withdraws
+// it, as can happen between sweep listing the cases and withdrawing them.
+type changeFirst struct {
 	store.Store
-	id string
+	id     string
+	change func(ctx context.Context, s store.Store, id string) error
 }
 
-func (a answerFirst) Withdraw(ctx context.Context, id string, rec store.WithdrawRecord, pre ...store.Precondition) (*store.Case, error) {
-	if id == a.id {
-		if _, err := a.Answer(ctx, id, store.AnswerRecord{Choice: 1}); err != nil {
+func (c changeFirst) Withdraw(ctx context.Context, id string, rec store.WithdrawRecord, pre ...store.Precondition) (*store.Case, error) {
+	if id == c.id {
+		if err := c.change(ctx, c.Store, id); err != nil {
 			return nil, err
 		}
 	}
-	return a.Store.Withdraw(ctx, id, rec, pre...)
+	return c.Store.Withdraw(ctx, id, rec, pre...)
 }
 
-func TestSweepContinuesPastARefusal(t *testing.T) {
-	storePath := newStore(t)
-	stuck := openDecision(t, storePath)
-	fine := openDecision(t, storePath)
+// A case with an event written after sweep listed it is no longer the case
+// sweep matched, even when it is open again. Sweep leaves it as it is,
+// withdraws the rest, and names it, with the state it is now in, among the
+// cases it did not withdraw.
+func TestSweepLeavesACaseChangedSinceItWasListed(t *testing.T) {
+	answer := func(ctx context.Context, s store.Store, id string) error {
+		_, err := s.Answer(ctx, id, store.AnswerRecord{Choice: 1})
+		return err
+	}
+	for _, tt := range []struct {
+		name   string
+		change func(ctx context.Context, s store.Store, id string) error
+		want   store.State
+	}{
+		{"answered", answer, store.StateAnswered},
+		{"amended", func(ctx context.Context, s store.Store, id string) error {
+			_, err := s.Amend(ctx, id, store.AmendRecord{Options: []string{"Pin to 1.2.4", "Float"}})
+			return err
+		}, store.StateOpen},
+		{"answered and reopened", func(ctx context.Context, s store.Store, id string) error {
+			if err := answer(ctx, s, id); err != nil {
+				return err
+			}
+			_, err := s.Note(ctx, id, store.NoteRecord{Body: "1.2.3 has a CVE. Pin to which patch?"})
+			return err
+		}, store.StateOpen},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			storePath := newStore(t)
+			changed := openDecision(t, storePath)
+			fine := openDecision(t, storePath)
 
-	r := runCasesWith(t, answerFirst{openStore(t, storePath), stuck}, "", "--store", storePath, "sweep", "--yes")
-	if r.err == nil || !strings.Contains(r.err.Error(), "1 cases were not withdrawn") || !strings.Contains(r.err.Error(), stuck+": cannot withdraw a case that is answered") {
-		t.Errorf("err = %v", r.err)
-	}
-	if !strings.Contains(r.stdout, fine+" withdrawn\n") {
-		t.Errorf("stdout = %q", r.stdout)
-	}
-	if got := loadCase(t, storePath, stuck).State; got != store.StateAnswered {
-		t.Errorf("refused case state = %s", got)
-	}
-	if got := loadCase(t, storePath, fine).State; got != store.StateWithdrawn {
-		t.Errorf("other case state = %s", got)
+			r := runCasesWith(t, changeFirst{openStore(t, storePath), changed, tt.change}, "", "--store", storePath, "sweep", "--yes")
+			if r.err == nil || !strings.Contains(r.err.Error(), "1 cases were not withdrawn") || !strings.Contains(r.err.Error(), changed+": "+store.ErrStale.Error()) {
+				t.Errorf("err = %v", r.err)
+			} else if !strings.Contains(r.err.Error(), "; it is now "+string(tt.want)) {
+				t.Errorf("err = %v, want it to name the state the case is now in, %s", r.err, tt.want)
+			}
+			if !strings.Contains(r.stdout, fine+" withdrawn\n") || strings.Contains(r.stdout, changed+" withdrawn") {
+				t.Errorf("stdout = %q", r.stdout)
+			}
+			if got := loadCase(t, storePath, changed).State; got != tt.want {
+				t.Errorf("changed case state = %s, want %s", got, tt.want)
+			}
+			if got := loadCase(t, storePath, fine).State; got != store.StateWithdrawn {
+				t.Errorf("other case state = %s", got)
+			}
+		})
 	}
 }
 
