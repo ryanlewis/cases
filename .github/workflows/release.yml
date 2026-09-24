@@ -50,7 +50,7 @@ jobs:
       # reverting to audit.
       # notary-artifacts-prod is used only when Apple rejects a submission:
       # quill fetches Apple's log from it before reporting the rejection.
-      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
           disable-sudo-and-containers: true
@@ -118,7 +118,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: v2.17.1
+          version: v2.18.2
           args: release --clean
         # The release secrets go to this step only, never job-wide, so no
         # other step, nor anything it downloads, can read them from the
