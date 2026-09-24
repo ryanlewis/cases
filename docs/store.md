@@ -97,8 +97,11 @@ nothing the second time.
 
 The `open` record stays as it was written. The case shows the amended fields,
 and the answer is checked against them: an approval answer needs a verdict on
-the added rows too. An answer is numbered after every event before it, so it
-has seen every amend.
+the added rows too. An answer is only kept from missing an amend when it is
+sent with a revision: `answer --revision N`, or a web form, which always
+carries one. Any event after revision N, an amend included, makes the answer
+stale, and nothing is written. An answer sent without a revision is checked
+against the case as it is when the answer is written, amends and all.
 
 ## Writes
 
