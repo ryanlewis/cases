@@ -63,6 +63,7 @@ sh scripts/screenshots/seed.sh ./cases "$dir/demo.db"
 : > "$dir/config.toml"
 XDG_STATE_HOME="$dir/state" ./cases --store "$dir/demo.db" --config "$dir/config.toml" \
   serve --no-open --listen 127.0.0.1:8799 > "$dir/serve.log" 2>&1 &
+until curl -sf -o /dev/null http://127.0.0.1:8799/; do sleep 0.2; done
 NODE_PATH=/path/to/node_modules node scripts/screenshots/capture.cjs http://127.0.0.1:8799 docs/images
 kill %1
 ```
