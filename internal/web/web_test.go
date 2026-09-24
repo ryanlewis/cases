@@ -298,6 +298,38 @@ func TestStyleCentresInboxZero(t *testing.T) {
 	}
 }
 
+// TestRecordedLineGoesByItself checks that the recorded line animates in and
+// out, holds on hover or focus, only fades under reduced motion, and that
+// prefs.js folds it from its own height and takes it and its query away when
+// it has gone.
+func TestRecordedLineGoesByItself(t *testing.T) {
+	a := newApp(t)
+	css := a.get(t, "/static/style.css")
+	for _, want := range []string{
+		".recorded { animation: recorded-in .25s ease-out both, recorded-out .6s ease-in 6s forwards; }",
+		".recorded:hover, .recorded:focus-within { animation-play-state: paused; }",
+		"@keyframes recorded-in {", "@keyframes recorded-out {",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css lacks %s", want)
+		}
+	}
+	reduced := "@media (prefers-reduced-motion: reduce) {\n  @keyframes recorded-in { from { opacity: 0; } }\n  @keyframes recorded-out { to { opacity: 0; } }\n}"
+	if on, off := strings.Index(css, "@keyframes recorded-out {"), strings.Index(css, reduced); off < 0 || off < on {
+		t.Errorf("style.css lacks the fade-only recorded keyframes under reduced motion, after the moving ones (at %d and %d)", on, off)
+	}
+	js := a.get(t, "/static/prefs.js")
+	for _, want := range []string{
+		`document.addEventListener("animationend"`, `e.animationName !== "recorded-out"`,
+		`history.replaceState(history.state, "", dismiss.getAttribute("href"));`, `el.remove();`,
+		`el.style.setProperty("--recorded-h", el.scrollHeight + "px");`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("prefs.js lacks %s", want)
+		}
+	}
+}
+
 // TestStyleSpansTheSplit checks that the split fills the window with the list
 // at its left edge: main's auto margins would shrink it to its content where
 // the body is a flex column, as it is on wide screens.

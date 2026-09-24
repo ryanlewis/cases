@@ -285,6 +285,24 @@ pre code { padding: 0; background: none; }
   main:has(> .recorded) { display: flex; flex-direction: column; }
   main > .recorded + .split { flex: 1; min-height: 0; height: auto; }
 }
+/* It slides in, stays six seconds, then fades and folds away, and prefs.js
+   takes it off the page. Hover or focus holds it where it is. It folds only
+   once it is out of sight, from its own height, which prefs.js sets as
+   --recorded-h when the fade starts, so clipping it never shows. */
+.recorded { animation: recorded-in .25s ease-out both, recorded-out .6s ease-in 6s forwards; }
+.recorded:hover, .recorded:focus-within { animation-play-state: paused; }
+@keyframes recorded-in { from { opacity: 0; transform: translateY(-.5rem); } }
+@keyframes recorded-out {
+  from { overflow: hidden; max-height: var(--recorded-h, 8rem); }
+  50% { overflow: hidden; max-height: var(--recorded-h, 8rem); padding-block: .5rem; border-bottom-width: 1px; opacity: 0; transform: translateY(-.5rem); }
+  to { overflow: hidden; max-height: 0; padding-block: 0; border-bottom-width: 0; opacity: 0; transform: translateY(-.5rem); }
+}
+/* Under reduced motion the same two animations only fade, and the line leaves
+   at once when the fade ends. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes recorded-in { from { opacity: 0; } }
+  @keyframes recorded-out { to { opacity: 0; } }
+}
 
 /* The answer form. */
 fieldset { min-width: 0; margin: 1rem 0; padding: .5rem .75rem .75rem; border: 1px solid var(--rule); }
