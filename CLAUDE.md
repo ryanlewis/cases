@@ -8,7 +8,7 @@ CLI and local web inbox for a store of cases raised by an agent and answered by 
 - **DO** use Conventional Commits.
 - **NEVER** edit or delete events in a store, by hand or with `sqlite3`. Changes to the record format must keep reading records written by earlier versions; a schema change raises `schemaVersion` in `internal/store/sqlite.go`, and a store with a higher version is refused.
 - **DO** update `modernc.org/libc` together with `modernc.org/sqlite`: the driver only works with the libc version its own go.mod pins.
-- **DO** update README.md in the same change when a command, flag, event or record field changes.
+- **DO** update the docs in the same change when a command, flag, event or record field changes: `docs/cli.md`, `docs/serve.md`, `docs/store.md` or `docs/configuration.md`, and README.md when it touches the first case or the inbox tour. `scripts/screenshots` refreshes the README's screenshots.
 - **DO** update `internal/skill/SKILL.md` when adding, removing or changing a subcommand's surface. The bundled agent skill ships in the binary and drifts silently otherwise.
 
 ## Commands
