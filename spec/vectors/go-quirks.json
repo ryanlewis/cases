@@ -1,0 +1,162 @@
+[
+  {
+    "description": "field names match whatever their case",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "{\"Kind\": \"fyi\", \"URGENCY\": \"today\", \"Title\": \"Nightly build moved\", \"Opened_At\": \"2026-09-15T09:01:00Z\"}"},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ACK\": true, \"Answered_At\": \"2026-09-15T09:02:00Z\"}"}
+    ],
+    "expect": {
+      "state": "answered",
+      "kind": "fyi",
+      "urgency": "today",
+      "title": "Nightly build moved",
+      "opened_at": "2026-09-15T09:01:00Z",
+      "answer": {"ack": true, "answered_at": "2026-09-15T09:02:00Z"},
+      "problems": []
+    }
+  },
+  {
+    "description": "when a field is given twice the last one wins",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"choice\": 1, \"choice\": 2, \"answered_at\": \"2026-09-15T09:02:00Z\"}"}
+    ],
+    "expect": {"state": "answered", "answer": {"choice": 2, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "fields whose names differ only in case are one field, and the last one wins",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"choice\": 1, \"Choice\": 2, \"answered_at\": \"2026-09-15T09:02:00Z\"}"}
+    ],
+    "expect": {"state": "answered", "answer": {"choice": 2, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "a record of null reads as an empty record",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "raw": "null"}
+    ],
+    "expect": {"state": "pickedup", "pickup": {}, "updated_at": "2026-09-15T09:02:00Z", "problems": []}
+  },
+  {
+    "description": "a field of null reads as a field not given",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true, \"note\": null, \"answered_at\": \"2026-09-15T09:02:00Z\"}"}
+    ],
+    "expect": {"state": "answered", "answer": {"ack": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "a title of null is a missing title, which breaks the open's rules rather than being malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "{\"kind\": \"fyi\", \"urgency\": \"today\", \"title\": null, \"opened_at\": \"2026-09-15T09:01:00Z\"}"},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "events": [{"seq": 2}], "problems": [{"seq": 1, "category": "invalid"}]}
+  },
+  {
+    "description": "a record without its time folds, with no time",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body."}}
+    ],
+    "expect": {"state": "open", "opened_at": null, "updated_at": null, "events": [{"seq": 1, "at": null}]}
+  },
+  {
+    "description": "an event without a time leaves updated_at as it was",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?"}}
+    ],
+    "expect": {
+      "updated_at": "2026-09-15T09:01:00Z",
+      "events": [{"seq": 1, "at": "2026-09-15T09:01:00Z"}, {"seq": 2, "at": null}]
+    }
+  },
+  {
+    "description": "the zero time reads as no time",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "0001-01-01T00:00:00Z"}}
+    ],
+    "expect": {
+      "answer": {"ack": true},
+      "updated_at": "2026-09-15T09:01:00Z",
+      "events": [{"seq": 1}, {"seq": 2, "at": null}]
+    }
+  },
+  {
+    "description": "an append whose record has the zero time is stamped with now",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "answered_at": "0001-01-01T00:00:00Z"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"answer": {"ack": true, "answered_at": "2026-09-15T09:02:00Z"}}
+  },
+  {
+    "description": "a lower-case z, which RFC 3339 allows, is malformed",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": true, \"answered_at\": \"2026-09-15T09:02:00z\"}"}
+    ],
+    "expect": {"state": "open", "problems": [{"seq": 2, "category": "malformed"}]}
+  },
+  {
+    "description": "an open without a kind is refused as unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"urgency": "today", "title": "No kind"}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "an open without an urgency is refused as unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "title": "No urgency"}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "an open may give an option twice, which an amend may not",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Pin"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "options": ["Pin", "Pin"]}
+  },
+  {
+    "description": "an open may have a link of only white space, which an amend may not",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr", " "]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "links": ["https://example.com/pr", " "]}
+  },
+  {
+    "description": "an open may give a link twice, which an amend may not",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr", "https://example.com/pr"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "links": ["https://example.com/pr", "https://example.com/pr"]}
+  },
+  {
+    "description": "an answer that did not see an amend is accepted when it sends no revision",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:03:00Z"},
+    "expect": {"state": "answered", "amend_seq": 2, "answer": {"choice": 1, "answered_at": "2026-09-15T09:03:00Z"}}
+  },
+  {
+    "description": "the same answer is refused as stale when it sends the revision it read",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "an answer from before an amend that only added labels is refused as stale too",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"labels": ["round 3"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  }
+]

@@ -1,0 +1,384 @@
+[
+  {
+    "description": "a decision case opens with its options",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "amend_seq": 0,
+      "updated_at": "2026-09-15T09:01:00Z",
+      "kind": "decision",
+      "urgency": "today",
+      "title": "Pin bun or float?",
+      "body": "Body.",
+      "options": ["Pin", "Float"],
+      "rows": [],
+      "links": [],
+      "labels": [],
+      "worker": "",
+      "brief": "",
+      "context": "",
+      "for": "",
+      "actor": null,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "answer": null,
+      "pickup": null,
+      "park": null,
+      "close": null,
+      "events": [
+        {"seq": 1, "author": "agent", "event": "open", "file": "0001-agent-open.json", "at": "2026-09-15T09:01:00Z", "from": null, "actor": null}
+      ],
+      "problems": []
+    }
+  },
+  {
+    "description": "an approval case opens with its rows",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "kind": "approval",
+      "rows": [
+        {"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"},
+        {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}
+      ],
+      "options": []
+    }
+  },
+  {
+    "description": "a signoff case opens",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "kind": "signoff",
+      "title": "Sign off release 1.4",
+      "options": [],
+      "rows": []
+    }
+  },
+  {
+    "description": "a stuck case opens",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "kind": "stuck", "title": "Mirror unreachable", "options": [], "rows": []}
+  },
+  {
+    "description": "a question case opens",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "kind": "question",
+      "title": "Which staging database?",
+      "options": [],
+      "rows": []
+    }
+  },
+  {
+    "description": "an fyi case opens",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "kind": "fyi", "title": "Nightly build moved", "options": [], "rows": []}
+  },
+  {
+    "description": "urgency blocking is known",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "blocking", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "urgency": "blocking"}
+  },
+  {
+    "description": "urgency today is known",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "urgency": "today"}
+  },
+  {
+    "description": "urgency whenever is known",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "whenever", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "urgency": "whenever"}
+  },
+  {
+    "description": "an unknown kind is refused as unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "poll", "urgency": "today", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "an unknown urgency is refused as unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "asap", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "a kind is matched exactly: Decision is unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "Decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "an urgency is matched exactly: Today is unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "Today", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "the kind is checked before the title: an unknown kind with a blank title is unknown",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "poll", "urgency": "today", "title": " ", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "unknown"}
+  },
+  {
+    "description": "a title of only white space is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": " ", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an open without a title is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a no-break space is white space, so a title of one is blank",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "\u00a0", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a zero-width no-break space is not white space, so a title of one is not blank",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "\ufeff", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "title": "\ufeff"}
+  },
+  {
+    "description": "a decision case without options is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a decision case with an empty list of options is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": []}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a decision case with a blank option is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", ""]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "options on an fyi case are refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "options": ["x"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "options on a question case are refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "options": ["x"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "options on an approval case are refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "options": ["x"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "rows on a question case are refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Which staging database?", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "rows on a decision case are refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an approval case without rows is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body."}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id with = is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a=b", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id with a space is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a b", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an empty row id is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id outside ASCII is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "\u00e9", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id ending in a newline is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a\n", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row id of letters, digits, dots, dashes and underscores is accepted",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "Step_1.b-2", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "rows": [
+        {"id": "Step_1.b-2", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"},
+        {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}
+      ]
+    }
+  },
+  {
+    "description": "a row id used twice is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "a", "label": "Again", "script": "npm ci", "link": "https://example.com/a"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row without a script is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row without a link is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row without a label is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row with a label of only white space is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "  ", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a row keeps its note",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a", "note": "Needs the VPN."}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "rows": [
+        {"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a", "note": "Needs the VPN."},
+        {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}
+      ]
+    }
+  },
+  {
+    "description": "labels are kept",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "labels": ["feat-labels", "round 3"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "labels": ["feat-labels", "round 3"]}
+  },
+  {
+    "description": "a blank label is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "labels": ["feat-labels", " "]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "a label used twice is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "labels": ["feat-labels", "feat-labels"]}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "links, worker, brief and context are kept",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "links": ["https://example.com/pr"], "worker": "bun-pins", "brief": "BRIEF.md", "context": "Release 1.4"}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "links": ["https://example.com/pr"],
+      "worker": "bun-pins",
+      "brief": "BRIEF.md",
+      "context": "Release 1.4"
+    }
+  },
+  {
+    "description": "an open may have a body and context of only white space",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "  ", "context": " \n"}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "body": "  ", "context": " \n"}
+  },
+  {
+    "description": "an open may have no body",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved"}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "body": ""}
+  },
+  {
+    "description": "for names who the case is for",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "for": "Ryan"}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "for": "Ryan"}
+  },
+  {
+    "description": "a for of only white space is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "for": "  "}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "the open's actor is the case's actor and its event's",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "actor": {"name": "bun-pins", "kind": "agent"}}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 1,
+      "actor": {"name": "bun-pins", "kind": "agent"},
+      "events": [{"seq": 1, "actor": {"name": "bun-pins", "kind": "agent"}}]
+    }
+  },
+  {
+    "description": "an actor may be of any kind",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "actor": {"name": "bun-pins", "kind": "session"}}, "now": "2026-09-15T09:01:00Z"},
+    "expect": {"state": "open", "revision": 1, "actor": {"name": "bun-pins", "kind": "session"}}
+  },
+  {
+    "description": "an actor with a blank name is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "actor": {"name": " ", "kind": "agent"}}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "an actor without a kind is refused",
+    "events": [],
+    "append": {"author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "actor": {"name": "bun-pins"}}, "now": "2026-09-15T09:01:00Z"},
+    "expect_error": {"category": "invalid"}
+  }
+]

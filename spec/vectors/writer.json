@@ -1,0 +1,315 @@
+[
+  {
+    "description": "an append is numbered after the highest seq",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"choice": 2, "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "note", "data": {"body": "Which patch?"}, "now": "2026-09-15T09:04:00Z"},
+    "expect": {
+      "state": "open",
+      "revision": 4,
+      "events": [
+        {"seq": 1},
+        {"seq": 2},
+        {"seq": 3},
+        {"seq": 4, "author": "agent", "event": "note", "file": "0004-agent-note.json", "from": "pickedup", "at": "2026-09-15T09:04:00Z"}
+      ]
+    }
+  },
+  {
+    "description": "an append after skipped rows is numbered after them",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": tru"},
+      {"seq": 3, "author": "bob", "event": "note", "data": {"body": "hi", "noted_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:04:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 4,
+      "events": [{"seq": 1}, {"seq": 4, "file": "0004-human-answer.json"}],
+      "problems": [{"seq": 2, "category": "malformed"}, {"seq": 3, "category": "author"}]
+    }
+  },
+  {
+    "description": "an append after a gap is numbered after the highest seq, not the revision",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 5, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:05:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:06:00Z"},
+    "expect": {
+      "state": "answered",
+      "revision": 3,
+      "events": [{"seq": 1}, {"seq": 5}, {"seq": 6, "file": "0006-human-answer.json"}]
+    }
+  },
+  {
+    "description": "a record without a time is stamped with now",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T10:30:00Z"},
+    "expect": {
+      "answer": {"ack": true, "answered_at": "2026-09-15T10:30:00Z"},
+      "updated_at": "2026-09-15T10:30:00Z",
+      "events": [{"seq": 1, "at": "2026-09-15T09:01:00Z"}, {"seq": 2, "at": "2026-09-15T10:30:00Z"}]
+    }
+  },
+  {
+    "description": "a record's own time is kept, even one before the case's latest",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T08:30:00Z"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {
+      "answer": {"ack": true, "answered_at": "2026-09-15T08:30:00Z"},
+      "updated_at": "2026-09-15T09:01:00Z",
+      "events": [{"seq": 1, "at": "2026-09-15T09:01:00Z"}, {"seq": 2, "at": "2026-09-15T08:30:00Z"}]
+    }
+  },
+  {
+    "description": "a record's own time with an offset is kept",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T11:45:00+02:00"}, "now": "2026-09-15T09:02:00Z"},
+    "expect": {"answer": {"ack": true, "answered_at": "2026-09-15T09:45:00Z"}, "updated_at": "2026-09-15T09:45:00Z"}
+  },
+  {
+    "description": "an append at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:02:00Z", "at_revision": 1},
+    "expect": {"state": "answered", "revision": 2}
+  },
+  {
+    "description": "an append at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"context": "Seen on the mirror too.", "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "an append at a revision the case has not reached is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "park", "data": {}, "now": "2026-09-15T09:02:00Z", "at_revision": 4},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "an append at revision 0 is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:02:00Z", "at_revision": 0},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "stale is checked before the state",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "resume", "data": {"resumed_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "human", "event": "resume", "data": {}, "now": "2026-09-15T09:04:00Z", "at_revision": 2},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "stale is checked before the record's rules",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Float"], "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "amend", "data": {"options": ["Vendor it"], "amended_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"choice": 9}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "a case answered and reopened since it was read is stale, though it is open again",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "note", "data": {"body": "Which mirror?", "noted_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"drop": true}, "now": "2026-09-15T09:04:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "the revision counts skipped rows",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": tru"}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"state": "answered", "revision": 3}
+  },
+  {
+    "description": "a revision that leaves out skipped rows is stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "raw": "{\"ack\": tru"}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "amend at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/log"]}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "amend at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "amend", "data": {"links": ["https://example.com/log"]}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "answer at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "answer at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "pickup at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "pickup", "data": {"by": "bun-pins"}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "pickup at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "pickup", "data": {"by": "bun-pins"}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "note at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "note", "data": {"body": "One more thing?"}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "note at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "note", "data": {"body": "One more thing?"}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "close at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "close", "data": {"outcome": "Done."}, "now": "2026-09-15T09:04:00Z", "at_revision": 2},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "close at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "close", "data": {"outcome": "Done."}, "now": "2026-09-15T09:04:00Z", "at_revision": 3},
+    "expect": {"revision": 4}
+  },
+  {
+    "description": "withdraw at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "withdraw", "data": {}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "withdraw at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "agent", "event": "withdraw", "data": {}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "park at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "park", "data": {"note": "after the release"}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "park at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "note", "data": {"body": "One more thing?", "noted_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "park", "data": {"note": "after the release"}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "resume at an earlier revision is refused as stale",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "resume", "data": {}, "now": "2026-09-15T09:03:00Z", "at_revision": 1},
+    "expect_error": {"category": "stale"}
+  },
+  {
+    "description": "resume at the case's revision is accepted",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "human", "event": "resume", "data": {}, "now": "2026-09-15T09:03:00Z", "at_revision": 2},
+    "expect": {"revision": 3}
+  },
+  {
+    "description": "an append to a case with no valid open is refused",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "raw": "not json"}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"ack": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "no-open"}
+  }
+]

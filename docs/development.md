@@ -49,6 +49,17 @@ base64 -i AuthKey_<key-id>.p8 | gh secret set MACOS_NOTARY_KEY --env release -R 
 `goreleaser check` validates the config. `goreleaser release --snapshot
 --clean` builds everything into `dist/` without signing or publishing.
 
+## Core vectors
+
+`spec/vectors` holds the core's rules as JSON: how a case's stored events
+fold, which events each state allows, what each record must hold, and how the
+writer numbers, stamps and checks a new event. `TestVectors` in
+`internal/store/vectors_test.go` runs them against the Go core as part of
+`make test`, and another implementation can run them with a runner of its own.
+A change that alters what the core does updates its vectors in the same
+commit. `spec/vectors/README.md` describes the format, and
+`spec/vectors/COVERAGE.md` lists the Go tests the vectors leave out.
+
 ## Screenshots
 
 The README's screenshots come from a demo store. `scripts/screenshots/seed.sh`
