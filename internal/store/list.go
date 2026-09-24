@@ -148,33 +148,30 @@ func loadCases(ctx context.Context, q querier, ids []string) ([]foldedCase, erro
 }
 
 // Poller lists a store repeatedly, folding again only the cases that have
-// changed. A poll first reads the store's highest change and its number of
-// cases. When both are as they were, it returns the cases it has without
-// reading any events: every event written raises the highest change, since
-// change is never used twice, and taking a case out, as prune does, lowers
-// the number of cases. Otherwise it folds the cases with an event above the
-// highest change it had, and any case it has not seen, and drops the cases no
-// longer in the store.
+// changed. A poll first reads the store's highest change and its case ids.
+// When both are as they were, it returns the cases it has without reading any
+// events: every event written raises the highest change, since change is
+// never used twice, and taking a case out, as prune does, or putting one back
+// from the archive changes the ids. Otherwise it folds the cases with an event
+// above the highest change it had, and any case it has not seen, and drops the
+// cases no longer in the store. It reads every id because a count of the cases
+// would not do: one case taken out and another put back between two polls can
+// leave the count and the highest change as they were, as the case put back
+// keeps the changes its events had.
 type Poller struct {
 	db *DB
 	// gen is the DB's pool generation the cache was read from. A new file
 	// at the path starts the cache again.
-	gen   int
-	head  pollHead
-	ids   []string // nil until the first read
-	cache map[string]foldedCase
+	gen    int
+	change int64    // the highest change when the cache was read
+	ids    []string // nil until the first read
+	cache  map[string]foldedCase
 }
 
 // maxStale is the most cases a poll folds again by name. Past it the poll
 // folds every case, which also keeps the statement under SQLite's limit on
 // parameters.
 const maxStale = 100
-
-// pollHead is what a poll checks before reading any case.
-type pollHead struct {
-	change int64
-	cases  int
-}
 
 // NewPoller returns a Poller over the store.
 func (d *DB) NewPoller() CasePoller {
@@ -205,16 +202,22 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 		return nil, nil, err
 	}
 
-	var head pollHead
-	err = tx.QueryRowContext(ctx, `SELECT (SELECT coalesce(max(change), 0) FROM events), (SELECT count(*) FROM cases)`).Scan(&head.change, &head.cases)
+	var change int64
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(change), 0) FROM events`).Scan(&change); err != nil {
+		return nil, nil, err
+	}
+	ids, err := queryStrings(ctx, tx, `SELECT id FROM cases ORDER BY id`)
 	if err != nil {
 		return nil, nil, err
 	}
-	if p.ids == nil || head != p.head {
-		if err := p.refresh(ctx, tx); err != nil {
+	if p.ids == nil || change != p.change || !slices.Equal(ids, p.ids) {
+		if err := p.refresh(ctx, tx, ids); err != nil {
+			// refresh may have dropped cases from the cache before it
+			// failed, so the next poll reads every case again.
+			p.reset(gen)
 			return nil, nil, err
 		}
-		p.head = head
+		p.change = change
 	}
 	for _, id := range p.ids {
 		entry := p.cache[id]
@@ -229,24 +232,20 @@ func (p *Poller) Poll() (cases []*Case, bad []*LoadError, err error) {
 
 // reset forgets every case, for a store that is gone or is another file.
 func (p *Poller) reset(gen int) {
-	p.gen, p.head, p.ids = gen, pollHead{}, nil
+	p.gen, p.change, p.ids = gen, 0, nil
 	clear(p.cache)
 }
 
-// refresh brings the cache up to the store: it drops the cases no longer
-// there, and folds again the cases with an event stored since the last read
-// and the cases it has not seen, such as one put back from the archive, whose
-// events keep the change they had.
-func (p *Poller) refresh(ctx context.Context, tx *sql.Tx) error {
-	ids, err := queryStrings(ctx, tx, `SELECT id FROM cases ORDER BY id`)
-	if err != nil {
-		return err
-	}
+// refresh brings the cache up to the store, whose case ids are ids: it drops
+// the cases no longer there, and folds again the cases with an event stored
+// since the last read and the cases it has not seen, such as one put back
+// from the archive, whose events keep the change they had.
+func (p *Poller) refresh(ctx context.Context, tx *sql.Tx, ids []string) error {
 	stale := map[string]bool{}
 	if p.ids == nil {
 		clear(p.cache)
 	} else {
-		changed, err := queryStrings(ctx, tx, `SELECT DISTINCT case_id FROM events WHERE change > ?`, p.head.change)
+		changed, err := queryStrings(ctx, tx, `SELECT DISTINCT case_id FROM events WHERE change > ?`, p.change)
 		if err != nil {
 			return err
 		}
