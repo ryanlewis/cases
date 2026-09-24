@@ -77,7 +77,14 @@
       {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
       {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
     ],
-    "expect": {"state": "open", "revision": 2, "problems": [{"seq": 2, "category": "transition"}]}
+    "expect": {
+      "state": "open",
+      "revision": 2,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:01:00Z",
+      "events": [{"seq": 1}],
+      "problems": [{"seq": 2, "category": "transition"}]
+    }
   },
   {
     "description": "answered: amend is refused",
@@ -167,7 +174,14 @@
       {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}},
       {"seq": 3, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:03:00Z"}}
     ],
-    "expect": {"state": "answered", "revision": 3, "problems": [{"seq": 3, "category": "transition"}]}
+    "expect": {
+      "state": "answered",
+      "revision": 3,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:02:00Z",
+      "events": [{"seq": 1}, {"seq": 2}],
+      "problems": [{"seq": 3, "category": "transition"}]
+    }
   },
   {
     "description": "pickedup: amend is refused",
@@ -267,7 +281,14 @@
       {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:03:00Z"}},
       {"seq": 4, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:04:00Z"}}
     ],
-    "expect": {"state": "pickedup", "revision": 4, "problems": [{"seq": 4, "category": "transition"}]}
+    "expect": {
+      "state": "pickedup",
+      "revision": 4,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:03:00Z",
+      "events": [{"seq": 1}, {"seq": 2}, {"seq": 3}],
+      "problems": [{"seq": 4, "category": "transition"}]
+    }
   },
   {
     "description": "closed: amend is refused",
@@ -377,7 +398,14 @@
       {"seq": 4, "author": "agent", "event": "close", "data": {"outcome": "Done.", "closed_at": "2026-09-15T09:04:00Z"}},
       {"seq": 5, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:05:00Z"}}
     ],
-    "expect": {"state": "closed", "revision": 5, "problems": [{"seq": 5, "category": "transition"}]}
+    "expect": {
+      "state": "closed",
+      "revision": 5,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:04:00Z",
+      "events": [{"seq": 1}, {"seq": 2}, {"seq": 3}, {"seq": 4}],
+      "problems": [{"seq": 5, "category": "transition"}]
+    }
   },
   {
     "description": "withdrawn: amend is refused",
@@ -467,7 +495,14 @@
       {"seq": 2, "author": "agent", "event": "withdraw", "data": {"withdrawn_at": "2026-09-15T09:02:00Z"}},
       {"seq": 3, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:03:00Z"}}
     ],
-    "expect": {"state": "withdrawn", "revision": 3, "problems": [{"seq": 3, "category": "transition"}]}
+    "expect": {
+      "state": "withdrawn",
+      "revision": 3,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:02:00Z",
+      "events": [{"seq": 1}, {"seq": 2}],
+      "problems": [{"seq": 3, "category": "transition"}]
+    }
   },
   {
     "description": "parked: amend is refused",
@@ -557,7 +592,14 @@
       {"seq": 2, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:02:00Z"}},
       {"seq": 3, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:03:00Z"}}
     ],
-    "expect": {"state": "parked", "revision": 3, "problems": [{"seq": 3, "category": "transition"}]}
+    "expect": {
+      "state": "parked",
+      "revision": 3,
+      "opened_at": "2026-09-15T09:01:00Z",
+      "updated_at": "2026-09-15T09:02:00Z",
+      "events": [{"seq": 1}, {"seq": 2}],
+      "problems": [{"seq": 3, "category": "transition"}]
+    }
   },
   {
     "description": "a decision case cannot be parked; only stuck cases park",
@@ -672,6 +714,71 @@
       {"seq": 2, "author": "human", "event": "park", "data": {"note": "after the release", "parked_at": "2026-09-15T09:02:00Z"}}
     ],
     "append": {"author": "robot", "event": "resume", "data": {}, "now": "2026-09-15T09:03:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "open is written by the agent and no one else",
+    "events": [],
+    "append": {"author": "robot", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body."}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "amend is written by the agent and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "amend", "data": {"context": "Seen on the mirror too."}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "answer is written by the human and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "pickup is written by the agent and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "pickup", "data": {"by": "bun-pins"}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "close is written by the agent and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-09-15T09:02:00Z"}},
+      {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-09-15T09:03:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "close", "data": {"outcome": "Done."}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "withdraw is written by the agent and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "withdraw", "data": {}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "park is written by the human and no one else",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "robot", "event": "park", "data": {"note": "after the release"}, "now": "2026-09-15T09:04:00Z"},
+    "expect_error": {"category": "author"}
+  },
+  {
+    "description": "authors are matched exactly: an answer by Human is refused for its author",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "Human", "event": "answer", "data": {"text": "Try the other mirror."}, "now": "2026-09-15T09:04:00Z"},
     "expect_error": {"category": "author"}
   },
   {

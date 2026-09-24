@@ -235,6 +235,18 @@
     "expect": {"state": "open", "labels": [], "worker": "w1", "brief": "BRIEF.md", "problems": []}
   },
   {
+    "description": "a stored open that gives an option twice, a link twice and a blank link folds",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Pin bun or float?", "body": "Body.", "options": ["Pin", "Pin"], "links": ["https://example.com/pr", "https://example.com/pr", " "], "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect": {
+      "state": "open",
+      "problems": [],
+      "options": ["Pin", "Pin"],
+      "links": ["https://example.com/pr", "https://example.com/pr", " "]
+    }
+  },
+  {
     "description": "records an earlier build wrote, byte for byte, fold as that build showed them",
     "events": [
       {"seq": 1, "author": "agent", "event": "open", "raw": "{\n  \"kind\": \"decision\",\n  \"urgency\": \"today\",\n  \"title\": \"Pin bun or float\",\n  \"body\": \"# Pin bun?\\n\\nWe use bun 1.2 in CI.\\n\\n- **Pin**: stable\\n- Float: \\u003cnewer\\u003e \\u0026 riskier\\n\",\n  \"options\": [\n    \"Pin to 1.2.3\",\n    \"Float\"\n  ],\n  \"links\": [\n    \"https://example.com/pr\"\n  ],\n  \"labels\": [\n    \"round-3\"\n  ],\n  \"context\": \"Release 1.4\",\n  \"opened_at\": \"2026-09-16T22:15:41.605108Z\"\n}\n"},
@@ -281,6 +293,13 @@
     "description": "an open by the human does not fold",
     "events": [
       {"seq": 1, "author": "human", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "expect_error": {"category": "no-open"}
+  },
+  {
+    "description": "an open by an author who is neither the agent nor the human does not fold",
+    "events": [
+      {"seq": 1, "author": "robot", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
     ],
     "expect_error": {"category": "no-open"}
   },
@@ -353,6 +372,54 @@
       {"seq": 3, "author": "human", "event": "answer", "data": {"choice": 9, "answered_at": "2026-09-15T09:03:00Z"}}
     ],
     "expect": {"state": "answered", "problems": [{"seq": 3, "category": "transition"}]}
+  },
+  {
+    "description": "the event is checked before the open: an unknown event before the open is unknown",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "comment", "data": {"body": "x"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "events": [{"seq": 2}], "problems": [{"seq": 1, "category": "unknown"}]}
+  },
+  {
+    "description": "the author is checked before the open: an answer by the agent before the open is refused for its author",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "answer", "data": {"ack": true, "answered_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "events": [{"seq": 2}], "problems": [{"seq": 1, "category": "author"}]}
+  },
+  {
+    "description": "the record is read before the open: a broken answer before the open is malformed",
+    "events": [
+      {"seq": 1, "author": "human", "event": "answer", "raw": "not json"},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "events": [{"seq": 2}], "problems": [{"seq": 1, "category": "malformed"}]}
+  },
+  {
+    "description": "the actor is checked before the open: an answer with a nameless actor before the open is invalid",
+    "events": [
+      {"seq": 1, "author": "human", "event": "answer", "data": {"ack": true, "actor": {"name": "", "kind": "human"}, "answered_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Nightly build moved", "body": "Body.", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "events": [{"seq": 2}], "problems": [{"seq": 1, "category": "invalid"}]}
+  },
+  {
+    "description": "a second open is refused for the state before its rules: one with a blank title is a transition",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": " ", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "title": "Mirror unreachable", "problems": [{"seq": 2, "category": "transition"}]}
+  },
+  {
+    "description": "a second open is refused for the state before its kind: one of an unknown kind is a transition",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}},
+      {"seq": 2, "author": "agent", "event": "open", "data": {"kind": "poll", "urgency": "today", "title": "Mirror unreachable", "opened_at": "2026-09-15T09:02:00Z"}}
+    ],
+    "expect": {"state": "open", "kind": "stuck", "problems": [{"seq": 2, "category": "transition"}]}
   },
   {
     "description": "seqs may have gaps, and each event is named by its own seq",

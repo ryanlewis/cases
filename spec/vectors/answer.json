@@ -132,7 +132,7 @@
     "events": [
       {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
     ],
-    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "a", "verdict": "hold"}]}, "now": "2026-09-15T09:02:00Z"},
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "approve"}, {"id": "a", "verdict": "hold"}]}, "now": "2026-09-15T09:02:00Z"},
     "expect_error": {"category": "invalid"}
   },
   {
@@ -164,7 +164,7 @@
     "events": [
       {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "approval", "urgency": "today", "title": "Run the release scripts", "body": "Body.", "rows": [{"id": "a", "label": "Install deps", "script": "npm ci", "link": "https://example.com/a"}, {"id": "b", "label": "Migrate", "script": "make migrate", "link": "https://example.com/b"}], "opened_at": "2026-09-15T09:01:00Z"}}
     ],
-    "append": {"author": "human", "event": "answer", "data": {"choice": 1}, "now": "2026-09-15T09:02:00Z"},
+    "append": {"author": "human", "event": "answer", "data": {"rows": [{"id": "a", "verdict": "approve"}, {"id": "b", "verdict": "approve"}], "choice": 1}, "now": "2026-09-15T09:02:00Z"},
     "expect_error": {"category": "invalid"}
   },
   {
@@ -220,6 +220,14 @@
     "expect_error": {"category": "invalid"}
   },
   {
+    "description": "signoff: text is not a signoff response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Sign off release 1.4", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"signoff": "accept", "text": "x"}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
     "description": "stuck: text",
     "events": [
       {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
@@ -249,6 +257,14 @@
       {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
     ],
     "append": {"author": "human", "event": "answer", "data": {"text": "x", "drop": true}, "now": "2026-09-15T09:02:00Z"},
+    "expect_error": {"category": "invalid"}
+  },
+  {
+    "description": "stuck: ack is not a stuck response",
+    "events": [
+      {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-09-15T09:01:00Z"}}
+    ],
+    "append": {"author": "human", "event": "answer", "data": {"text": "use v2", "ack": true}, "now": "2026-09-15T09:02:00Z"},
     "expect_error": {"category": "invalid"}
   },
   {

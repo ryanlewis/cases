@@ -1,6 +1,6 @@
 # What the vectors do not cover
 
-The vectors cover the core: how a case's rows fold, the rules for each event, and how the writer numbers, stamps and checks the revision of a new event. This file lists the Go tests in `internal/store` and `cmd/cases` that check something the vectors leave out, and why. The last section lists the store tests whose rules the vectors now carry.
+The vectors cover the core: how a case's rows fold, the rules for each event, and how the writer numbers, stamps and checks the revision of a new event. This file lists the Go tests in `internal/store` and `cmd/cases` that check something the vectors leave out, and why. The last section lists the store tests whose rules the vectors now carry. `TestVectors` and `TestTransitionVectorsCoverEveryState` run the vectors, so neither is listed.
 
 Reasons:
 
@@ -9,18 +9,20 @@ Reasons:
 - **text**: messages and thread lines for people, which are not part of the contract.
 - **Go API**: Go types, or Go builds reading each other's records.
 - **core, unreachable**: core code that no stored row or append can reach.
-- **core, not yet vectorised**: core behaviour with no vector yet.
 - **CLI**: commands, flags, output, exit codes, config, serve, the service and the skill.
 
-## internal/store: 51 tests
+## internal/store: 55 tests
 
 | Test | Reason |
 | --- | --- |
 | `TestTransitionErrorType` | Go API: the error's type and fields. The vectors check its category, `transition` |
-| `TestAnswerNeedNotSeeALabelAmend` | core, unreachable: it applies an answer numbered at or below an amend, which needs seqs out of order or given twice. `go-quirks.json` covers what can happen, through `at_revision` |
-| `TestAnswerNumberIsOnlyCheckedAfterAnAmend` | core, unreachable: two events numbered 0 |
-| `TestSlug` | core, not yet vectorised: the slug in a case id. Ids are outside the fold |
+| `TestAnswerNeedNotSeeALabelAmend` | core, unreachable: it applies an answer numbered at or below an amend, which needs seqs out of order or given twice. `go-quirks.json` covers what can happen, through `at_revision`, and `amend.json` which amends count, labels beside an option among them |
+| `TestAnswerNumberIsOnlyCheckedAfterAnAmend` | core, unreachable: events numbered 0, which the writer never writes and the vectors do not allow |
+| `TestSlug` | store: the slug in a case id. The vectors do not check ids |
 | `TestActorAndForAreIgnoredByAnEarlierBuild` | Go API: an earlier build's Go types reading today's records |
+| `TestActorFromALaterBuildFolds` | Go API: an event's `Data` keeps the record's exact bytes, where the vectors compare `data` as a JSON value. Its fold is in `fold.json` |
+| `TestLoadPreservesUnknownFields` | Go API: the case's JSON, as `show --json` prints it, keeps fields this version does not know. That the event's data keeps them is in `fold.json` |
+| `TestOpenRecordWithoutLabelsLoads` | Go API: `Labels` stays nil and the case's JSON has no `labels` key. Its fold is in `fold.json` |
 | `TestDescribeActor` | text: thread lines |
 | `TestDescribeWithdraw` | text: thread lines |
 | `TestDescribeAmend` | text: thread lines |
@@ -32,6 +34,7 @@ Reasons:
 | `TestArchiveRefusesAnIDTheArchiveHas` | store: the archive tables |
 | `TestDeleteRemovesTheCase` | store: deleting a case's rows |
 | `TestArchiveAndDeleteRefuse` | store: archive and delete preconditions |
+| `TestLoadWithoutOpenFails` | store: a `cases` row with no events comes back with the fold's error, not as a missing case. A case that does not fold is in `fold.json` |
 | `TestListReportsBrokenCases` | store: `List` and `LoadError` across cases. A case that does not fold is in `fold.json` |
 | `TestIDs` | store: listing ids |
 | `TestPollerSeesNewEventsAndCases` | store: the poller and the `change` cursor |
@@ -68,7 +71,7 @@ Reasons:
 | `TestEventsAreStampedOnceTheWriteHoldsTheLock` | concurrency |
 | `TestWrittenRecordShape` | store: the bytes a write stores and the `at` column. The vectors compare records as values |
 
-By reason: store 32, concurrency 7, text 7, Go API 2, core unreachable 2, core not yet vectorised 1.
+By reason: store 34, concurrency 7, text 7, Go API 5, core unreachable 2.
 
 ## cmd/cases: 158 tests, all CLI
 
@@ -88,7 +91,7 @@ Every test in `cmd/cases` runs the CLI: it parses flags, builds records, prints 
 | `main_test.go` | `TestStoreDefaultsToDataHome`, `TestListOnMissingStoreIsEmpty`, `TestStoreFromEnvironment`, `TestVersionString`, `TestReportExitStatus`, `TestFindCaseTakesPartOfAnID` | CLI: the store path, version, exit codes and id prefixes |
 | `config_test.go` | `TestConfigKeysMatchFlags`, `TestConfigSetsStore`, `TestConfigExpandsHome`, `TestConfigSetsListen`, `TestConfigSetsNoOpen`, `TestConfigFlagAndEnv`, `TestConfigFlagLastWins`, `TestBrokenConfigStopsCommandsButNotDiagnosis`, `TestConfigShow`, `TestConfigInit` | CLI: the config file |
 | `list_test.go` | `TestListOrderFilterAndJSON`, `TestListShowsLabels`, `TestListByLabelAndWorker`, `TestListReportsBrokenCaseAndListsTheRest`, `TestListDefaultsToOpenAndParked`, `TestListByKindAndUrgency`, `TestWaitByKind`, `TestListCount`, `TestListOlderThanReadsTheLastEvent` | CLI: listing, filters and output |
-| `show_test.go` | `TestShow`, `TestShowQuestionReply`, `TestShowRefusesPathsAndMissingCases`, `TestShowJSONRevisionCountsSkippedFiles`, `TestShowTakesPartOfAnID`, `TestShowReportsAnUnknownEventAsVersionSkew`, `TestShowURLOfTheRunningInbox`, `TestShowWarnsOnADamagedInstanceFile`, `TestShowAnswer` | CLI: `show` output. Revision and skipped rows are in `fold.json` |
+| `show_test.go` | `TestShow`, `TestShowQuestionReply`, `TestShowRefusesPathsAndMissingCases`, `TestShowJSONRevisionCountsSkippedFiles`, `TestShowTakesPartOfAnID`, `TestShowReportsAnUnknownEventAsVersionSkew`, `TestShowURLOfTheRunningInbox`, `TestShowWarnsOnADamagedInstanceFile`, `TestShowAnswer` | CLI: `show` output. Revision and skipped rows are in `fold.json` and `writer.json` |
 | `wait_test.go` | `TestWaitReturnsAnAnswerThatLands`, `TestWaitTimesOutWithExitTwo`, `TestWaitIgnoresEventsFromBeforeItStarted`, `TestWaitSinceCountsEarlierEvents`, `TestWaitParkAndResume`, `TestWaitOnSpecificCases`, `TestWaitByLabelAndWorker`, `TestWaitByIDAndLabel`, `TestWaitForAStoreThatDoesNotExistYet`, `TestWaitReportsAnAnswerWithoutTimestamp`, `TestWaitWarnsOnceAboutAMalformedAnswer`, `TestWaitForHuman`, `TestWaitForHumanAmendAndResume`, `TestWaitSinceCaseID`, `TestWaitPrintsTheNextSince`, `TestWaitMarksWhichCasesAreFresh`, `TestWaitPickupPicksUpTheAnswer`, `TestWaitPickupLeavesParkedAndResumedCases`, `TestWaitPickupSkipsACaseChangedSinceItWasRead`, `TestWaitPickupByTwoWaitsPicksUpOnce`, `TestWaitPickupByLabel`, `TestWaitPickupFlags` | CLI: `wait`, which polls the store |
 | `sweep_test.go` | `TestSweepDryRunWritesNothing`, `TestSweepWithdrawsOpenCasesAndLeavesTheRest`, `TestSweepFilters`, `TestSweepLeavesACaseChangedSinceItWasListed`, `TestSweepByKind`, `TestSweepWithdrawsThroughTheStore` | CLI: `sweep` |
 | `prune_test.go` | `TestPruneDryRunWritesNothing`, `TestPruneArchives`, `TestPruneRefusesAnIDInTheArchive`, `TestPruneDelete`, `TestPruneSkipsABrokenCase`, `TestPruneRefusesOtherStates`, `TestPruneOnMissingStore`, `TestConfigSetsPruneAge`, `TestPruneAgeZeroTakesAFutureCase` | CLI: `prune` and the archive |
@@ -100,7 +103,7 @@ Every test in `cmd/cases` runs the CLI: it parses flags, builds records, prints 
 | `service_test.go` | `TestServiceInstallWritesUnit`, `TestServiceInstallWritesPlist`, `TestServiceInstallTakesConfig`, `TestServiceInstallRefusesNonLoopback`, `TestServiceUninstall`, `TestServiceManagerDown`, `TestServiceInstallWithoutManager`, `TestServiceInstallRefusesWhileServeRuns`, `TestServiceInstallRefusesTakenAddress`, `TestServiceReinstallWhileServiceRuns`, `TestServiceReinstallChecksWhatChanged`, `TestServiceStatusNotInstalled`, `TestServiceStatusHandStartedServe`, `TestServiceStatusRunning`, `TestServiceStatusNotLoaded`, `TestServiceStatusNotAnswering`, `TestServiceStatusLoadedWithoutFile`, `TestServiceStatusOtherStoreAndBinary` | CLI: `service` |
 | `skill_test.go` | `TestSkillShowPrintsFrontmatter`, `TestSkillInstallListUninstall`, `TestSkillCheck`, `TestSkillUnreadable`, `TestSkillUnknownAgent`, `TestSkillHelpNamesEveryAgent` | CLI: `skill` |
 
-## internal/store tests the vectors carry: 22 tests
+## internal/store tests the vectors carry: 18 tests
 
 These tests' rules are all in the vectors. They stay, as Go's own checks.
 
@@ -119,11 +122,7 @@ These tests' rules are all in the vectors. They stay, as Go's own checks.
 | `TestAnswerIsCheckedAgainstTheAmendedCase` | `answer.json` |
 | `TestActorAndForFold` | `fold.json` |
 | `TestActorAndForValidation` | `open.json`, `fold.json` |
-| `TestActorFromALaterBuildFolds` | `fold.json` |
 | `TestLoadToleratesMalformedRows` | `fold.json`, `writer.json` |
-| `TestLoadPreservesUnknownFields` | `fold.json` |
-| `TestLoadWithoutOpenFails` | `fold.json` |
-| `TestOpenRecordWithoutLabelsLoads` | `fold.json` |
 | `TestAppendNumbersEventsInOrder` | `writer.json` |
 | `TestInvalidTransitionIsNotWritten` | `transitions.json`, `amend.json`, `answer.json` |
 | `TestAtRevision` | `writer.json` |
