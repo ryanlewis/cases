@@ -119,6 +119,20 @@ homebrew_casks:
     # Prerelease tags (vX.Y.Z-rc.N) leave the cask alone, as they leave the
     # latest GitHub release alone, so brew users stay on the stable version.
     skip_upload: auto
+    # No uninstall stanza: brew upgrade runs the old cask's uninstall
+    # stanza too, and `launchctl:` there would remove the service on every
+    # upgrade. zap runs only on `brew uninstall --zap`. It never touches
+    # the store (~/.local/share/cases) or the config file.
+    caveats: |
+      To remove the cases serve service, run `cases service uninstall`
+      before `brew uninstall cases`. On macOS, `brew uninstall --zap cases`
+      also removes it; on Linux it does not.
+    zap:
+      launchctl:
+        - com.github.ryanlewis.cases.serve
+      trash:
+        - ~/.local/state/cases/serve.log
+        - ~/.local/state/cases/serve-*.json
     # No de-quarantine hook: the binary is signed and notarized (see the
     # notarize block above), so Gatekeeper passes it. A bare Mach-O binary
     # cannot have a ticket stapled, so the first run needs the network for

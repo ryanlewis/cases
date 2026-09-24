@@ -704,6 +704,15 @@ when there is none, and leaves the file in place when it cannot ask launchd or
 systemd whether the service is loaded. Other systems are not supported; run
 `cases serve` under your own supervisor there.
 
+Removing cases does not remove the service, so run `cases service uninstall`
+first. Otherwise launchd or systemd keeps trying to start a binary that is no
+longer there. On macOS, `brew uninstall --zap cases` also removes the launchd
+agent, along with `serve.log` and the instance files in `~/.local/state/cases`.
+It leaves the store and the config file alone. A plain `brew uninstall`, and
+`brew upgrade`, leave the service in place. On Linux, Homebrew cannot remove a
+systemd user unit, so run `cases service uninstall` before
+`brew uninstall cases`.
+
 ### The inbox
 
 The inbox is laid out like a mail client. The left column lists open and
