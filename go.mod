@@ -6,11 +6,12 @@ toolchain go1.26.8
 
 require (
 	github.com/alecthomas/kong v1.16.1
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark/v2 v2.1.5
 )
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/yuin/goldmark v1.4.13
 	modernc.org/sqlite v1.59.0
 )
 
