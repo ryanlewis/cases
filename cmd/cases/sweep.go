@@ -20,8 +20,13 @@ type SweepCmd struct {
 
 // Run withdraws the open cases that match. Withdraw is allowed only on an open
 // case, so an answered or parked case that matches is listed and left alone.
-// A case that refuses the withdraw does not stop the rest; sweep fails at the
-// end if any did.
+// Each withdraw is made at the revision this run read, so a case that has had
+// an event written since, such as an amend, or an answer and a note that
+// opens it again, is refused and left as it is. The run reads the cases
+// itself, so a case changed between a dry run and --yes is withdrawn at its
+// new revision. A case that refuses the withdraw does not stop the rest;
+// sweep fails at the end if any did, naming the state a changed case is now
+// in.
 func (c *SweepCmd) Run(d *Deps) error {
 	cases, bad, err := d.Cases.List(context.Background())
 	if errors.Is(err, fs.ErrNotExist) {
@@ -60,10 +65,16 @@ func (c *SweepCmd) Run(d *Deps) error {
 
 	var failed []string
 	for _, cs := range sweep {
-		withdrawn, err := d.Cases.Withdraw(context.Background(), cs.ID, store.WithdrawRecord{Reason: c.Reason})
+		withdrawn, err := d.Cases.Withdraw(context.Background(), cs.ID, store.WithdrawRecord{Reason: c.Reason}, store.AtRevision(cs.Revision()))
 		time.Sleep(writePause)
 		if err != nil {
-			failed = append(failed, cs.ID+": "+err.Error())
+			line := cs.ID + ": " + err.Error()
+			if errors.Is(err, store.ErrStale) {
+				if cur, err := d.Cases.Get(context.Background(), cs.ID); err == nil {
+					line += "; it is now " + string(cur.State)
+				}
+			}
+			failed = append(failed, line)
 			continue
 		}
 		_ = d.done(withdrawn)
