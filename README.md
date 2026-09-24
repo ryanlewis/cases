@@ -94,6 +94,7 @@ cases wait --id "$id" --since "$id" --timeout 2h > answered.jsonl &
 cases answer "$id" --option 1 --note "Revisit after 1.3"
 
 # Agent: record that the answer was read, act on it, and close with the outcome.
+# (With --pickup --by bun-pins, wait records this pickup itself; see docs/cli.md.)
 cases pickup "$id" --by bun-pins
 cases close "$id" --outcome "Pinned in #12."
 cases show "$id"

@@ -142,23 +142,6 @@ func TestSweepFilters(t *testing.T) {
 	}
 }
 
-// changeFirst is the store with one case changed just before sweep withdraws
-// it, as can happen between sweep listing the cases and withdrawing them.
-type changeFirst struct {
-	store.Store
-	id     string
-	change func(ctx context.Context, s store.Store, id string) error
-}
-
-func (c changeFirst) Withdraw(ctx context.Context, id string, rec store.WithdrawRecord, pre ...store.Precondition) (*store.Case, error) {
-	if id == c.id {
-		if err := c.change(ctx, c.Store, id); err != nil {
-			return nil, err
-		}
-	}
-	return c.Store.Withdraw(ctx, id, rec, pre...)
-}
-
 // A case with an event written after sweep listed it is no longer the case
 // sweep matched, even when it is open again. Sweep leaves it as it is,
 // withdraws the rest, and names it, with the state it is now in, among the

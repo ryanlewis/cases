@@ -3,7 +3,8 @@
 The agent skill is a `SKILL.md` embedded in the binary, so it always matches
 the commands the binary has. It is written for an agent: the lifecycle, the
 kinds and what each answer looks like, the agent-side commands, what not to do,
-and a recipe for open, wait, pickup and close.
+and a recipe that handles a case in two turns: open and `wait --pickup` in one
+background command, then act on the answer and close.
 
 ```sh
 cases skill install claude   # write SKILL.md into the agent's skills directory

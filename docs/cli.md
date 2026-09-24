@@ -18,7 +18,7 @@ cases amend    ID [--body TEXT | --body-file FILE|-] [--option TEXT]...
                [--context TEXT] [--revision N]
 cases wait     [--for agent|human] [--since TIME|ID] [--timeout DURATION]
                [--id ID]... [--kind KIND]... [--label TEXT]...
-               [--worker NAME]...
+               [--worker NAME]... [--pickup [--by NAME]]
 cases pickup   ID [--by NAME] [--revision N]
 cases note     ID --body TEXT | --body-file FILE|- [--revision N]
 cases close    ID --outcome TEXT | --outcome-file FILE|- [--link URL]...
@@ -87,7 +87,7 @@ exit 1, and `wait` exits 2 on timeout. `sweep` and `prune` exit 1 when any case
 fails.
 
 `cases show` prints the case's revision, the number of events it has, and
-`show --json` and `show --answer` have it as `revision`. Pass it to `answer`, `resume`, `amend`,
+`show --json`, `show --answer` and each line `wait` prints have it as `revision`. Pass it to `answer`, `resume`, `amend`,
 `pickup`, `note`, `close` or `withdraw` as `--revision N` and the write is refused, with nothing written, if an event has
 been added to the case since it was read. The error names the revision read and
 the current one, and the command exits non-zero.
@@ -116,7 +116,7 @@ one label from `CASES_LABEL` when the flags are not given, so a session can
 export them once. `CASES_LABEL` is always exactly one label: the whole value,
 commas and spaces included. A `--label` flag replaces it rather than adding to
 it, and `CASES_LABEL` set to an empty string is a blank label, which `open`
-refuses. Only `open` reads them; `list`, `wait` and `sweep` do not. `--by` on `pickup` records who picked the case
+refuses. Only `open` reads them; `list`, `wait` and `sweep` do not. `--by` on `pickup` and `wait --pickup` records who picked the case
 up, such as the agent session name. `--reason` on `withdraw` records why the
 case no longer needs an answer; `show` and the web thread print it.
 
@@ -163,7 +163,7 @@ it prints one line to stderr and exits 2; other errors exit 1. `wait` also
 starts if the store file does not exist yet.
 
 Each line `wait` prints is the case as `show --json` prints it, without
-`revision`, plus two fields:
+`url`, plus two fields:
 
 - `fresh` is true when the event that put the case there is new to this
   `wait`: it was written while waiting, or it is later than `--since`. Those
@@ -178,6 +178,25 @@ Each line `wait` prints is the case as `show --json` prints it, without
   `wait` if it is written before that `wait` starts, and is printed with
   `fresh` false on a later wake. It is left out when none of those events
   records a time.
+
+`wait --pickup` picks up each `answered` case before printing it, as `pickup`
+does: `--by NAME` records who, and the case's worker is the actor. Its line is
+the case after the pickup, `pickedup` and with the `revision` that
+`close --revision` takes. Parked and resumed cases are printed as they are.
+Each pickup is made at the revision `wait` read the case at, so a case that
+changed in between, such as one noted or picked up by another command, is not
+picked up: `wait` prints it as it read it, still `answered`, says on stderr
+why and what state the case is in now, and still exits 0. No later `wait`
+prints a case that `wait --pickup` picked up, so if its output is lost, find
+the case with `cases list --state pickedup`. `--pickup` needs `--id`, `--label`
+or `--worker`, so that it picks up only the agent's own cases, and refuses a
+blank `--worker`, which matches every case opened without one. It does not go
+with `--for human`, and `--by` needs `--pickup`. With it, an agent handles a
+case in two turns, as the [skill](skill.md)'s workflow shows: one background
+command that opens the case and waits,
+`id=$(cases open ...) && cases wait --id "$id" --since "$id" --pickup --by NAME`,
+and then, when that prints the answer, the work, with `cases close` chained
+onto its last command.
 
 `wait --for human` is the same wait from the human's side, for a notifier to
 run: it returns when a case lands on the human and prints every case waiting
