@@ -2,7 +2,7 @@ module github.com/ryanlewis/cases
 
 go 1.26.0
 
-toolchain go1.26.8
+toolchain go1.27.1
 
 require (
 	github.com/alecthomas/kong v1.16.1
@@ -10,7 +10,7 @@ require (
 )
 
 require (
-	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/pelletier/go-toml/v2 v2.4.3
 	modernc.org/sqlite v1.59.0
 )
 
