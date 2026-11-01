@@ -19,10 +19,9 @@ Hosted is parked. Keep `cases login` and the hosted half of `store-remote` build
 
 ## Spec
 
-- User stories: `~/dev/notes/projects/cases/spec/stories.md` (keep/change/drop, with acceptance criteria at the level of behaviour).
+- User stories: `crates/cli/STORIES.md` maps each acceptance criterion of every keep and change story to the tests that prove it.
 - Core vectors: `spec/vectors/` (format in its README.md). `core` must pass every vector. Errors are compared by category, never by message.
 - A vector change needs a line in `spec/vectors/CHANGES.md` naming the vector by its description; CI refuses a pull request without one.
-- Decisions: `~/dev/notes/projects/cases/README.md`, in the section on building cases in Rust.
 
 ## Layout
 
