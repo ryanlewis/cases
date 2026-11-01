@@ -92,10 +92,8 @@ pub(crate) fn dir() -> Result<PathBuf, Error> {
 /// The instance file for the store at `store`, in the state directory:
 /// `serve-<file name>-<hash>.json`, where the hash is of the store's absolute
 /// path, so that serves on two stores never share a file, and the file name
-/// is there for people. It is the same for every Rust build of cases, since
-/// each finds the serve another started. The Go build hashed with SHA-256, so
-/// neither finds the other's serve: they never share a store (fresh start,
-/// 24 Sep).
+/// is there for people. It is the same for every build of cases, since
+/// each finds the serve another started.
 pub(crate) fn path(store: &Path) -> Result<PathBuf, Error> {
     let store = clean(&std::path::absolute(store)?);
     let name = output::slug(&store.file_name().unwrap_or_default().to_string_lossy());
@@ -126,9 +124,9 @@ pub(crate) fn running(store: &Path) -> Result<Option<Info>, Error> {
     Ok(Some(info))
 }
 
-/// `path` with each `..` taking off the name before it, as Go's
-/// `filepath.Abs` cleans a path, so that `a/../cases.db` and `cases.db` name
-/// one store and so one instance file. `std::path::absolute` keeps `..`.
+/// `path` with each `..` taking off the name before it, so that
+/// `a/../cases.db` and `cases.db` name one store and so one instance file.
+/// `std::path::absolute` keeps `..`.
 pub(crate) fn clean(path: &Path) -> PathBuf {
     let mut clean = PathBuf::new();
     for component in path.components() {

@@ -1150,8 +1150,7 @@ fn the_notification_feed_numbers_what_lands_on_the_human() {
         ),
         (Some(1), Some(0))
     );
-    // An empty after is none, as the Go inbox read it, and the first after
-    // counts.
+    // An empty after is none, and the first after counts.
     for query in ["?after=", "?after=0&after=1"] {
         let page = serve.get(&format!("/v1/notifications{query}")).json();
         assert_eq!(page["items"].as_array().map(Vec::len), Some(1), "{query}");
@@ -1188,8 +1187,7 @@ fn the_tab_icon_is_drawn_for_its_query() {
     for bad in ["n=x", "n=-1", "n=1&blocking=yes"] {
         refused(&serve.get(&format!("/favicon.svg?{bad}")), 400, "request");
     }
-    // An empty value is none, and the first value counts, as the Go inbox
-    // read them.
+    // An empty value is none, and the first value counts.
     let mark = serve.get("/favicon.svg").body;
     assert_eq!(serve.get("/favicon.svg?n=&blocking=").body, mark);
     let ink = serve.get("/favicon.svg?n=3&blocking=&n=7");

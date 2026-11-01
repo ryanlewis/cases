@@ -40,8 +40,7 @@ const BLOCKING_BADGE: &str = r##"fill="#a11b2b""##;
 const BLOCKING_COUNT: &str = r##"fill="#fbfbfa""##;
 
 /// Draws the icon for the count the query gives. Each of `n` and `blocking`
-/// is read from its first value, and an empty one is none, as the Go inbox
-/// read them.
+/// is read from its first value, and an empty one is none.
 pub(crate) async fn icon(RawQuery(query): RawQuery) -> Result<Response, Refusal> {
     let query = query.unwrap_or_default();
     let pairs: Vec<_> = form_urlencoded::parse(query.as_bytes()).collect();

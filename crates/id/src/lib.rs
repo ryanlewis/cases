@@ -392,7 +392,7 @@ mod tests {
             "UkLWé",
             " UkLWZ",
             "UkLWZ ",
-            // Paths, which Go refused as ids.
+            // Paths, which name no key either.
             ".",
             "..",
             "../x",

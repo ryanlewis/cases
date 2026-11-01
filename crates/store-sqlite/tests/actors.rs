@@ -1,6 +1,5 @@
 //! Actors: who writes each event, by id, with the store's table of actors
-//! for their kinds and names (ST-12, AG-01, HU-06). The Go store's
-//! `actor_test.go`, as `PARITY.md` maps it.
+//! for their kinds and names (ST-12, AG-01, HU-06).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

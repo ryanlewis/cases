@@ -970,12 +970,11 @@ mod tests {
         }
     }
 
-    /// The stylesheet, carried over from the Go inbox, keeps the rules the
-    /// Go tests pinned: page changes that cross-fade unless motion is
-    /// reduced, inbox zero in the case pane, the split across the
-    /// window, bold figures that stay readable on hover, the recorded box
-    /// that floats over the page and goes by itself, fields that grow, and one column on a narrow
-    /// window (IN-01, IN-03).
+    /// The stylesheet keeps the rules the page relies on: page changes that
+    /// cross-fade unless motion is reduced, inbox zero in the case pane, the
+    /// split across the window, bold figures that stay readable on hover, the
+    /// recorded box that floats over the page and goes by itself, fields that
+    /// grow, and one column on a narrow window (IN-01, IN-03).
     #[test]
     fn the_stylesheet_keeps_its_rules() {
         let css = text(served("style.css").bytes);

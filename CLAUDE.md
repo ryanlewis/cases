@@ -1,12 +1,14 @@
 # cases (Rust)
 
-cases, a human-in-the-loop inbox for agents, in Rust. It reached parity with the Go CLI, a proof of concept whose repo is gone (a local copy is at `~/dev/cases`), and has moved past it. The Go CLI is not the reference, and Go stores are not read or supported. The spec below is the reference. This repo is private until v1, then public.
+cases, a human-in-the-loop inbox for agents, in Rust. The spec below is the reference for how it behaves. This repo is public.
 
-## Direction (10 Oct 2026)
+## Scope
 
-Hosted is parked. Work goes into the local CLI: the commands, the TUI, a queryable API and the built-in web inbox (`serve`), as they are usable today. Keep `cases login` and the hosted half of `store-remote` building and passing their tests, but don't extend them.
+Work goes into the local CLI: the commands, the TUI, a queryable API and the built-in web inbox (`serve`), as they are usable today.
 
-Self-hosted over ssh (forwarding, 31 Oct 2026) is in: `forward = "ssh://host"` or `CASES_FORWARD` sends every command's store calls over `ssh host cases dial-stdio` to the one store on that machine. Hosted stays parked.
+Self-hosting over ssh is in scope: `forward = "ssh://host"` or `CASES_FORWARD` sends every command's store calls over `ssh host cases dial-stdio` to the one store on that machine.
+
+Hosted is parked. Keep `cases login` and the hosted half of `store-remote` building and passing their tests, but don't extend them.
 
 ## Workflow
 
@@ -20,13 +22,13 @@ Self-hosted over ssh (forwarding, 31 Oct 2026) is in: `forward = "ssh://host"` o
 - User stories: `~/dev/notes/projects/cases/spec/stories.md` (keep/change/drop, with acceptance criteria at the level of behaviour).
 - Core vectors: `spec/vectors/` (format in its README.md). `core` must pass every vector. Errors are compared by category, never by message.
 - A vector change needs a line in `spec/vectors/CHANGES.md` naming the vector by its description; CI refuses a pull request without one.
-- Decisions: `~/dev/notes/projects/cases/README.md`, section "Rust rewrite: go".
+- Decisions: `~/dev/notes/projects/cases/README.md`, in the section on building cases in Rust.
 
 ## Layout
 
 - `crates/core` (`cases-core`): pure. No IO, no clock, no SQLite. It is published as its own crate with its own version (`core-vX.Y.Z` tags). Keep it `no_std`-clean where that is cheap.
 - `crates/id` (`cases-id`): case ids, the Sqids encoding of a case's numeric key. `no_std`, no dependencies, published like the core. Ids are a permanent contract, and its tests pin them.
-- `crates/store-sqlite` (`cases-store-sqlite`): the local store in one SQLite file. It implements the core's `Store` trait, with the actors table, archive and delete, and the poller. `crates/store-sqlite/PARITY.md` maps each Go store test to the test that covers it.
+- `crates/store-sqlite` (`cases-store-sqlite`): the local store in one SQLite file. It implements the core's `Store` trait, with the actors table, archive and delete, and the poller.
 - `crates/store-remote` (`cases-store-remote`, not published): the store protocol, the store routes of the agent API over HTTP (ureq). It implements the core's `Store` trait as `RemoteStore`, with no rusqlite or tokio in its normal dependencies (CI checks). It reaches a hosted server over HTTPS, or a forwarded store over a pipe to a child process (`Dial`, `Client::dial`). Its `hosted` feature, on by default, adds the sign-in, whoami, revoke and TLS (rustls); the cli takes the crate without it, and turns it on with its own `remote` feature, off by default and in a release; CI tests both. Its tests run the store and core vectors over HTTP against a fake server backed by store-sqlite, which `crates/cli/tests` share by path.
 - `crates/vectors` (`cases-vectors`, not published): the runner of the store vectors (`spec/vectors/store/`). A store implements its `Harness` in its tests, as core (a store in memory), store-sqlite and store-remote do.
 - `crates/cli`: the `cases` binary and the web inbox (`serve`). `dial.rs` serves the store routes against the local store for the hidden `cases dial-stdio`, the far side of a forwarded store; `tests/forward*.rs` run every vector, and the commands end to end, through it. The inbox's own modules are TypeScript (`src/commands/serve/web/static/*.ts`). `build.rs` strips their types with oxc, so the build needs no node; `tsc` checks them in CI, with the types for preact, htm and marked from `web/package.json`, pinned to the vendored versions.

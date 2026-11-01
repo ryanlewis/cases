@@ -4,7 +4,7 @@ These files are the contract for the core of cases: how a case's stored events f
 
 Text for people, such as error messages, is not part of the contract: errors are compared by category, never by message.
 
-The set began as a copy of the Go core's vectors in `ryanlewis/cases` at 508548b. It now states the rules of v1 of the Rust rewrite, which differ from Go's in places. [CHANGES.md](CHANGES.md) lists every vector changed, added or removed since 508548b, with the user story or decision behind it. Story ids such as AG-02 and ST-04 below refer to the user stories the rewrite is built against.
+The set states the rules of v1. [CHANGES.md](CHANGES.md) lists every vector changed, added or removed since the set's first version, with the user story or decision behind it. Story ids such as AG-02 and ST-04 below refer to the user stories cases is built against.
 
 ## Files
 
@@ -303,11 +303,7 @@ The vectors cover the fold and the writer's rules for one case. They leave out:
 - the CLI and the web inbox, such as the exit code for each category (CL-01: `transition` 3, `stale` 4, the rest 1), the web status codes (IN-04: 409 stale, 422 refused, 404 unknown case, 400 bad form) and `cases park` as a command of its own (HU-03);
 - details of decoding that no vector pins yet: invalid UTF-8, a number too large for its field, a number with an exponent, and a fraction of a second with more than nine digits.
 
-The user stories hold the behaviour outside the core, with the Go tests each came from.
-
-## The Go vectors
-
-The Go runner, `TestVectors` in `internal/store/vectors_test.go` of `ryanlewis/cases`, checks the set as it was at 508548b against the Go core. It does not run this set.
+The user stories hold the behaviour outside the core.
 
 ## Changing a vector
 

@@ -446,7 +446,7 @@ pub(crate) async fn notifications(
     State(app): State<Arc<App>>,
     RawQuery(query): RawQuery,
 ) -> Result<Response, Refusal> {
-    // The first `after`, and none when it is empty, as the Go inbox read it.
+    // The first `after`, and none when it is empty.
     let after = match form_urlencoded::parse(query.unwrap_or_default().as_bytes())
         .find(|(name, _)| name == "after")
     {

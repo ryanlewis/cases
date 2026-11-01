@@ -51,7 +51,7 @@ pub(crate) fn human_event(event: &str, data: &str) -> Append {
     append("human", event, data)
 }
 
-/// An open of a case of `kind`, as Go's tests opened one: urgency today, a
+/// An open of a case of `kind`, as the tests open one: urgency today, a
 /// title and a body, two options for a decision and two rows for an
 /// approval.
 pub(crate) fn open_of(kind: &str) -> Append {
@@ -70,7 +70,7 @@ pub(crate) fn open_of(kind: &str) -> Append {
     )
 }
 
-/// An answer to a case of `kind`, as Go's tests gave one.
+/// An answer to a case of `kind`, as the tests give one.
 pub(crate) fn answer_of(kind: &str) -> Append {
     let data = match kind {
         "decision" => r#"{"choice": 2}"#,

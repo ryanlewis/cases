@@ -1,5 +1,4 @@
-//! Writes: opening cases, appending events, and writers taking turns. The
-//! Go store's `write_test.go`, as `PARITY.md` maps it.
+//! Writes: opening cases, appending events, and writers taking turns.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

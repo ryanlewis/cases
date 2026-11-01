@@ -1,10 +1,10 @@
-# Changes since 508548b
+# Vector changes
 
-The vectors were copied from `ryanlewis/cases` at 508548b, where they pinned what the Go core does. This file lists every vector changed, added or removed since then, file by file, with the user story or the decision behind it. Story ids (AG-, HU-, ST-, CL-, IN-) name the user stories the rewrite is built against. A case id names a decision in the decision log. A vector is named by its description; where a description changed, the old one follows "was".
+This file lists every vector changed, added or removed since the set's first version, file by file, with the user story or the decision behind it. Story ids (AG-, HU-, ST-, CL-, IN-) name the user stories cases is built against. A case id names a decision in the decision log. A vector is named by its description; where a description changed, the old one follows "was".
 
 ## The rules
 
-Each rule of v1 that differs from the Go core, and where the vectors carry it. A rule for the CLI or the web inbox has no vector: the vectors cover only the core.
+Each rule these changes brought in, and where the vectors carry it. A rule for the CLI or the web inbox has no vector: the vectors cover only the core.
 
 | Rule | Vectors | Decided by |
 | --- | --- | --- |
@@ -23,10 +23,10 @@ Each rule of v1 that differs from the Go core, and where the vectors carry it. A
 | A record of `null`, or a field of `null`, is `malformed`, not a record or field left out | `fold.json` | ST-06 |
 | Times are read as RFC 3339's `date-time`: a lower-case `t` or `z`, and a time spelt with a JSON escape, are read; an hour of one digit, a comma before the fraction, an offset of `+24:00` or with a minute of 60, and a space in place of the `T` are `malformed`. A leap second stays `malformed` | `fold.json` | ST-06; case `2026-09-24T21-24-26Z-is-a-leap-second-23-59-60-read` for the leap second |
 | A missing time is left out, and there is no zero time: `0001-01-01T00:00:00Z` is a time in year 1 | `fold.json`, `writer.json` | ST-06 |
-| A field at its zero value (`""`, 0, `false`, `[]`) reads as a field left out, as in Go. An empty `worker` is no worker, while one of only white space is refused on write | `answer.json`, as they were; `open.json` | Case `2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given`; AG-02 |
+| A field at its zero value (`""`, 0, `false`, `[]`) reads as a field left out. An empty `worker` is no worker, while one of only white space is refused on write | `answer.json`, as they were; `open.json` | Case `2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given`; AG-02 |
 | A missing kind or urgency is `invalid`, as a missing title is. `unknown` is kept for a value this version does not know | `open.json` | AG-01, ST-05 |
 | An appended open is checked in the order a stored one is: its actor before its kind | `open.json` | ST-02 |
-| No record a Go build wrote is read | `fold.json`: two vectors removed | Switch day, case `2026-09-24T19-31-55Z-switch-day-what-happens-to-your-existing-go`; ST-05, ST-15 |
+| No record written before switch day, when cases moved to this codebase, is read. Stores of earlier versions of this codebase are read as ever | `fold.json`: two vectors removed | Switch day, case `2026-09-24T19-31-55Z-switch-day-what-happens-to-your-existing-go`; ST-05, ST-15 |
 | Fields from a newer version still fold, and stay in the event's `data` | `fold.json`, as they were | ST-05 |
 | A close may say `expired`: the human's side closed a picked-up briefing no agent closed in time. Only a briefing closes expired, on a write and on a replay; it still needs an outcome, and is written under the agent's role | `transitions.json`, `fold.json` | AG-19, decided by Ryan on 1 Nov |
 | An event's actor is only `{id}`: 22 base64url characters, 128 random bits, never derived from an email address or an account. `author` gives the role. Names and kinds live in the store's table of actors, local and hosted; a hosted store can delete a person's row, and the events then keep a bare id | `open.json`, `fold.json`, `writer.json` | Case `2026-09-24T21-30-51Z-actor-clean-slate-events-hold-only-id-names-in`; the identity research. ST-12, HU-06, AG-01, AG-13 and IN-02 change to match |
@@ -47,7 +47,7 @@ Each rule of v1 that differs from the Go core, and where the vectors carry it. A
 
 ## Counts
 
-| File | At 508548b | Now |
+| File | First version | Now |
 | --- | --- | --- |
 | `transitions.json` | 105 | 197 |
 | `open.json` | 63 | 141 |
@@ -366,9 +366,9 @@ Each rule of v1 that differs from the Go core, and where the vectors carry it. A
 ### Moved here
 
 - `amended: an answer that did not see the amend is refused` (was `an answer that did not see an amend is accepted when it sends no revision`), from `go-quirks.json`: accepted before; now refused as stale, with no at_revision. ST-04: an answer carries the amend seq its writer saw, and one below the case's is refused.
-- `a response field at its zero value is not set: other false beside a choice`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out, as in Go (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
-- `a response field at its zero value is not set: ack false beside drop`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out, as in Go (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
-- `a response field at its zero value is not set: no rows beside text`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out, as in Go (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
+- `a response field at its zero value is not set: other false beside a choice`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
+- `a response field at its zero value is not set: ack false beside drop`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
+- `a response field at its zero value is not set: no rows beside text`, from `go-quirks.json`: moved as it is. A field at its zero value reads as a field left out (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
 
 ## `amend.json`
 
@@ -508,8 +508,8 @@ Each rule of v1 that differs from the Go core, and where the vectors carry it. A
 
 ### Removed
 
-- `an open written before labels existed folds`: an open without labels is covered by every open vector that expects labels []. Switch day, ST-05: no record a Go build wrote is read.
-- `records an earlier build wrote, byte for byte, fold as that build showed them`: 'a time keeps its fraction of a second, with only the digits it needs' keeps the part about fractions. Switch day, ST-05: no record a Go build wrote is read.
+- `an open written before labels existed folds`: an open without labels is covered by every open vector that expects labels []. Switch day, ST-05: no record written before switch day is read.
+- `records an earlier build wrote, byte for byte, fold as that build showed them`: 'a time keeps its fraction of a second, with only the digits it needs' keeps the part about fractions. Switch day, ST-05: no record written before switch day is read.
 
 ## `writer.json`
 
@@ -650,13 +650,13 @@ New: a core vector file, of its own shape (README, "Stats"). Each vector gives t
 
 ### Removed
 
-- `a stored answer of only ack false is no response`: 'fyi: ack false is no response' in answer.json has the rule. A field at its zero value reads as a field left out, as in Go (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
+- `a stored answer of only ack false is no response`: 'fyi: ack false is no response' in answer.json has the rule. A field at its zero value reads as a field left out (case 2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given).
 - `field names match by Unicode simple case folding, so a Kelvin sign reads as k`: no name is folded, so a Kelvin sign is one more name that is not kind, as Kind is in 'field names are matched exactly: Kind is not kind, and ACK is not ack'. ST-06: field names match exactly.
-- `a field given twice, the second time as null, keeps the first value`: Go's rules for merging a key given twice; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
-- `an object given twice is merged: the second gives only what it names`: Go's rules for merging a key given twice; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
-- `an object given twice, the second time as null, is cleared`: Go's rules for merging a key given twice; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
-- `a list given twice, the second time as null, is cleared`: Go's rules for merging a key given twice; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
-- `a list given twice is replaced, but an object in it is merged into the one at the same place`: Go's rules for merging a key given twice; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
+- `a field given twice, the second time as null, keeps the first value`: The rules for merging a key given twice are gone; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
+- `an object given twice is merged: the second gives only what it names`: The rules for merging a key given twice are gone; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
+- `an object given twice, the second time as null, is cleared`: The rules for merging a key given twice are gone; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
+- `a list given twice, the second time as null, is cleared`: The rules for merging a key given twice are gone; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
+- `a list given twice is replaced, but an object in it is merged into the one at the same place`: The rules for merging a key given twice are gone; 'a key given twice is malformed' covers it. ST-06: a key given twice is malformed.
 - `the same answer is refused as stale when it sends the revision it read`: AG-12: the revision guard is unchanged; 'stale is checked before the record's rules' in writer.json has the same rows and at_revision.
 - `an answer from before an amend that only added labels is refused as stale too`: AG-12, ST-04: 'an append at an earlier revision is refused as stale' in writer.json shows the same: its amend (a context) leaves amend_seq alone, and the revision still refuses the answer.
 

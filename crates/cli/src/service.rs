@@ -15,14 +15,13 @@ use std::time::Duration;
 use crate::error::Error;
 use crate::program;
 
-/// The launchd job's label, and the plist's name. It is not the Go
-/// build's, `com.github.ryanlewis.cases.serve`, and installing does not look
-/// for that one: a Go service is unloaded by hand before this one goes in.
-/// One left running on the same address holds it, and install refuses.
+/// The launchd job's label, and the plist's name. Installing looks for no
+/// other label. A service under another label left running on the same
+/// address holds it, and install refuses.
 pub(crate) const LABEL: &str = "sh.cases.serve";
 
-/// The systemd user unit. It names no repository, so it is the Go build's
-/// name too: on Linux, installing replaces a unit the Go build installed.
+/// The systemd user unit. It names no repository, so on Linux installing
+/// replaces any unit of that name, whatever installed it.
 pub(crate) const UNIT: &str = "cases-serve.service";
 
 /// The status `launchctl print` exits with for a label launchd does not
@@ -511,8 +510,8 @@ fn element(plist: &mut String, indent: &str, tag: &str, text: &str) {
     let _ = writeln!(plist, "{indent}<{tag}>{}</{tag}>", xml_escape(text));
 }
 
-/// `text` with the characters XML gives meaning to written as entities, as
-/// Go's `xml.EscapeText` writes them.
+/// `text` with the characters XML gives meaning to written as entities,
+/// along with tabs and line breaks.
 fn xml_escape(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for c in text.chars() {

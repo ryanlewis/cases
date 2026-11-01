@@ -194,7 +194,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         url: url.clone(),
         link: link.clone(),
         addr: addr.clone(),
-        // Cleaned, as Go's filepath.Abs cleaned it, for status to show.
+        // Absolute and with each `..` taken off, for status to show.
         store: instance::clean(&store).display().to_string(),
         started_at: output::stamp(Some(started)),
         version: env!("CARGO_PKG_VERSION").into(),
@@ -459,8 +459,7 @@ type Restore = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 /// Once serve is stopping (`begun`), a second Ctrl-C or SIGTERM ends it at
 /// once, as the default would, rather than wait out the stop, which waits
 /// for the writes in flight, each of which can wait 5 s on the store's
-/// lock. The Go build restored the default after the first signal for
-/// this. `restore` puts the terminal back first. The signals are caught on
+/// lock. `restore` puts the terminal back first. The signals are caught on
 /// a thread and a runtime of their own from now until serve exits, so that
 /// a second signal counts however soon it follows the first, and while
 /// serve's runtime, as it drops, waits for those writes and runs nothing

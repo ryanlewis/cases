@@ -1,5 +1,4 @@
-//! Archiving and deleting cases. The Go store's `archive_test.go`, as
-//! `PARITY.md` maps it.
+//! Archiving and deleting cases.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

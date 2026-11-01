@@ -1,5 +1,4 @@
-//! The store's file and schema, and the Store trait end to end. The Go
-//! store's `store_test.go`, as `PARITY.md` maps it.
+//! The store's file and schema, and the Store trait end to end.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

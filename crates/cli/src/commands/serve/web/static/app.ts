@@ -514,9 +514,8 @@ function App({ build }: { build: string }) {
   function refused(current: Case): void {
     setData((was) => (was && was.shown && was.shown.case && was.shown.case.id === current.id ? { ...was, shown: { ...was.shown, case: current } } : was));
     // On the list's page, the refused case stays shown with its refusal, on
-    // its own page under the same filter, as a refused form did in Go: the
-    // next refresh of the list would show the first case again (IN-04,
-    // IN-06).
+    // its own page under the same filter, since the next refresh of the
+    // list would show the first case again (IN-04, IN-06).
     if (routeRef.current.page === "list" && home.current && home.current.id === current.id) {
       const show = routeRef.current.show!;
       history.replaceState(null, "", page(current) + query(show));
