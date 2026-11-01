@@ -92,7 +92,7 @@ pub(crate) fn dir() -> Result<PathBuf, Error> {
 /// The instance file for the store at `store`, in the state directory:
 /// `serve-<file name>-<hash>.json`, where the hash is of the store's absolute
 /// path, so that serves on two stores never share a file, and the file name
-/// is there for people. It is the same for every Rust build of cases, since
+/// is there for people. It is the same for every build of cases, since
 /// each finds the serve another started.
 pub(crate) fn path(store: &Path) -> Result<PathBuf, Error> {
     let store = clean(&std::path::absolute(store)?);

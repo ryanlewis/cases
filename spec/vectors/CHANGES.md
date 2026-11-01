@@ -26,7 +26,7 @@ Each rule these changes brought in, and where the vectors carry it. A rule for t
 | A field at its zero value (`""`, 0, `false`, `[]`) reads as a field left out. An empty `worker` is no worker, while one of only white space is refused on write | `answer.json`, as they were; `open.json` | Case `2026-09-24T20-38-25Z-does-a-zero-value-field-count-as-given`; AG-02 |
 | A missing kind or urgency is `invalid`, as a missing title is. `unknown` is kept for a value this version does not know | `open.json` | AG-01, ST-05 |
 | An appended open is checked in the order a stored one is: its actor before its kind | `open.json` | ST-02 |
-| No record an earlier build wrote is read | `fold.json`: two vectors removed | Switch day, case `2026-09-24T19-31-55Z-switch-day-what-happens-to-your-existing-go`; ST-05, ST-15 |
+| No record written before switch day, when cases moved to this codebase, is read. Stores of earlier versions of this codebase are read as ever | `fold.json`: two vectors removed | Switch day, case `2026-09-24T19-31-55Z-switch-day-what-happens-to-your-existing-go`; ST-05, ST-15 |
 | Fields from a newer version still fold, and stay in the event's `data` | `fold.json`, as they were | ST-05 |
 | A close may say `expired`: the human's side closed a picked-up briefing no agent closed in time. Only a briefing closes expired, on a write and on a replay; it still needs an outcome, and is written under the agent's role | `transitions.json`, `fold.json` | AG-19, decided by Ryan on 1 Nov |
 | An event's actor is only `{id}`: 22 base64url characters, 128 random bits, never derived from an email address or an account. `author` gives the role. Names and kinds live in the store's table of actors, local and hosted; a hosted store can delete a person's row, and the events then keep a bare id | `open.json`, `fold.json`, `writer.json` | Case `2026-09-24T21-30-51Z-actor-clean-slate-events-hold-only-id-names-in`; the identity research. ST-12, HU-06, AG-01, AG-13 and IN-02 change to match |
@@ -508,8 +508,8 @@ Each rule these changes brought in, and where the vectors carry it. A rule for t
 
 ### Removed
 
-- `an open written before labels existed folds`: an open without labels is covered by every open vector that expects labels []. Switch day, ST-05: no record an earlier build wrote is read.
-- `records an earlier build wrote, byte for byte, fold as that build showed them`: 'a time keeps its fraction of a second, with only the digits it needs' keeps the part about fractions. Switch day, ST-05: no record an earlier build wrote is read.
+- `an open written before labels existed folds`: an open without labels is covered by every open vector that expects labels []. Switch day, ST-05: no record written before switch day is read.
+- `records an earlier build wrote, byte for byte, fold as that build showed them`: 'a time keeps its fraction of a second, with only the digits it needs' keeps the part about fractions. Switch day, ST-05: no record written before switch day is read.
 
 ## `writer.json`
 

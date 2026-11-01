@@ -445,7 +445,7 @@ Tally: 420 criteria, 349 covered, 61 by hand, 7 gap, 0 question, 3 n/a.
 - A field at its zero value reads as left out: `spec/vectors/answer.json "a response field at its zero value is not set: other false beside a choice"`, `"a response field at its zero value is not set: no rows beside text"`, `spec/vectors/open.json "an empty worker is no worker"`
 - Missing times left out; year 1 is an ordinary time: `spec/vectors/fold.json "a record without its time folds, with no time"`, `"a time in year 1 is a time like any other"`, `spec/vectors/writer.json "an append keeps a time in year 1"`
 - RFC 3339 date-time; a leap second is malformed: `spec/vectors/fold.json "a leap second is malformed, though RFC 3339 allows one at the end of some days"`, `"a time without an offset is malformed"`, `crates/core/src/time.rs::tests::what_rfc_3339_does_not_allow_does_not_read`
-- A store an earlier build wrote is never read: n/a — a statement of scope, no behaviour
+- A store from before switch day, when cases moved to this codebase, is never read: n/a — a statement of scope, no behaviour
 - Vectors `fold.json`, `writer.json`, `answer.json`: `crates/core/tests/vectors.rs`
 
 ## ST-07 Refuse a store from a newer version (keep)
