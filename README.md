@@ -9,6 +9,11 @@
 
 The cases live in one SQLite file on this machine, and every event is kept as it was written. No server is needed.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/inbox-dark.png">
+  <img alt="The web inbox: cases grouped by blocking, today and in flight, with a decision open and its options beside it" src="docs/images/inbox-light.png">
+</picture>
+
 **Pre-release.** Releases are alpha builds for now.
 
 ## Why
@@ -19,7 +24,7 @@ cases gives every agent one place to put its questions, lets the human answer th
 
 ## Install
 
-Each release has a `cases` binary for macOS (arm64, x86_64) and Linux (static, x86_64, aarch64). The repository is private, so `gh` must be logged in to an account that can read it.
+Each release has a `cases` binary for macOS (arm64, x86_64) and Linux (static, x86_64, aarch64).
 
 Pick the target for the machine: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`.
 
