@@ -342,7 +342,26 @@ impl Env {
 
     /// The instance file a running serve on the store at `store` keeps.
     pub(crate) fn instance_file_of(&self, store: &Path) -> PathBuf {
+        // Resolved as cases resolves it: its symlinks, as far as it is
+        // there, and the rest as text.
         let store = std::path::absolute(store).expect("an absolute path");
+        let there = store
+            .ancestors()
+            .find_map(|there| Some((there, std::fs::canonicalize(there).ok()?)));
+        let store = match there {
+            Some((there, real)) => real.join(store.strip_prefix(there).expect("a prefix")),
+            None => store,
+        };
+        let store: PathBuf = store.components().fold(PathBuf::new(), |mut path, part| {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    path.pop();
+                }
+                part => path.push(part),
+            }
+            path
+        });
         let hash = store
             .as_os_str()
             .as_encoded_bytes()

@@ -147,7 +147,7 @@ pub(crate) fn clean(path: &Path) -> PathBuf {
 /// the one beside `link`. A path that is not there yet, such as a store
 /// serve has still to make, resolves as far as it is there, and the rest is
 /// cleaned as text.
-fn resolve(path: &Path) -> PathBuf {
+pub(crate) fn resolve(path: &Path) -> PathBuf {
     for there in path.ancestors() {
         if let Ok(real) = fs::canonicalize(there) {
             let rest = path.strip_prefix(there).unwrap_or(Path::new(""));

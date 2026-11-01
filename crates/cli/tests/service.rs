@@ -774,3 +774,20 @@ fn a_store_named_through_a_parent_is_the_same_store() {
     let out = service.run(&["install", "--listen", &addr]);
     assert_eq!(out.code, 0, "{out:?}");
 }
+
+/// A store named through a symlink is the same store: a reinstall that
+/// names it by its real path restarts the service's own serve.
+#[test]
+fn a_reinstall_through_a_symlink_is_the_same_store() {
+    let mut service = Service::new();
+    let real = service.env.store.clone();
+    let link = service.env.path("link");
+    std::os::unix::fs::symlink(real.parent().unwrap(), &link).unwrap();
+    service.env.store = link.join(real.file_name().unwrap());
+    let addr = service.install();
+    let (_listener, _) = service.env.fake_serve(&addr);
+    service.active(true);
+    service.env.store = real;
+    let out = service.run(&["install", "--listen", &addr]);
+    assert_eq!(out.code, 0, "{out:?}");
+}
