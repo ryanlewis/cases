@@ -1,0 +1,28 @@
+situation = "an answer that lands the moment the case opens"
+source = "S43 (614bb1d5) and 1aff3f79: a --since cursor taken after the open missed an answer that came in quickly."
+worker = "port-pick"
+max_minutes = 8
+
+prompt = """
+The dev server's port 3000 clashes with another tool on my machine. Ask me through `cases` (installed; worker `port-pick`) whether to move it to 3001 or 8080, wait for my answer, set it in dev.env as PORT=<n>, and close the case.
+"""
+
+[files]
+"dev.env" = """
+PORT=3000
+LOG_LEVEL=debug
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+after_wait = false
+choose = "8080"
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "8080"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "dev.env", pattern = '^PORT=8080' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

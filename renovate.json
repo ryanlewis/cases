@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>ryanlewis/renovate-config",
+    ":preserveSemverRanges"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump the cargo tools and zizmor that taiki-e/install-action installs, pinned as `tool: <crate>@<version>` in the workflows.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["tool: (?<depName>cargo-[a-z0-9-]+|zizmor)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "serde_json is pinned exactly in normal and dev dependencies, and Cargo allows one 1.x in the build. Keep every pin in the weekly batch, so the dev-dependency patch group never bumps half of them (#129, #130).",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["serde_json"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
+      "automerge": false
+    },
+    {
+      "description": "The inbox's types for preact, htm, marked and mermaid are the vendored releases (crates/cli/src/commands/serve/web/static/vendor/README.md), and move with those files by hand: a test fails when package.json and the README differ.",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["crates/cli/src/commands/serve/web/package.json"],
+      "matchPackageNames": ["preact", "htm", "marked", "mermaid"],
+      "enabled": false
+    }
+  ]
+}

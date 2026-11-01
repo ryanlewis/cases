@@ -1,0 +1,490 @@
+[
+  {
+    "description": "no cases: every day is 0, and there is no median",
+    "cases": [],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "no days: the lists are empty",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 0,
+    "expect": {"opened": [], "answered": [], "median": null}
+  },
+  {
+    "description": "a case opened today and not answered",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "two cases opened on one day count 2",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T09:00:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T17:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 2, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened at midnight UTC counts on the day that begins",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T00:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened just before midnight UTC counts on the day that ends",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T23:59:59.999Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 1, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a time with an offset counts on its day in UTC",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T00:30:00+01:00"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 1, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened later today than now counts today",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T23:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened tomorrow, by a clock ahead, is outside the days",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-03T00:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened the day before the first day is outside the days",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-30T23:59:59Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "now at midnight: today is the day that begins at now",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T23:00:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T00:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T00:00:00Z",
+    "days": 2,
+    "expect": {"opened": [1, 1], "answered": [0, 0], "median": null}
+  },
+  {
+    "description": "fourteen days: the first is 13 days before today",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-20T00:00:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-19T23:59:59Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 14,
+    "expect": {"opened": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "answered": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case answered on a later day than it opened counts on each day",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-31T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-01T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [1, 0, 0], "answered": [0, 1, 0], "median": 90000}
+  },
+  {
+    "description": "a case answered the day it opened counts both on that day",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:10:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 600}
+  },
+  {
+    "description": "a case opened before the days and answered in them counts its answer and its time to answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-20T12:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T12:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 1], "median": 1123200}
+  },
+  {
+    "description": "an answer before the days is not counted, nor its time to answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-29T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-10-29T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "an answer after today, by a clock ahead, is not counted",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T10:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-03T01:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case answered, reopened by a note and answered again counts both answers, the second timed from the reopen",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-01T09:10:00Z"}},
+        {"seq": 3, "author": "agent", "event": "note", "data": {"body": "Still failing.", "reopen": true, "noted_at": "2026-11-01T12:00:00Z"}},
+        {"seq": 4, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T00:30:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 1, 0], "answered": [0, 1, 1], "median": 22800}
+  },
+  {
+    "description": "a case picked up and reopened by an amend: the second answer is timed from the amend",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:01:00Z"}},
+        {"seq": 3, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-11-02T09:02:00Z"}},
+        {"seq": 4, "author": "agent", "event": "amend", "data": {"body": "Tried the other mirror; it fails too.", "reopen": true, "amended_at": "2026-11-02T10:00:00Z"}},
+        {"seq": 5, "author": "human", "event": "answer", "data": {"text": "Try the third mirror.", "amend_seq": 4, "answered_at": "2026-11-02T10:05:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 2], "median": 180}
+  },
+  {
+    "description": "a case reopened and not answered again counts its one answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:30:00Z"}},
+        {"seq": 3, "author": "agent", "event": "note", "data": {"body": "Still failing.", "reopen": true, "noted_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 1800}
+  },
+  {
+    "description": "a reopen without a time leaves the next answer with no time to answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:30:00Z"}},
+        {"seq": 3, "author": "agent", "event": "note", "data": {"body": "Still failing.", "reopen": true}},
+        {"seq": 4, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T11:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 2], "median": 1800}
+  },
+  {
+    "description": "a note on an open case is not a reopen: the answer is timed from the open",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "agent", "event": "note", "data": {"body": "Still failing.", "noted_at": "2026-11-02T09:30:00Z"}},
+        {"seq": 3, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 3600}
+  },
+  {
+    "description": "a case parked and resumed is timed from its open",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T08:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "park", "data": {"parked_at": "2026-11-02T08:10:00Z"}},
+        {"seq": 3, "author": "human", "event": "resume", "data": {"resumed_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 4, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 7200}
+  },
+  {
+    "description": "the median of an odd count is the middle one",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:40:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:10:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 3], "answered": [0, 0, 3], "median": 600}
+  },
+  {
+    "description": "the median of an even count is the mean of the middle two",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:40:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:10:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:02:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 4], "answered": [0, 0, 4], "median": 360}
+  },
+  {
+    "description": "the median is cut to whole seconds",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:00:01Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:00:02Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 2], "answered": [0, 0, 2], "median": 1}
+  },
+  {
+    "description": "a time to answer counts its fraction of a second",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00.600Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:00:02.100Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 1}
+  },
+  {
+    "description": "the median is over answers on every day counted",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-10-31T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-10-31T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-01T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-01T09:05:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [1, 1, 1], "answered": [1, 1, 1], "median": 300}
+  },
+  {
+    "description": "a drop is not an answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"drop": true, "answered_at": "2026-11-02T09:05:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a withdrawn case counts as opened and not answered",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "agent", "event": "withdraw", "data": {"reason": "Fixed itself.", "withdrawn_at": "2026-11-02T09:05:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a message is not counted",
+    "cases": [
+      [
+        {"seq": 1, "author": "human", "event": "open", "data": {"kind": "message", "urgency": "today", "title": "Try the mirror", "body": "Body.", "worker": "bun-pins", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "agent", "event": "pickup", "data": {"by": "bun-pins", "picked_up_at": "2026-11-02T09:01:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "an answer to each kind the human answers counts",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "question", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Yes.", "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "fyi", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"ack": true, "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "decision", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "options": ["Retry", "Skip"], "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"choice": 1, "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "signoff", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"signoff": "accept", "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "briefing", "urgency": "today", "title": "Mirror unreachable", "body": "What landed.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"briefing": "accept", "answered_at": "2026-11-02T09:01:00Z"}}
+      ],
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:01:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 6], "answered": [0, 0, 6], "median": 60}
+  },
+  {
+    "description": "an answer without a time is not counted",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T09:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror."}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 0], "median": null}
+  },
+  {
+    "description": "a case opened with no time is not counted as opened, and its answer has no time to answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body."}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 0], "answered": [0, 0, 1], "median": null}
+  },
+  {
+    "description": "an answer before its open, by a clock behind, counts with no time to answer",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T10:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T09:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": null}
+  },
+  {
+    "description": "an answer with a time to answer of zero counts it",
+    "cases": [
+      [
+        {"seq": 1, "author": "agent", "event": "open", "data": {"kind": "stuck", "urgency": "today", "title": "Mirror unreachable", "body": "Body.", "opened_at": "2026-11-02T10:00:00Z"}},
+        {"seq": 2, "author": "human", "event": "answer", "data": {"text": "Try the other mirror.", "answered_at": "2026-11-02T10:00:00Z"}}
+      ]
+    ],
+    "now": "2026-11-02T12:00:00Z",
+    "days": 3,
+    "expect": {"opened": [0, 0, 1], "answered": [0, 0, 1], "median": 0}
+  }
+]

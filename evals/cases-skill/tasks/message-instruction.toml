@@ -1,0 +1,43 @@
+situation = "a message from the human while the agent works"
+source = "S30 (5febf6cb): the human sent the session a message to add an RSS feed to a self-hosted reader; the listening wait picked it up, the agent did it and closed the message with what it did."
+worker = "feeds"
+max_minutes = 10
+
+prompt = """
+You're the `feeds` session. Tidy feeds.opml: two feeds in it are dead (see dead.txt). Before removing them, ask me through `cases` (installed; worker `feeds`) whether to delete them or move them to an "archive" outline. While you wait, keep listening for messages from me through cases, as I may send you more to do.
+"""
+
+[files]
+"feeds.opml" = """
+<opml version="2.0"><body>
+<outline text="Tech" title="Tech">
+  <outline text="Old Blog" xmlUrl="https://old.example.com/feed"/>
+  <outline text="Gone News" xmlUrl="https://gone.example.org/rss"/>
+  <outline text="Live Blog" xmlUrl="https://live.example.net/atom.xml"/>
+</outline>
+</body></opml>
+"""
+"dead.txt" = """
+https://old.example.com/feed
+https://gone.example.org/rss
+"""
+
+[[human]]
+at = "waiting"
+delay = 2
+do = ["message", "--to", "feeds", "--title", "Add the Rust blog feed", "--body", "Also add https://blog.rust-lang.org/feed.xml under Tech in feeds.opml."]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "delete|remove"
+delay = 6
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "delete them"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "feeds.opml", pattern = 'blog\.rust-lang\.org/feed\.xml' },
+  { type = "file_lacks", path = "feeds.opml", pattern = 'gone\.example\.org' },
+  { type = "case_state", title_re = "rust blog", states = ["closed"] },
+]

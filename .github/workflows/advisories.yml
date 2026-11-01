@@ -1,0 +1,37 @@
+name: Advisories
+
+# Its own workflow so that it can also run on a schedule: a newly published
+# advisory shows up here within a week, not on an unrelated pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  # The registry's advisories against the inbox's JavaScript: what the
+  # binary serves (static/vendor/, with the code mermaid bundles, listed in
+  # vendor-inventory.json) and the npm tree. An advisory that does not apply
+  # is excepted, with its reason, in advisory-exceptions.json. It reads the
+  # files and installs nothing. No secrets.
+  advisories:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: crates/cli/src/commands/serve/web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: crates/cli/src/commands/serve/web/.node-version
+
+      - name: Check the vendored and npm JavaScript against advisories
+        run: node advisories.js

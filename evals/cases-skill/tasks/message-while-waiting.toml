@@ -1,0 +1,43 @@
+situation = "a message from the human arrives while the agent waits on its own case"
+source = "S31 (429f66ff) and 19d9fbaf (audit 2026-09-29): sessions that listened for messages and had cases of their own open; one_pickup_wait_per_case failed in 19d9fbaf, after #78."
+worker = "pkg"
+max_minutes = 12
+
+prompt = """
+You're the `pkg` session for this package. First job: ask me through `cases` (installed; worker `pkg`) whether the next release is 1.5.0 or 2.0.0, then set `version` in package.toml to match. I may also send you other small jobs through cases while you're at it; do those too. Stop when everything I've sent is done.
+"""
+
+[files]
+"package.toml" = """
+name = "widget"
+version = "1.4.2"
+"""
+"README.md" = """
+# widget
+
+Widgets recieve events and render them.
+"""
+
+[[human]]
+at = "waiting"
+delay = 2
+do = ["message", "--to", "pkg", "--title", "README typo", "--body", "README.md says 'recieve'; make it 'receive'."]
+save_new = "m1"
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "2\\.0"
+delay = 4
+after_wait = false
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "2.0.0"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "package.toml", pattern = 'version\s*=\s*"2\.0\.0"' },
+  { type = "file_contains", path = "README.md", pattern = 'receive' },
+  { type = "file_lacks", path = "README.md", pattern = 'recieve' },
+  { type = "case_state", title_re = "typo", states = ["closed"] },
+  { type = "case_state", title_re = "release|version|1\\.5|2\\.0", states = ["closed"] },
+]

@@ -1,0 +1,30 @@
+situation = "no case: the answer is already written down in the repo"
+source = "S33 (6388b84a) and S48 (8e3ec50d): the human had already settled the point ('didn't I already say that one's ruled out?'), and the agent asked again."
+worker = "add-dep"
+max_minutes = 6
+
+prompt = """
+Add the `slugify` package, version 2.4.1, as a dependency in package.json. I care about how we pin versions here, so if you're unsure about that, ask me through `cases` (installed; worker `add-dep`) and wait. Otherwise just do it.
+"""
+
+[files]
+"package.json" = """
+{
+  "name": "site",
+  "dependencies": {
+    "marked": "12.0.2"
+  }
+}
+"""
+"DECISIONS.md" = """
+# Decisions
+
+- 2026-08-14: pin every dependency to an exact version, no ^ or ~ ranges. Renovate bumps them.
+- 2026-08-20: Node 22 only.
+"""
+
+[expect]
+opens = 0
+checks = [
+  { type = "file_contains", path = "package.json", pattern = '"slugify":\s*"2\.4\.1"' },
+]

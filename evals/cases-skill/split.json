@@ -1,0 +1,57 @@
+{
+ "seed": 20260929,
+ "held_out_groups": [
+  "approval",
+  "decision",
+  "message",
+  "no-case",
+  "resumed",
+  "several",
+  "stuck",
+  "withdraw"
+ ],
+ "seed_2": 20260930,
+ "held_out_groups_2": [
+  "crossing",
+  "incidental",
+  "long"
+ ],
+ "heldout": [
+  "decision-size-budget",
+  "decision-then-approval-chain",
+  "incidental-rounding",
+  "long-plan-sequence",
+  "message-idle-listen",
+  "multi-question-split",
+  "no-case-answer-in-docs",
+  "resume-no-duplicate-open",
+  "several-lines-one-wait",
+  "stuck-park-resume",
+  "withdraw-open"
+ ],
+ "train": [
+  "answer-before-wait-seeded",
+  "approval-mixed-rows",
+  "decision-drop",
+  "decision-fast-answer",
+  "decision-other-note",
+  "fyi-heads-up",
+  "incidental-cleanup",
+  "label-several",
+  "label-withdraw-one",
+  "long-rounds-park-withdraw",
+  "message-instruction",
+  "message-needs-clarification",
+  "message-while-waiting",
+  "no-case-known-answer",
+  "question-kind",
+  "resume-pickedup-unclosed",
+  "secret-in-context",
+  "signoff-accept",
+  "signoff-changes",
+  "stale-handoff-exit4",
+  "stuck-guidance-text",
+  "unclear-answer-note",
+  "withdraw-pickedup-exit3"
+ ]
+}

@@ -1,0 +1,32 @@
+situation = "an fyi the agent is not blocked on"
+source = "S49 (3645f0ed): a morning run found commit signing failing since the small hours and raised it as an fyi; the human acknowledged and the agent closed it with the cause."
+worker = "nightly"
+max_minutes = 8
+
+prompt = """
+Run the nightly check (./check.sh) and write a one-line summary of its result to summary.txt. If it shows anything I should know about but that doesn't need a decision from me, let me know through `cases` (installed; worker `nightly`). Don't hold the summary up waiting on me.
+"""
+
+[files]
+"check.sh" = """
+#!/bin/sh
+echo "backups: ok (3 of 3)"
+echo "disk: ok (61%)"
+echo "WARN signing: commit signing has failed since 02:10 (agent refused; machine asleep?)"
+"""
+
+[[human]]
+match = { kind = ["fyi", "question", "decision", "stuck"], state = "open" }
+delay = 3
+fallback = 8
+do = ["answer", "{id}", "--ack", "--note", "laptop was asleep, keep-awake is on now"]
+do_question = ["answer", "{id}", "--text", "laptop was asleep, keep-awake is on now"]
+do_stuck = ["answer", "{id}", "--text", "laptop was asleep, keep-awake is on now"]
+do_decision = ["answer", "{id}", "--other", "--note", "laptop was asleep, keep-awake is on now"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_exists", path = "summary.txt" },
+  { type = "case_kind", title_re = ".", kinds = ["fyi"] },
+]

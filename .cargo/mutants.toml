@@ -1,0 +1,39 @@
+# cargo-mutants: https://mutants.rs/
+# Each exclusion is a mutant no test can catch, with the reason. Match on
+# the mutant's text, not its line, so an exclusion outlives edits nearby.
+exclude_re = [
+    # Equivalent: when the times are equal, `updated_at` is set to the value
+    # it already holds.
+    'replace > with >= in Case::take',
+    # The message of a serde error, which reaches only an Error's message;
+    # messages are not part of the contract.
+    "UniqueVisitor>::expecting -> fmt::Result with Ok\\(Default::default\\(\\)\\)",
+    # Equivalent under the contract: a fraction reads as null, and in a field
+    # the core defines both are malformed, while a field it does not define
+    # is dropped whatever it holds.
+    "UniqueVisitor>::visit_f64 -> Result<Value, E> with Ok\\(Default::default\\(\\)\\)",
+    # serde_json reading from a &str never calls visit_string: it calls
+    # visit_str or visit_borrowed_str.
+    "UniqueVisitor>::visit_string -> Result<Value, E> with Ok\\(Default::default\\(\\)\\)",
+    # Equivalent: Value::default() is Value::Null.
+    "UniqueVisitor>::visit_unit -> Result<Value, E> with Ok\\(Default::default\\(\\)\\)",
+    # Equivalent: the store's retry stops at its deadline, and the clock
+    # lands on the deadline itself only by a nanosecond's chance.
+    'replace < with <= in use_wal',
+    # No test can reach it: SQLite gives a journal mode other than WAL only
+    # for a database the store never opens, such as one in memory or on a
+    # file system without shared memory. A file it cannot switch, such as a
+    # read-only one, gives an error, which a test checks.
+    'replace match guard mode.eq_ignore_ascii_case\("wal"\) with true in use_wal',
+    # Equivalent: each byte is shifted into bits of its own, so or and xor
+    # give the same number.
+    'replace \| with \^ in base64url',
+    # Equivalent: the wait for a child to exit stops at its deadline, and
+    # the clock lands on the deadline itself only by a nanosecond's chance.
+    'replace < with <= in Pipe::exited',
+    # No test can reach it: a read of a child's stderr is interrupted only
+    # by a signal that lands while it blocks, which a test cannot time.
+    'replace match guard error.kind\(\) == io::ErrorKind::Interrupted with (true|false) in Pipe::start',
+    # The guard's is the only == in Pipe::start.
+    'replace == with != in Pipe::start',
+]

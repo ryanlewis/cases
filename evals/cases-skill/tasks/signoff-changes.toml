@@ -1,0 +1,44 @@
+situation = "a signoff with changes requested, then accepted"
+source = "S13 (0579f4f4) and S14 (19d9fbaf): a signoff came back as changes with a short note; the agent made them, noted the case with --revision, and closed once accepted."
+worker = "changelog"
+max_minutes = 10
+
+prompt = """
+Write the CHANGELOG.md entry for release 0.4.0 from the commits listed in COMMITS.txt (Keep a Changelog style, sections Added/Fixed). When it's written, get my sign-off through `cases` (installed; worker name `changelog`) before you call it done, and wait for me. Do whatever I ask in the review.
+"""
+
+[files]
+"COMMITS.txt" = """
+feat: add --json to list
+feat: add a config file
+fix: wait no longer misses an answer that lands before it starts
+fix: typo in help text
+chore: bump deps
+"""
+"CHANGELOG.md" = """
+# Changelog
+
+## 0.3.0
+
+### Added
+- The `show` command.
+"""
+
+[[human]]
+match = { kind = "signoff", state = "open" }
+delay = 3
+do = ["answer", "{id}", "--changes", "--note", "drop the typo fix line, nobody cares; and say 'JSON output for list' instead of '--json'"]
+
+[[human]]
+match = { kind = "signoff", state = "open", last_event = ["note", "amend"] }
+delay = 2
+do = ["answer", "{id}", "--accept"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "CHANGELOG.md", pattern = '0\.4\.0' },
+  { type = "file_lacks", path = "CHANGELOG.md", pattern = '(?i)typo' },
+  { type = "file_contains", path = "CHANGELOG.md", pattern = '(?i)JSON output' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

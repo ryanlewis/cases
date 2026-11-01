@@ -1,0 +1,36 @@
+situation = "a signoff accepted first time"
+source = "S13 (0579f4f4) and S14 (19d9fbaf): once the human accepted, the agent merged and closed with the PR link."
+worker = "merge-gate"
+max_minutes = 8
+
+prompt = """
+The PR in PR.txt is finished and green. Get my sign-off on it through `cases` (installed; worker `merge-gate`) before merging; wait for me. If I accept, merge it with ./merge.sh and close the case with the PR link. If I ask for changes, don't merge.
+"""
+
+[files]
+"PR.txt" = """
+https://github.com/example/widgets/pull/42
+Title: feat: add the widget export
+Checks: all green. Diff: +210 -35 in 6 files.
+"""
+"merge.sh" = """
+#!/bin/sh
+echo "merged https://github.com/example/widgets/pull/42" > MERGED.txt
+echo merged
+"""
+
+[[human]]
+match = { kind = ["signoff", "decision", "question", "approval"], state = "open" }
+delay = 3
+do = ["answer", "{id}", "--accept"]
+do_decision = ["answer", "{id}", "--option", "1"]
+do_question = ["answer", "{id}", "--text", "accepted, merge it"]
+do_approval = ["answer", "{id}", "{rows}"]
+rows = { "." = "approve" }
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_exists", path = "MERGED.txt" },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

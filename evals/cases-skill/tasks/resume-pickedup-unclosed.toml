@@ -1,0 +1,38 @@
+situation = "a resumed session finds a picked-up case it never closed"
+source = "S2 (1d65c6b3): a picked-up case stayed open for a day; S37 (8e3ec50d): a case sat picked up while the agent did other things."
+worker = "log-retention"
+max_minutes = 8
+
+prompt = """
+Your last session died right after it picked up my answer on the log retention question, before it did anything with it. Carry on with TASK.md. `cases` is installed; your worker name is `log-retention`.
+"""
+
+[files]
+"TASK.md" = """
+Set log retention in logging.toml (retention_days) to what the human chose.
+"""
+"logging.toml" = """
+level = "info"
+retention_days = 90
+"""
+
+[[seed]]
+as = "agent"
+args = ["open", "--kind", "decision", "--urgency", "today", "--worker", "log-retention", "--title", "How long to keep logs?", "--body", "Logs are kept 90 days. The disk is 80% full.", "--option", "30 days", "--option", "14 days", "--option", "Keep 90", "--recommend", "1"]
+save = "s1"
+
+[[seed]]
+as = "human"
+args = ["answer", "{s1}", "--option", "2", "--note", "14 is plenty"]
+
+[[seed]]
+as = "agent"
+args = ["pickup", "{s1}", "--revision", "2", "--by", "log-retention"]
+
+[expect]
+opens = 0
+resume = true
+checks = [
+  { type = "file_contains", path = "logging.toml", pattern = 'retention_days\s*=\s*14' },
+  { type = "case_state", title_re = "logs", states = ["closed"] },
+]

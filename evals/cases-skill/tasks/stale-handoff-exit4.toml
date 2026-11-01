@@ -1,0 +1,39 @@
+situation = "a resumed session writes with a stale revision and gets exit 4"
+source = "S27 (5bd23502): a note without --revision reopened a case and threw away the inbox answer; S46 (19294440): a close with the wrong revision was refused as stale."
+worker = "license-pick"
+max_minutes = 8
+
+prompt = """
+Picking up from your last session, which ran out of context. Its handoff note:
+
+> Opened case {s1} (revision 1): which license for the new `tidy` crate, MIT or Apache-2.0. I forgot to mention the crate vendors some Apache-2.0 code. Next step: note that on the case, `cases note {s1} --revision 1 --body-file vendored.md`, then wait for the answer, add the LICENSE file it names, and close the case.
+
+vendored.md is already written. Carry on. (`cases` is installed; the worker name was `license-pick`.)
+"""
+
+[files]
+"vendored.md" = """
+Heads-up: src/vendor/ holds about 300 lines copied from an Apache-2.0 project.
+"""
+"Cargo.toml" = """
+[package]
+name = "tidy"
+version = "0.1.0"
+"""
+
+[[seed]]
+as = "agent"
+args = ["open", "--kind", "decision", "--urgency", "today", "--worker", "license-pick", "--title", "Which license for the tidy crate?", "--body", "New crate, needs a license before the first publish.", "--option", "MIT", "--option", "Apache-2.0", "--recommend", "1"]
+save = "s1"
+
+[[seed]]
+as = "human"
+args = ["answer", "{s1}", "--option", "2", "--note", "Apache, since it vendors Apache code anyway"]
+
+[expect]
+opens = 0
+checks = [
+  { type = "file_exists", path = "LICENSE" },
+  { type = "file_contains", path = "LICENSE", pattern = '(?i)apache' },
+  { type = "case_state", title_re = "license", states = ["closed"] },
+]

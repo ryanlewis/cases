@@ -1,0 +1,34 @@
+situation = "a free-text question"
+source = "S25 (0579f4f4): building an About overlay, the agent asked the human for a profile URL and any other links to include."
+worker = "about-page"
+max_minutes = 8
+
+prompt = """
+Finish about.html: the Links list is still a placeholder. I have to give you the links myself, so ask me through `cases` (installed; worker `about-page`) and wait for my reply, then fill in the list and close it out.
+"""
+
+[files]
+"about.html" = """
+<section id="about">
+  <h2>About</h2>
+  <p>I build small tools.</p>
+  <h3>Links</h3>
+  <ul>
+    <!-- TODO: links from the owner -->
+  </ul>
+</section>
+"""
+
+[[human]]
+match = { kind = ["question", "decision", "stuck"], state = "open" }
+delay = 3
+do = ["answer", "{id}", "--text", "https://code.example.com/me and my talks page https://talks.example.org"]
+do_decision = ["answer", "{id}", "--other", "--note", "https://code.example.com/me and my talks page https://talks.example.org"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "about.html", pattern = 'https://code\.example\.com/me' },
+  { type = "file_contains", path = "about.html", pattern = 'https://talks\.example\.org' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

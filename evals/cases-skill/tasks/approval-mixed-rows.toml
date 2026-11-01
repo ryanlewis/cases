@@ -1,0 +1,37 @@
+situation = "an approval with rows approved, held and rejected"
+source = "S10 (01a37488) and S6 (6a4871ec): an approval with three cleanup rows on a laptop, and a triage approval where one row was approved and four held with notes."
+worker = "db-maint"
+max_minutes = 10
+
+prompt = """
+Three maintenance scripts in scripts/ need running on the staging database: vacuum.sh, reindex.sh and drop-old-partitions.sh. Don't run any of them without my approval. Ask me through the `cases` CLI (installed; worker `db-maint`), one approval covering the three, wait for my verdicts, run exactly what I approve, and report back.
+"""
+
+[files]
+"scripts/vacuum.sh" = """
+#!/bin/sh
+echo vacuumed > ran-vacuum.txt
+"""
+"scripts/reindex.sh" = """
+#!/bin/sh
+echo reindexed > ran-reindex.txt
+"""
+"scripts/drop-old-partitions.sh" = """
+#!/bin/sh
+echo dropped > ran-drop.txt
+"""
+
+[[human]]
+match = { kind = "approval", state = "open" }
+delay = 3
+rows = { "vacuum" = "approve", "reindex" = "hold:after the release", "drop" = "reject:never, we keep them for audit" }
+do = ["answer", "{id}", "{rows}"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_exists", path = "ran-vacuum.txt" },
+  { type = "file_absent", path = "ran-reindex.txt" },
+  { type = "file_absent", path = "ran-drop.txt" },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

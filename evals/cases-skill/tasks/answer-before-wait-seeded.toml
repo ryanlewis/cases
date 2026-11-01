@@ -1,0 +1,34 @@
+situation = "an answer that landed before the wait started"
+source = "S43 (614bb1d5): the human answered in the inbox before the agent's wait cursor, so the wait missed it and the answer sat unseen."
+worker = "ts-target"
+max_minutes = 8
+
+prompt = """
+Your previous session in this repo opened case {s1} (which TypeScript compile target to use) and then crashed before it started waiting on it. Carry on: get my answer on {s1}, set the target in tsconfig.json to match, and close the case. `cases` is installed; the worker name is `ts-target`.
+"""
+
+[files]
+"tsconfig.json" = """
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "esnext"
+  }
+}
+"""
+
+[[seed]]
+as = "agent"
+args = ["open", "--kind", "decision", "--urgency", "today", "--worker", "ts-target", "--title", "Which TypeScript target?", "--body", "We still target ES2019. Every supported browser handles ES2022 now.", "--option", "ES2022", "--option", "Stay on ES2019", "--recommend", "1"]
+save = "s1"
+
+[[seed]]
+as = "human"
+args = ["answer", "{s1}", "--option", "1"]
+
+[expect]
+opens = 0
+checks = [
+  { type = "file_contains", path = "tsconfig.json", pattern = '"target":\s*"ES2022"' },
+  { type = "case_state", title_re = "typescript", states = ["closed"] },
+]

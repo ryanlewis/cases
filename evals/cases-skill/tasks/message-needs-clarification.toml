@@ -1,0 +1,36 @@
+situation = "a message that needs a question back, asked with --re"
+source = "S31 (429f66ff): a message said rows looked cramped; the agent opened a decision about which spacing was meant, noted a follow-up, then closed the decision and the message."
+worker = "sidebar"
+max_minutes = 10
+
+prompt = """
+You're the `sidebar` session for the terminal sidebar plugin in this repo (theme.toml holds its spacing). I'll send you work through `cases` messages: start a listening wait (cases is installed; worker `sidebar`) and handle what arrives. If a message is unclear, ask me about it through cases rather than guessing. Stop once the message is handled.
+"""
+
+[files]
+"theme.toml" = """
+[rows]
+indent = 0
+gap = 0
+padding = 1
+"""
+
+[[human]]
+at = "waiting"
+delay = 1
+do = ["message", "--to", "sidebar", "--title", "Rows look cramped", "--body", "The worker rows look cramped to me."]
+save_new = "m1"
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "gap|between"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}", "--note", "a gap of 1 between rows"]
+do_question = ["answer", "{id}", "--text", "the gap between rows; make it 1"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "theme.toml", pattern = 'gap\s*=\s*1' },
+  { type = "case_state", title_re = "cramped", states = ["closed"] },
+]

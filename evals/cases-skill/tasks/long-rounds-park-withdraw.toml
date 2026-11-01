@@ -1,0 +1,74 @@
+situation = "a long session where the human parks one case and withdraws a later one"
+source = "35bb6d9b (audit 2026-09-29): a lead ran rounds of spikes, each a decision, the work, then a signoff, and some questions were overtaken and ended unanswered; no human has parked a case for real, so the park is added."
+worker = "spikes"
+max_minutes = 20
+
+prompt = """
+Run the spike rounds in ROUNDS.md for me, in order. I'm away from the desk; everything you need from me goes through `cases` (installed; worker `spikes`). Keep going until the rounds are done or I stop you.
+"""
+
+[files]
+"ROUNDS.md" = """
+# Spike rounds
+
+Round 1. Ask me which spike to build first: retry (set `retry = true` in features.toml) or cache (set `cache = true`). Build that one only.
+Round 2. Write SPIKE.md: what the round 1 spike does, in two lines. Get it signed off.
+Round 3. Deploy needs deploy.ok in the repo root, which only I can create. If it is missing, tell me you are stuck and wait; once it is there, write DEPLOYED.txt with the word "deployed".
+Round 4. Ask me whether to build the other spike too. If yes, set it in features.toml.
+"""
+"features.toml" = """
+retry = false
+cache = false
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "spike|retry|cache|first" }
+choose = "retry"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "retry"]
+
+[[human]]
+match = { kind = "signoff", state = "open" }
+delay = 3
+do = ["answer", "{id}", "--accept"]
+
+[[human]]
+match = { kind = ["stuck", "question", "decision", "approval"], state = "open", title_re = "deploy" }
+delay = 2
+do = ["park", "{id}", "--note", "on a train, I'll sort it when I'm back"]
+do_question = ["park", "{id}", "--note", "on a train, I'll sort it when I'm back"]
+do_decision = ["park", "{id}", "--note", "on a train, I'll sort it when I'm back"]
+do_approval = ["park", "{id}", "--note", "on a train, I'll sort it when I'm back"]
+may_fail = true
+
+[[human]]
+match = { state = "parked" }
+fresh = false
+delay = 10
+write = { "deploy.ok" = "ok\n" }
+do = ["resume", "{id}"]
+
+[[human]]
+match = { kind = ["stuck", "question"], state = "open", title_re = "deploy" }
+fresh = false
+delay = 2
+do = ["answer", "{id}", "--text", "deploy.ok is there now, go ahead"]
+may_fail = true
+
+[[human]]
+match = { kind = ["decision", "question", "approval"], state = "open", title_re = "other|cache|round 4|too|second|also" }
+delay = 3
+do = ["withdraw", "{id}", "--reason", "leave cache for now, we'll look at it next week"]
+
+[expect]
+min_opens = 4
+max_opens = 4
+checks = [
+  { type = "file_contains", path = "features.toml", pattern = 'retry\s*=\s*true' },
+  { type = "file_contains", path = "features.toml", pattern = 'cache\s*=\s*false' },
+  { type = "file_exists", path = "SPIKE.md" },
+  { type = "file_contains", path = "DEPLOYED.txt", pattern = '(?i)deployed' },
+  { type = "case_state", title_re = "deploy", states = ["closed", "withdrawn"] },
+  { type = "case_state", title_re = "other|cache|round 4|too|second|also", states = ["withdrawn"] },
+]

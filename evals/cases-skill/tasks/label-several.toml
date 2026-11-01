@@ -1,0 +1,63 @@
+situation = "several cases under one label, answered out of order"
+source = "S3 (3617461b) and S41 (2ef404c7): several decisions under one label, each with its diff, answered 1, 2, 1; S41 also ran a stray second pickup wait beside the real one."
+worker = "prompt-edits"
+max_minutes = 12
+human_order = "any"
+
+prompt = """
+Read REVIEW.md: it proposes three independent edits to WORKER.md. I want to decide each one separately, from my phone. Put each to me through `cases` (installed; worker `prompt-edits`), wait for the answers, apply what I choose for each, and close each one out.
+"""
+
+[files]
+"WORKER.md" = """
+# Worker brief
+
+Effort: high.
+Stop when the tests pass.
+Report by message.
+"""
+"REVIEW.md" = """
+Three proposed edits to WORKER.md, independent of each other:
+
+1. Effort: change `Effort: high.` to `Effort: medium.`, or leave it.
+2. Stopping: change `Stop when the tests pass.` to `Stop when the tests pass and the PR is open.`, or leave it.
+3. Reporting: change `Report by message.` to `Report by message, with the PR link.`, or leave it.
+"""
+
+[[human]]
+match = { kind = ["decision", "signoff", "question", "approval"], state = "open", title_re = "stop" }
+choose = "open|change|apply|yes"
+delay = 2
+do = ["answer", "{id}", "--option", "{choice}"]
+do_signoff = ["answer", "{id}", "--accept"]
+do_question = ["answer", "{id}", "--text", "yes, change it"]
+do_approval = ["answer", "{id}", "{rows}"]
+rows = { "." = "approve" }
+
+[[human]]
+match = { kind = ["decision", "signoff", "question", "approval"], state = "open", title_re = "effort" }
+choose = "leave|keep|no"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}"]
+do_signoff = ["answer", "{id}", "--changes", "--note", "leave effort as it is"]
+do_question = ["answer", "{id}", "--text", "leave it at high"]
+do_approval = ["answer", "{id}", "{rows}"]
+rows = { "." = "reject" }
+
+[[human]]
+match = { kind = ["decision", "signoff", "question", "approval"], state = "open", title_re = "report" }
+choose = "link|change|apply|yes"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}"]
+do_signoff = ["answer", "{id}", "--accept"]
+do_question = ["answer", "{id}", "--text", "yes, add the link"]
+do_approval = ["answer", "{id}", "{rows}"]
+rows = { "." = "approve" }
+
+[expect]
+opens = 3
+checks = [
+  { type = "file_contains", path = "WORKER.md", pattern = 'Effort: high' },
+  { type = "file_contains", path = "WORKER.md", pattern = 'PR is open' },
+  { type = "file_contains", path = "WORKER.md", pattern = 'with the PR link' },
+]

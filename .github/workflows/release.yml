@@ -1,0 +1,339 @@
+name: Release
+
+# A tag v* builds `cases` for macOS and Linux and publishes the archives, with
+# SHA256SUMS, as a GitHub release. A tag with a `-` in it (v0.0.1-alpha.1) is
+# a pre-release. Started by hand, it is a dry run: it builds, smoke-tests and
+# checksums everything, and publishes nothing.
+#
+# Each archive is cases-<version>-<target>.tar.gz and holds `cases`, LICENSE
+# and README.md, with no directory, so `tar -xzf ... -C ~/.local/bin cases`
+# installs the binary.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The version is the cli crate's. On a tag it must match the tag, and the
+  # tagged commit must be on main, or nothing is built and nothing is
+  # published.
+  version:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # All history and branches, for the check that the tag is on main.
+          fetch-depth: 0
+
+      - name: Read the crate's version and check it against the tag
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("crates/cli/Cargo.toml", "rb"))["package"]["version"])')
+          echo "The cli crate is at $version."
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the crate's version $version: tag v$version, or bump crates/cli/Cargo.toml."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag ]] && ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::The tag $GITHUB_REF_NAME is on $GITHUB_SHA, which is not on main: tag a commit on main."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Linux: static musl binaries, each built natively. musl-tools gives
+  # rusqlite's bundled SQLite its C compiler.
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install musl's C compiler
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Install the pinned toolchain and the target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "$TARGET"
+
+      - name: Build
+        run: cargo build -p cases --release --locked --target "$TARGET"
+
+      - name: Smoke test
+        run: |
+          bin="target/$TARGET/release/cases"
+          file "$bin"
+          # x86_64 links as static-pie, aarch64 as a plain static executable.
+          file "$bin" | grep -Eq 'statically linked|static-pie linked'
+          .github/scripts/check-version.sh "$bin" "$VERSION"
+
+      - name: Pack
+        run: .github/scripts/pack.sh "target/$TARGET/release/cases" "dist/cases-$VERSION-$TARGET.tar.gz"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cases-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # macOS: both targets in one job on an Apple Silicon runner, to keep the
+  # macOS minutes down. arm64 is native; x86_64 is cross-built, and runs
+  # under Rosetta when the runner has it.
+  macos:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain and the targets
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build
+        run: cargo build -p cases --release --locked --target aarch64-apple-darwin --target x86_64-apple-darwin
+
+      - name: Smoke test
+        run: |
+          arm=target/aarch64-apple-darwin/release/cases
+          x64=target/x86_64-apple-darwin/release/cases
+          file "$arm" "$x64"
+          file "$arm" | grep -q 'arm64'
+          file "$x64" | grep -q 'x86_64'
+          .github/scripts/check-version.sh "$arm" "$VERSION"
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            .github/scripts/check-version.sh "$x64" "$VERSION"
+          else
+            echo "No Rosetta on this runner: the x86_64 binary is checked by file alone."
+          fi
+
+      # Unsigned: macos-sign signs, notarizes and packs them.
+      - name: Stage the binaries
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "unsigned/$target"
+            cp "target/$target/release/cases" "unsigned/$target/cases"
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-apple-darwin
+          path: unsigned/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs and notarizes the macOS binaries with quill, on Linux, then packs
+  # them. macOS will not run a downloaded binary that is not
+  # notarized. This job builds nothing: the jobs that run cargo never see the
+  # signing secrets, and this one runs only our scripts and a pinned quill
+  # whose checksum it checks. A pushed tag runs it in the `release`
+  # environment, which only v* tags can use, and it refuses to go on without
+  # the secrets there. A dry run has no environment, so it packs the binaries
+  # unsigned and says so. The secrets are MACOS_SIGN_P12 and MACOS_NOTARY_KEY
+  # (each base64), MACOS_SIGN_PASSWORD, MACOS_NOTARY_ISSUER_ID and
+  # MACOS_NOTARY_KEY_ID: a Developer ID Application certificate and an App
+  # Store Connect API key with the Developer role.
+  macos-sign:
+    needs: [version, macos]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    environment: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || '' }}
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      QUILL_VERSION: 0.7.1
+      QUILL_SHA256: b3d5bbc006f1aa0387e06349db1a988597ce348913e6e8d38d4bfb34cc93e78d
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-apple-darwin
+          path: bin
+
+      - name: Install quill
+        run: |
+          archive="quill_${QUILL_VERSION}_linux_arm64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$archive" "https://github.com/anchore/quill/releases/download/v$QUILL_VERSION/$archive"
+          echo "$QUILL_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" quill
+          "$RUNNER_TEMP/quill" --version
+
+      # quill waits for Apple's verdict, so a rejected binary fails the job
+      # and nothing is published. The secrets are this step's alone.
+      - name: Sign and notarize
+        id: sign
+        env:
+          QUILL_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          QUILL_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          QUILL_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          QUILL_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          QUILL_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          if [[ -z "$QUILL_SIGN_P12" || -z "$QUILL_NOTARY_KEY" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+              echo "::error::The signing secrets are missing from the release environment, so this release would not run on macOS."
+              exit 1
+            fi
+            echo "::warning::No signing secrets in a dry run: the macOS binaries are packed unsigned."
+            exit 0
+          fi
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            "$RUNNER_TEMP/quill" sign-and-notarize --identity sh.cases.cli -v "bin/$target/cases"
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Pack
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            chmod +x "bin/$target/cases"
+            .github/scripts/pack.sh "bin/$target/cases" "dist/cases-$VERSION-$target.tar.gz"
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cases-apple-darwin
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Checks on a Mac that Gatekeeper accepts the signed binaries as they come
+  # out of the archives. Skipped when nothing was signed.
+  macos-verify:
+    needs: [version, macos-sign]
+    if: needs.macos-sign.outputs.signed == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cases-apple-darwin
+          path: dist
+
+      - name: Check the signature and notarization
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "x/$target"
+            tar -xzf "dist/cases-$VERSION-$target.tar.gz" -C "x/$target" cases
+            codesign --verify --strict --verbose=2 "x/$target/cases"
+            # Held in variables, not piped to grep -q, whose early exit would
+            # fail the pipe under pipefail.
+            sig=$(codesign -dvv "x/$target/cases" 2>&1)
+            echo "$sig"
+            [[ "$sig" == *$'\n'"Authority=Developer ID Application:"* ]]
+            # A bare binary cannot carry a stapled ticket, so this asks Apple
+            # online, as a first run on a user's Mac does.
+            gate=$(spctl --assess -vv --type install "x/$target/cases" 2>&1)
+            echo "$gate"
+            [[ "$gate" == *"source=Notarized Developer ID"* ]]
+          done
+
+  # The checksums, in their own job so a dry run makes and checks them too.
+  # It waits for macos-verify, which is skipped on a dry run.
+  sums:
+    needs: [version, linux, macos-sign, macos-verify]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cases-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          want=()
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            want+=("cases-$VERSION-$target.tar.gz")
+          done
+          got=$(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [[ "$got" != "$(printf '%s\n' "${want[@]}" | sort)" ]]; then
+            echo "::error::Expected exactly ${want[*]}, found: ${got//$'\n'/ }"
+            exit 1
+          fi
+          sha256sum "${want[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -l
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that can write, and only on a pushed tag: a run started by
+  # hand is a dry run even on a tag.
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, sums]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: dist
+
+      - name: Publish the release
+        working-directory: dist
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the crate's version $VERSION."
+            exit 1
+          fi
+          sha256sum -c SHA256SUMS
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${prerelease[@]}" \
+            cases-*.tar.gz SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}

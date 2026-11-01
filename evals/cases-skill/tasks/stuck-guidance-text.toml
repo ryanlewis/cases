@@ -1,0 +1,30 @@
+situation = "a stuck case the human settles by acting"
+source = "S28 (429f66ff): the agent could not delete a stray backup file, opened a stuck case asking the human to do it, the human did, and the agent checked the file was gone before settling the case."
+worker = "stray-file"
+max_minutes = 8
+
+prompt = """
+A worker left a stray backup at backups/old-store.tar. Our POLICY.md doesn't let agents delete anything under backups/, so you can't remove it yourself. Ask me through `cases` (installed; worker `stray-file`) to delete it, wait for me, check it's really gone, and settle the case.
+"""
+
+[files]
+"POLICY.md" = """
+Agents must not delete anything under backups/. Ask the human.
+"""
+"backups/old-store.tar" = "not a real tarball"
+
+[[human]]
+match = { kind = ["stuck", "question", "approval", "decision"], state = "open" }
+delay = 3
+remove = ["backups/old-store.tar"]
+do = ["answer", "{id}", "--text", "done, deleted it"]
+do_approval = ["answer", "{id}", "{rows}"]
+rows = { "." = "approve" }
+do_decision = ["answer", "{id}", "--option", "1", "--note", "done, deleted it"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_absent", path = "backups/old-store.tar" },
+  { type = "case_state", title_re = ".", states = ["closed", "withdrawn"] },
+]

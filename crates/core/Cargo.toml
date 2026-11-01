@@ -1,0 +1,34 @@
+[package]
+name = "cases-core"
+version = "0.2.3"
+description = "The cases core: event replay, transition rules and answer validation."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# A case's key displays as its public id.
+cases-id = { path = "../id", version = "0.0.0" }
+serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+# The store vectors' runner, which the core's tests run against a store in
+# memory. A path dependency only, so it is left out when the core is
+# published.
+cases-vectors = { path = "../vectors" }
+libtest-mimic = "=0.8.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[[test]]
+name = "vectors"
+harness = false
+
+[[test]]
+name = "store_vectors"
+harness = false

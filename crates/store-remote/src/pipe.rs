@@ -1,0 +1,675 @@
+//! The pipe a forwarded store is reached by: HTTP/1.1 over a child
+//! process's stdin and stdout, such as `ssh host cases dial-stdio`, or a
+//! command of the user's that ends in it on the far side.
+//!
+//! The HTTP client opens one child for each connection it makes, and keeps
+//! it while it is idle, as it would keep a socket: a later request reuses
+//! it, and a connection that fails is dropped and the next request starts a
+//! new child. A child's stdout is read on a thread of its own, so a read
+//! can time out as a socket's does. Its stderr is kept, the last part of
+//! it, to say why a child ended with no answer.
+//!
+//! A [`Hold`](crate::Hold) is a child of its own, outside the HTTP client,
+//! sent one request and kept open after its answer, for what the far side
+//! holds for as long as the connection lasts.
+
+use std::collections::VecDeque;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::io::{self, Read, Write};
+use std::net::SocketAddr;
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use ureq::config::Config;
+use ureq::http::Uri;
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, Transport,
+};
+
+/// The most of a child's stderr that is kept, from its end.
+const STDERR_KEPT: usize = 4096;
+
+/// How long a child that closed its stdout is given to exit, so that its
+/// status and stderr can say why.
+const EXIT_GRACE: Duration = Duration::from_secs(2);
+
+/// How long the end of a child's stderr is waited for once it has exited,
+/// so that what it wrote just before is kept. Short, since something the
+/// child started can hold its stderr open for much longer.
+const STDERR_GRACE: Duration = Duration::from_millis(200);
+
+/// How long a child is given to exit after its stdin is closed, when its
+/// connection is dropped, before it is killed.
+const CLOSE_GRACE: Duration = Duration::from_millis(200);
+
+/// The most an answer's head may hold, read by [`Pipe::exchange`].
+const ANSWER_HEAD_LIMIT: usize = 64 * 1024;
+
+/// How a forwarded store is dialled: the program to run, its arguments and
+/// any environment to add, and the name it goes by in an error, such as
+/// `ssh://devbox`. The program speaks the store routes over its stdin and
+/// stdout, as `cases dial-stdio` does.
+///
+/// ```
+/// use cases_store_remote::Dial;
+///
+/// let dial = Dial::new("ssh", "ssh://devbox").args(["devbox", "cases", "dial-stdio"]);
+/// assert_eq!(dial.to_string(), "ssh://devbox");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dial {
+    program: OsString,
+    args: Vec<OsString>,
+    envs: Vec<(OsString, OsString)>,
+    name: String,
+}
+
+impl Dial {
+    /// A dial that runs `program`, named `name` in errors.
+    #[must_use]
+    pub fn new(program: impl Into<OsString>, name: impl Into<String>) -> Dial {
+        Dial {
+            program: program.into(),
+            args: Vec::new(),
+            envs: Vec::new(),
+            name: name.into(),
+        }
+    }
+
+    /// The dial, with `args` after those it has.
+    #[must_use]
+    pub fn args<I, S>(mut self, args: I) -> Dial
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// The dial, with `key` set to `value` in the child's environment.
+    #[must_use]
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Dial {
+        self.envs.push((key.into(), value.into()));
+        self
+    }
+
+    /// The program it runs.
+    #[must_use]
+    pub fn program(&self) -> &OsStr {
+        &self.program
+    }
+
+    /// The arguments it runs the program with.
+    #[must_use]
+    pub fn arguments(&self) -> &[OsString] {
+        &self.args
+    }
+
+    /// Whether it is over ssh, named `ssh://...`, whose exit code 255 is
+    /// ssh's own failure.
+    fn over_ssh(&self) -> bool {
+        self.name.starts_with("ssh://")
+    }
+
+    /// Starts the child, with its stdin, stdout and stderr piped, in a
+    /// process group of its own, so that a Ctrl-C at the terminal stops
+    /// this process alone: its children end as their stdin does, once a
+    /// request on its way has its answer, and a pickup wait lets go of its
+    /// locks over its hold's connection rather than lose it to the signal.
+    fn spawn(&self) -> io::Result<Child> {
+        let mut command = Command::new(&self.program);
+        command
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        for (key, value) in &self.envs {
+            command.env(key, value);
+        }
+        command.spawn()
+    }
+}
+
+impl fmt::Display for Dial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// The connector that makes each connection a new child.
+#[derive(Debug)]
+pub(crate) struct PipeConnector {
+    dial: Arc<Dial>,
+}
+
+impl PipeConnector {
+    pub(crate) fn new(dial: Dial) -> PipeConnector {
+        PipeConnector {
+            dial: Arc::new(dial),
+        }
+    }
+}
+
+impl Connector<()> for PipeConnector {
+    type Out = Pipe;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        _chained: Option<()>,
+    ) -> Result<Option<Pipe>, ureq::Error> {
+        let config = details.config;
+        Pipe::start(
+            &self.dial,
+            config.input_buffer_size(),
+            config.output_buffer_size(),
+        )
+        .map(Some)
+    }
+}
+
+/// A resolver that looks nothing up: a pipe has no address.
+#[derive(Debug)]
+pub(crate) struct NoAddress;
+
+impl Resolver for NoAddress {
+    fn resolve(
+        &self,
+        _uri: &Uri,
+        _config: &Config,
+        _timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let mut addrs = self.empty();
+        addrs.truncate(0);
+        addrs.push(SocketAddr::from(([127, 0, 0, 1], 0)));
+        Ok(addrs)
+    }
+}
+
+/// What the stdout thread sends: bytes, or the error that ended it. Its
+/// end, with the sender dropped, is the end of the child's stdout.
+type Chunk = io::Result<Vec<u8>>;
+
+/// One connection: a child, its stdin, what it has written to stdout and
+/// not been read yet, and its stderr.
+pub(crate) struct Pipe {
+    dial: Arc<Dial>,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    /// In a mutex only so that the pipe is `Sync`, as a transport must be:
+    /// it is reached through `&mut self` alone.
+    stdout: Mutex<Receiver<Chunk>>,
+    /// Bytes from stdout that did not fit the input buffer.
+    pending: VecDeque<u8>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    /// Disconnected once the child's stderr has ended and all of it is
+    /// kept. In a mutex for the same reason as `stdout`.
+    stderr_ended: Mutex<Receiver<()>>,
+    buffers: LazyBuffers,
+    /// Set once the child's stdout ended or failed.
+    ended: bool,
+}
+
+impl fmt::Debug for Pipe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pipe")
+            .field("dial", &self.dial)
+            .field("pid", &self.child.id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Pipe {
+    /// Starts a child for `dial`.
+    pub(crate) fn start(
+        dial: &Arc<Dial>,
+        input: usize,
+        output: usize,
+    ) -> Result<Pipe, ureq::Error> {
+        let mut child = dial.spawn().map_err(|error| {
+            ureq::Error::Io(io::Error::new(
+                error.kind(),
+                format!("could not run {}: {error}", dial.program.to_string_lossy()),
+            ))
+        })?;
+        let stdin = child.stdin.take();
+        let mut stdout = child.stdout.take().ok_or_else(|| no_pipe("stdout"))?;
+        let mut stderr = child.stderr.take().ok_or_else(|| no_pipe("stderr"))?;
+        let (send, stdout_chunks) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buf = vec![0; 16 * 1024];
+            loop {
+                // A read the child's stdout fails ends the connection, as
+                // its end does: the request is sent again, if it may be.
+                match stdout.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        if send.send(Ok(buf[..n].to_vec())).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = send.send(Err(error));
+                        return;
+                    }
+                }
+            }
+        });
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        let keeping = Arc::clone(&kept);
+        let (ending, stderr_ended) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            // Dropped when the thread ends, which tells `closed` so.
+            let _ending = ending;
+            let mut buf = [0; 1024];
+            loop {
+                let n = match stderr.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(n) => n,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => return,
+                };
+                let mut kept = keeping.lock().unwrap_or_else(PoisonError::into_inner);
+                kept.extend_from_slice(&buf[..n]);
+                let over = kept.len().saturating_sub(STDERR_KEPT);
+                kept.drain(..over);
+            }
+        });
+        Ok(Pipe {
+            dial: Arc::clone(dial),
+            child,
+            stdin,
+            stdout: Mutex::new(stdout_chunks),
+            pending: VecDeque::new(),
+            stderr: kept,
+            stderr_ended: Mutex::new(stderr_ended),
+            buffers: LazyBuffers::new(input, output),
+            ended: false,
+        })
+    }
+
+    /// The child's status, once it has exited, waiting up to `grace`.
+    fn exited(&mut self, grace: Duration) -> Option<ExitStatus> {
+        let until = Instant::now() + grace;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(10)),
+                _ => return None,
+            }
+        }
+    }
+
+    /// Whether the child is there still, between exchanges: its stdout has
+    /// not ended, nor sent anything not asked for.
+    pub(crate) fn is_open(&mut self) -> bool {
+        let stdout = self
+            .stdout
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        !self.ended && matches!(stdout.try_recv(), Err(TryRecvError::Empty))
+    }
+
+    /// The error for a child that closed its stdout, or its stdin, with no
+    /// answer: why, from its exit status and the last line of its stderr.
+    pub(crate) fn closed(&mut self) -> ureq::Error {
+        let status = self.exited(EXIT_GRACE);
+        // A child that has exited may have written its last line to stderr
+        // just before, and not all of it be kept yet: wait a little for the
+        // end of its stderr.
+        if status.is_some() {
+            let _ = self
+                .stderr_ended
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner)
+                .recv_timeout(STDERR_GRACE);
+        }
+        let stderr = String::from_utf8_lossy(
+            &self
+                .stderr
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
+        .into_owned();
+        ureq::Error::Io(why_closed(
+            self.dial.over_ssh(),
+            status.and_then(|s| s.code()),
+            &stderr,
+        ))
+    }
+}
+
+impl Pipe {
+    /// Sends `request`, as it is, and reads one answer, sent with its
+    /// length and a body of at most `limit` bytes, within `timeout`: its
+    /// status and body. The connection stays open after it.
+    pub(crate) fn exchange(
+        &mut self,
+        request: &[u8],
+        timeout: Duration,
+        limit: u64,
+    ) -> Result<(u16, Vec<u8>), ureq::Error> {
+        let deadline = Instant::now() + timeout;
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(self.closed());
+        };
+        if stdin
+            .write_all(request)
+            .and_then(|()| stdin.flush())
+            .is_err()
+        {
+            self.stdin = None;
+            return Err(self.closed());
+        }
+        let mut got = Vec::new();
+        loop {
+            if let Some(answer) = answer_in(&got, limit)? {
+                return Ok(answer);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            let stdout = self
+                .stdout
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner);
+            match stdout.recv_timeout(left) {
+                Ok(Ok(bytes)) => got.extend(bytes),
+                Ok(Err(error)) => {
+                    self.ended = true;
+                    return Err(ureq::Error::Io(error));
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(ureq::Error::Timeout(ureq::Timeout::Global));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.ended = true;
+                    return Err(self.closed());
+                }
+            }
+        }
+    }
+}
+
+/// The status and body of the answer `got` begins with, once all of it is
+/// there, or `None` until it is.
+fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Error> {
+    let bad = |why: &str| ureq::Error::Io(io::Error::new(io::ErrorKind::InvalidData, why));
+    let Some(end) = got.windows(4).position(|w| w == b"\r\n\r\n") else {
+        if got.len() > ANSWER_HEAD_LIMIT {
+            return Err(bad("the answer's head is over 64 KiB"));
+        }
+        return Ok(None);
+    };
+    let head =
+        std::str::from_utf8(&got[..end]).map_err(|_| bad("the answer's head is not UTF-8"))?;
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| {
+            let mut parts = line.split(' ');
+            let version = parts.next()?;
+            version.starts_with("HTTP/1.").then_some(())?;
+            parts.next()?.parse::<u16>().ok()
+        })
+        .ok_or_else(|| bad("the answer's status line is not one"))?;
+    let length = lines
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| bad("the answer has no length"))?;
+    if length > limit {
+        return Err(ureq::Error::BodyExceedsLimit(limit));
+    }
+    let start = end + 4;
+    let length = usize::try_from(length).map_err(|_| ureq::Error::BodyExceedsLimit(limit))?;
+    if got.len() < start + length {
+        return Ok(None);
+    }
+    Ok(Some((status, got[start..start + length].to_vec())))
+}
+
+/// The error for a pipe the child was not given.
+fn no_pipe(which: &str) -> ureq::Error {
+    ureq::Error::Io(io::Error::other(format!("the child has no {which}")))
+}
+
+/// Why a child closed the connection with no answer, from its exit code
+/// (`None` while it runs, or when a signal ended it) and its stderr, and
+/// whether it is ssh (`over_ssh`), whose own failures exit 255. A far
+/// side with no cases, or one too old for `dial-stdio`, will not do better
+/// on another try: its error is of kind [`io::ErrorKind::NotFound`] or
+/// [`io::ErrorKind::Unsupported`], which the client gives as
+/// [`Error::Dial`](crate::Error::Dial). Any other is
+/// [`io::ErrorKind::UnexpectedEof`], a connection lost.
+pub(crate) fn why_closed(over_ssh: bool, code: Option<i32>, stderr: &str) -> io::Error {
+    let last = stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or("");
+    let said = if last.is_empty() {
+        String::new()
+    } else {
+        format!(": {last}")
+    };
+    if stderr.contains("unrecognized subcommand") && stderr.contains("dial-stdio") {
+        return io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the cases on the far side has no dial-stdio: upgrade it there",
+        );
+    }
+    let lost = |message: String| io::Error::new(io::ErrorKind::UnexpectedEof, message);
+    match code {
+        Some(127) if over_ssh => io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("there is no cases on the far side's PATH (exit 127){said}"),
+        ),
+        // The shell that runs the command says which it did not find:
+        // the command, or cases at the far end of it.
+        Some(127) => io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "a command was not found (exit 127){said}; the command must run cases \
+                 dial-stdio on the far side"
+            ),
+        ),
+        // The dial passes BatchMode=yes, so ssh asks for nothing: a
+        // password, a key's passphrase or a new host key fails it.
+        Some(255)
+            if over_ssh
+                && (stderr.contains("Permission denied")
+                    || stderr.contains("Host key verification failed")) =>
+        {
+            lost(format!(
+                "ssh failed (exit 255){said}; cases runs ssh with BatchMode=yes, so it cannot \
+                 ask for a password, a passphrase or a new host key: use a key in an ssh \
+                 agent, and accept the host's key with a plain ssh to it first"
+            ))
+        }
+        Some(255) if over_ssh => lost(format!("ssh failed (exit 255){said}")),
+        Some(code) => lost(format!("the connection closed (exit {code}){said}")),
+        None => lost(format!("the connection closed{said}")),
+    }
+}
+
+impl Transport for Pipe {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        &mut self.buffers
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        let timeout = timeout.for_write();
+        if timeout.after.is_zero() {
+            return Err(ureq::Error::Timeout(timeout.reason));
+        }
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(self.closed());
+        };
+        let output = &self.buffers.output()[..amount];
+        // A write fails when the child closed its stdin: it says why when
+        // it exits.
+        if stdin
+            .write_all(output)
+            .and_then(|()| stdin.flush())
+            .is_err()
+        {
+            self.stdin = None;
+            return Err(self.closed());
+        }
+        Ok(())
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        let timeout = timeout.for_read();
+        if self.pending.is_empty() {
+            if self.ended {
+                return Err(self.closed());
+            }
+            if timeout.after.is_zero() {
+                return Err(ureq::Error::Timeout(timeout.reason));
+            }
+            let stdout = self
+                .stdout
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner);
+            let chunk = match timeout.not_zero() {
+                Some(after) => stdout.recv_timeout(*after),
+                None => stdout.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            match chunk {
+                Ok(Ok(bytes)) => self.pending.extend(bytes),
+                Ok(Err(error)) => {
+                    self.ended = true;
+                    return Err(ureq::Error::Io(error));
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(ureq::Error::Timeout(timeout.reason));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.ended = true;
+                    return Err(self.closed());
+                }
+            }
+        }
+        let input = self.buffers.input_append_buf();
+        let n = input.len().min(self.pending.len());
+        for (slot, byte) in input.iter_mut().zip(self.pending.drain(..n)) {
+            *slot = byte;
+        }
+        self.buffers.input_appended(n);
+        // Progress: bytes were waiting, and the HTTP client asks for input
+        // only with room in its buffer, so at least one was appended.
+        Ok(true)
+    }
+
+    /// Whether the connection can take another request. A pipe that
+    /// failed is never asked: the HTTP client drops it.
+    fn is_open(&mut self) -> bool {
+        // Bytes the child sent past its answer close it.
+        if !self.pending.is_empty() {
+            return false;
+        }
+        // So do bytes it sent since, and its stdout's end.
+        let stdout = self
+            .stdout
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        match stdout.try_recv() {
+            Err(TryRecvError::Empty) => {}
+            Ok(_) | Err(TryRecvError::Disconnected) => {
+                self.ended = true;
+                return false;
+            }
+        }
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for Pipe {
+    /// Closes the child's stdin, which ends `cases dial-stdio`, and kills
+    /// the child if it has not exited soon after: with its process group,
+    /// its own (it was started in one), so that what it started goes too,
+    /// such as the commands of an `exec:` forward's shell that did not
+    /// exec the last. The group is killed before the child is reaped, while
+    /// its id cannot be another's, and the child itself too, in case it
+    /// left the group.
+    fn drop(&mut self) {
+        self.stdin = None;
+        if self.exited(CLOSE_GRACE).is_none() {
+            #[cfg(unix)]
+            let _ = rustix::process::kill_process_group(
+                rustix::process::Pid::from_child(&self.child),
+                rustix::process::Signal::KILL,
+            );
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_answer_is_read_once_all_of_it_is_there() {
+        let answer = b"HTTP/1.1 409 Conflict\r\ncontent-length: 2\r\n\r\n{}";
+        for n in 0..answer.len() {
+            assert!(answer_in(&answer[..n], 10).unwrap().is_none(), "{n}");
+        }
+        assert_eq!(answer_in(answer, 10).unwrap(), Some((409, b"{}".to_vec())));
+        let empty = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(answer_in(empty, 10).unwrap(), Some((200, Vec::new())));
+    }
+
+    #[test]
+    fn an_answer_that_is_not_one_fails() {
+        for bad in [
+            &b"HTTP/1.1 200 OK\r\n\r\n"[..],
+            b"HTTP/1.1 OK\r\nContent-Length: 0\r\n\r\n",
+            b"SSH-2.0 200\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n",
+            b"\xff\r\n\r\n",
+        ] {
+            let error = answer_in(bad, 10).unwrap_err();
+            assert!(matches!(error, ureq::Error::Io(_)), "{bad:?}: {error:?}");
+        }
+        let large = b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n";
+        assert!(matches!(
+            answer_in(large, 10),
+            Err(ureq::Error::BodyExceedsLimit(10))
+        ));
+        // A body of the limit itself is read.
+        let full = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n";
+        assert!(answer_in(full, 10).unwrap().is_none());
+        // A head is waited for up to 64 KiB, as the error says.
+        assert!(answer_in(&vec![b'x'; 64 * 1024], 10).unwrap().is_none());
+        let endless = vec![b'x'; ANSWER_HEAD_LIMIT + 1];
+        assert!(answer_in(&endless, 10).is_err());
+        assert!(
+            answer_in(&endless[..ANSWER_HEAD_LIMIT], 10)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_pipe_shows_its_dial_and_its_child() {
+        let dial = Arc::new(Dial::new("cat", "ssh://far"));
+        let pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let shown = format!("{pipe:?}");
+        assert!(
+            shown.starts_with("Pipe { dial: Dial {")
+                && shown.contains(&format!("pid: {}", pipe.child.id())),
+            "{shown}"
+        );
+    }
+}

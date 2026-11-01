@@ -1,0 +1,48 @@
+situation = "several cases under one label; the human withdraws one"
+source = "S39 (0579f4f4): a lead opened many cases under one label and re-armed one label wait; S26 (35bb6d9b): some questions were overtaken and ended without an answer."
+worker = "site-polish"
+max_minutes = 12
+human_order = "any"
+
+prompt = """
+TODO.md lists three small site tweaks, each needing my yes or no. Ask me each one through `cases` (installed; worker `site-polish`), from one session, then do what I say for each and close them out. I'll answer from my phone.
+"""
+
+[files]
+"TODO.md" = """
+1. Turn on the dark-mode toggle in site.toml (dark_toggle = true)?
+2. Add a "last updated" footer (footer_updated = true)?
+3. Lazy-load the gallery images (lazy_images = true)?
+"""
+"site.toml" = """
+dark_toggle = false
+footer_updated = false
+lazy_images = false
+"""
+
+[[human]]
+match = { kind = ["decision", "question", "approval", "signoff"], state = "open", title_re = "footer|updated" }
+delay = 2
+do = ["withdraw", "{id}", "--reason", "skip this one, I'm redoing the footer myself"]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "dark" }
+choose = "yes|on|enable|turn"
+delay = 2
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "yes"]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "lazy|gallery" }
+choose = "no|leave|keep|off"
+delay = 2
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "no, leave it"]
+
+[expect]
+opens = 3
+checks = [
+  { type = "file_contains", path = "site.toml", pattern = 'dark_toggle\s*=\s*true' },
+  { type = "file_contains", path = "site.toml", pattern = 'footer_updated\s*=\s*false' },
+  { type = "file_contains", path = "site.toml", pattern = 'lazy_images\s*=\s*false' },
+]

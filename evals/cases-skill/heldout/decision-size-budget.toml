@@ -1,0 +1,40 @@
+situation = "a plain decision"
+source = "S5 (a74c8e84): a homelab migration wrap-up asked whether a service 32 MB over its image-size gate should raise the budget, trim logs and dumps, or both; the human picked the budget."
+worker = "img-budget"
+max_minutes = 8
+
+prompt = """
+The image-size check in CI is failing: the `ledger` service image is 32 MB over its 400 MB budget (see size-report.txt). It can be fixed by raising the budget in budgets.toml, or by trimming the logs and dumps that get baked into the image, or both. That's my call, not yours: ask me through the `cases` CLI (it's installed; use worker name `img-budget`) and wait for the answer, I'm away from the terminal. Then make the change and close the loop.
+"""
+
+[files]
+"size-report.txt" = """
+ledger: 432 MB (budget 400 MB)
+  /var/log/ledger: 21 MB
+  /srv/dumps: 14 MB
+"""
+"budgets.toml" = """
+[images]
+ledger = 400
+gateway = 250
+"""
+"Dockerfile" = """
+FROM debian:12-slim
+COPY build/ /srv/
+COPY logs/ /var/log/ledger/
+COPY dumps/ /srv/dumps/
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "budget|raise"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}", "--note", "raise it to 450, trimming can wait"]
+do_question = ["answer", "{id}", "--text", "raise the budget to 450, trimming can wait"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "budgets.toml", pattern = 'ledger\s*=\s*450' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

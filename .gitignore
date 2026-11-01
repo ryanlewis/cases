@@ -1,0 +1,4 @@
+/target
+mutants.out/
+node_modules/
+mutants.out.old/

@@ -1,0 +1,1517 @@
+/* Visual system, adapted from shout.sh the way relwatch and job-scout adapt it,
+ * so the tools read as one family.
+ *
+ * Borrowed: one monospace face with ligatures off, square corners, 1px rules
+ * with dashed ones as separators, 11px/.08em uppercase micro-labels (sizes are
+ * in rem at 16px to the rem, so the text size option scales them all), outline
+ * badges, [ bracket ] buttons and a chip group that invert, reverse video for
+ * what is chosen, the `>` marker on the selected row, a dashed empty box.
+ *
+ * Broken: shout's black ground. The inbox is light-first warm paper like
+ * relwatch, because it is visited when a case arrives, read and answered, and
+ * left, often on a phone; it is skimmed, not sat in.
+ * Broken: shout's rule that state is spelled and never coloured. Blocking
+ * urgency (the rail, the filled badge and the header tally) and parked (the
+ * rail and a dashed badge) each have a hue, and a look may give one to what
+ * is yours to act on and to each kind; a hue always has a word or glyph
+ * beside it. Everything else is intensity, inversion and characters.
+ *
+ * The faces are vendored or the system's, not shout's Google-hosted one: the
+ * page is served from one local binary and CSP allows nothing from elsewhere.
+ */
+
+/* Looks: one structure, several looks. Every rule after this section is the
+   structure, the same in every look: layout and components, which take
+   anything a look may change from the tokens a look defines here. theme.js
+   sets the chosen look as data-look before paint; daylight, the default, is
+   stored as nothing and so drawn with no attribute at all.
+
+   A look is three blocks of tokens: light, then dark twice, because a media
+   query cannot share a block with a plain selector. Themes follow
+   ayn-thor-tracker: the system scheme unless the options dialog stored one,
+   which theme.js sets as data-theme. Each look defines every token mono
+   does; a colour is hex, and a dark block redefines each one the light block
+   gives as hex. looks.rs checks all of that, and the contrast of each pair of
+   tokens drawn together, in light and dark.
+
+   Palette: --bg, --bg-1, --bg-2, the grounds (page, hover, selected);
+   --fg, --fg-1, --fg-2, --fg-3, the text, each a step quieter; --rule and
+   --rule-strong, lines that only separate; --blocking and --parked; --scrim,
+   the options dialog's backdrop, a dim towards black in every theme.
+   Roles: --surface, the ground of a dialog; --control, the edge of a field
+   or chip group; --focus, the focus ring; --chosen-bg and --chosen-fg, the
+   current view or chosen option; --primary-bg and --primary-fg, the form's
+   action; --on-blocking, text on the blocking fill; --followup-bg and
+   --followup-edge, the ground and edge of an agent's follow-up note;
+   --kind-decision, --kind-approval, --kind-signoff, --kind-question,
+   --kind-stuck, --kind-fyi, --kind-message and --kind-briefing, the hue a
+   look may draw each kind's glyph in;
+   --on-kind, a mark drawn on that hue; --sun-bg, --sun-edge and --sun-fg,
+   the ground, edge and text of the needs-you banner; --diff-add and
+   --diff-add-bg, --diff-del and --diff-del-bg, the text and ground of a
+   diff's added and removed lines, and --diff-hunk, the text of its @@ lines.
+   Faces: --ui for the chrome, --mono, --sans and --serif, and --prose, the
+   default face for what people wrote, which the face option overrides.
+   Radii: --radius for boxes, fields and dialogs, --radius-sm for badges,
+   keys and inline code.
+
+   A look may also restyle the structure's elements, in its own rules at the
+   end of this file, each under :root[data-look="name"], or for the default
+   :root:is(:not([data-look]), [data-look="name"]). They change how an
+   element is drawn, never where it is: the layout is the structure's. */
+/* Mono: the grammar above, in a terminal's colours. Warm paper in light
+   and a blue-black night terminal in dark. A phosphor-green accent marks
+   what is yours to act on or what you did: the selected case, the send
+   button, focus, your events in the thread. Each kind has an ANSI-family
+   hue for its glyph, blocking is red and loud, and parked is a cool blue,
+   because a parked case is on ice. JetBrains Mono for everything, with the
+   system mono stack after. Its own rules are at the end of the structure. */
+:root[data-look="mono"] {
+  color-scheme: light;
+  --bg: #fffcf0; --bg-1: #f2efe2; --bg-2: #dff0e4;
+  --fg: #100f0f; --fg-1: #3a3835; --fg-2: #5f5d57; --fg-3: #6d6a63;
+  --rule: #dcd8c8; --rule-strong: #8a8676;
+  --blocking: #b3172f; --parked: #2d5f99;
+  --scrim: #000000;
+  --surface: var(--bg); --control: var(--rule-strong); --focus: #0a6a3f;
+  --chosen-bg: var(--fg); --chosen-fg: var(--bg);
+  --primary-bg: var(--focus); --primary-fg: var(--bg); --on-blocking: var(--bg);
+  --followup-bg: var(--bg-1); --followup-edge: var(--focus);
+  --kind-decision: #0b6a86; --kind-approval: #7a5c00; --kind-signoff: #5b3fc4;
+  --kind-question: #a3246f; --kind-stuck: #9a4400; --kind-fyi: #4e5566; --kind-message: #1f6f43; --kind-briefing: #0e6b6b;
+  --on-kind: var(--bg);
+  --sun-bg: var(--bg-1); --sun-edge: var(--rule-strong); --sun-fg: var(--fg);
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: ui-serif, Georgia, "Times New Roman", serif;
+  --ui: var(--mono); --prose: var(--mono);
+  --radius: 0; --radius-sm: 0;
+  --diff-add: #1f5d2a; --diff-add-bg: #dcefd9; --diff-del: #8f1d24; --diff-del-bg: #f6dcd8; --diff-hunk: #2d5f99;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="mono"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d0f14; --bg-1: #151821; --bg-2: #1a2a26;
+    --fg: #eceef4; --fg-1: #c3c8d4; --fg-2: #9aa1b3; --fg-3: #878e9d;
+    --rule: #262a36; --rule-strong: #5d6579;
+    --blocking: #ff6b7d; --parked: #8fb3e0; --focus: #4cf5a5;
+    --scrim: #000000;
+    --kind-decision: #5fd4f5; --kind-approval: #f2d15c; --kind-signoff: #b6a0ff;
+    --kind-question: #f58fd0; --kind-stuck: #ff9f5a; --kind-fyi: #b4bccb; --kind-message: #6fd69a; --kind-briefing: #5cd6d0;
+    --diff-add: #6fe39a; --diff-add-bg: #15301f; --diff-del: #ff8b97; --diff-del-bg: #3a1a20; --diff-hunk: #8fb3e0;
+  }
+}
+:root[data-look="mono"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0f14; --bg-1: #151821; --bg-2: #1a2a26;
+  --fg: #eceef4; --fg-1: #c3c8d4; --fg-2: #9aa1b3; --fg-3: #878e9d;
+  --rule: #262a36; --rule-strong: #5d6579;
+  --blocking: #ff6b7d; --parked: #8fb3e0; --focus: #4cf5a5;
+  --scrim: #000000;
+  --kind-decision: #5fd4f5; --kind-approval: #f2d15c; --kind-signoff: #b6a0ff;
+  --kind-question: #f58fd0; --kind-stuck: #ff9f5a; --kind-fyi: #b4bccb; --kind-message: #6fd69a; --kind-briefing: #5cd6d0;
+  --diff-add: #6fe39a; --diff-add-bg: #15301f; --diff-del: #ff8b97; --diff-del-bg: #3a1a20; --diff-hunk: #8fb3e0;
+}
+
+/* Daylight: warm white and calm, like Things. Colour means kind (a filled
+   tile per kind) and sunflower means you (the needs-you banner and an
+   agent's follow-up); blocking is red, parked ochre, and one blue is for
+   what is chosen, focused or sent. Sans throughout, in system faces, with
+   rounded corners. Its own rules are at the end of the file. */
+:root:not([data-look]), :root[data-look="daylight"] {
+  color-scheme: light;
+  --bg: #fffdf8; --bg-1: #f7f3ea; --bg-2: #e6effd;
+  --fg: #1d1b17; --fg-1: #3f3b33; --fg-2: #5f5a50; --fg-3: #6e6858;
+  --rule: #e8e2d5; --rule-strong: #ddd6c8;
+  --blocking: #c42b1c; --parked: #8a5a00;
+  --scrim: #000000;
+  --surface: #ffffff; --control: #8f887a; --focus: #1c62d4;
+  --chosen-bg: #1c62d4; --chosen-fg: #ffffff;
+  --primary-bg: #1c62d4; --primary-fg: #ffffff; --on-blocking: #ffffff;
+  --followup-bg: #fff2bf; --followup-edge: #a87c00;
+  --kind-decision: #7048e8; --kind-approval: #2f8a41; --kind-signoff: #0c7f92;
+  --kind-question: #d6336c; --kind-stuck: #d9530b; --kind-fyi: #6b7a90; --kind-message: #1c7ed6; --kind-briefing: #087f5b; --on-kind: #ffffff;
+  --sun-bg: #fff2bf; --sun-edge: #efcf62; --sun-fg: #5a4300;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: ui-serif, "New York", "Iowan Old Style", Charter, Georgia, serif;
+  --ui: var(--sans); --prose: var(--sans);
+  --radius: .625rem; --radius-sm: .375rem;
+  --diff-add: #1d6b31; --diff-add-bg: #dff3e3; --diff-del: #a3261a; --diff-del-bg: #fbe2df; --diff-hunk: #1c62d4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-look]):not([data-theme="light"]), :root[data-look="daylight"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #232428; --bg-1: #1c1d20; --bg-2: #26344d;
+    --fg: #ecebe8; --fg-1: #cfcdc8; --fg-2: #a9a7a1; --fg-3: #a09e98;
+    --rule: #36373c; --rule-strong: #45464c;
+    --blocking: #ff8a7a; --parked: #e3b35c;
+    --scrim: #000000;
+    --surface: #2c2d32; --control: #7d7b76; --focus: #6ea8ff;
+    --chosen-bg: #6ea8ff; --chosen-fg: #0b1a33;
+    --primary-bg: #6ea8ff; --primary-fg: #0b1a33; --on-blocking: #1b1c1f;
+    --followup-bg: #3a321a; --followup-edge: #c9a227;
+    --kind-decision: #9775fa; --kind-approval: #40c057; --kind-signoff: #22b8cf;
+    --kind-question: #f06595; --kind-stuck: #fd7e14; --kind-fyi: #94a3b8; --kind-message: #4dabf7; --kind-briefing: #38d9a9; --on-kind: #1b1c1f;
+    --sun-bg: #3a321a; --sun-edge: #5c4d1f; --sun-fg: #ffe08a;
+    --diff-add: #7ee2a0; --diff-add-bg: #1f3a27; --diff-del: #ffa196; --diff-del-bg: #43231f; --diff-hunk: #6ea8ff;
+  }
+}
+:root:not([data-look])[data-theme="dark"], :root[data-look="daylight"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #232428; --bg-1: #1c1d20; --bg-2: #26344d;
+  --fg: #ecebe8; --fg-1: #cfcdc8; --fg-2: #a9a7a1; --fg-3: #a09e98;
+  --rule: #36373c; --rule-strong: #45464c;
+  --blocking: #ff8a7a; --parked: #e3b35c;
+  --scrim: #000000;
+  --surface: #2c2d32; --control: #7d7b76; --focus: #6ea8ff;
+  --chosen-bg: #6ea8ff; --chosen-fg: #0b1a33;
+  --primary-bg: #6ea8ff; --primary-fg: #0b1a33; --on-blocking: #1b1c1f;
+  --followup-bg: #3a321a; --followup-edge: #c9a227;
+  --kind-decision: #9775fa; --kind-approval: #40c057; --kind-signoff: #22b8cf;
+  --kind-question: #f06595; --kind-stuck: #fd7e14; --kind-fyi: #94a3b8; --kind-message: #4dabf7; --kind-briefing: #38d9a9; --on-kind: #1b1c1f;
+  --sun-bg: #3a321a; --sun-edge: #5c4d1f; --sun-fg: #ffe08a;
+  --diff-add: #7ee2a0; --diff-add-bg: #1f3a27; --diff-del: #ffa196; --diff-del-bg: #43231f; --diff-hunk: #6ea8ff;
+}
+
+/* Keel: graphite grounds, one ultraviolet accent for focus, selection and
+   the form's action, a hue per kind for its glyph. Inter for the chrome and
+   JetBrains Mono for ids and code, both vendored, with system faces after. */
+:root[data-look="keel"] {
+  color-scheme: light;
+  --bg: #f2f2f5; --bg-1: #e7e7ec; --bg-2: #eae5ff;
+  --fg: #16171b; --fg-1: #474b55; --fg-2: #50545e; --fg-3: #5e626e;
+  --rule: #dcdce2; --rule-strong: #c9c9d1;
+  --blocking: #c8222e; --parked: #8c5a00;
+  --scrim: #000000;
+  --surface: #ffffff; --control: #80848f; --focus: #5a3cf0;
+  --chosen-bg: #5a3cf0; --chosen-fg: #ffffff;
+  --primary-bg: #5a3cf0; --primary-fg: #ffffff; --on-blocking: #ffffff;
+  --followup-bg: #efebff; --followup-edge: #5a3cf0;
+  --kind-decision: #2a68e0; --kind-approval: #976600; --kind-signoff: #16844f;
+  --kind-question: #c23a87; --kind-stuck: #bd4b0b; --kind-fyi: #687080; --kind-message: #6f4bd8; --kind-briefing: #0b7a75;
+  --on-kind: var(--bg);
+  --sun-bg: var(--bg-1); --sun-edge: var(--rule-strong); --sun-fg: var(--fg);
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", Charter, "Bitstream Charter", Georgia, serif;
+  --ui: var(--sans); --prose: var(--sans);
+  --radius: .375rem; --radius-sm: .25rem;
+  --diff-add: #13673f; --diff-add-bg: #d6f0e0; --diff-del: #a8202b; --diff-del-bg: #f7dcdc; --diff-hunk: #4a2fd6;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="keel"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d0e11; --bg-1: #1c1e23; --bg-2: #221d3d;
+    --fg: #eeeff3; --fg-1: #b4b8c2; --fg-2: #a9adb8; --fg-3: #8e929e;
+    --rule: #2a2c33; --rule-strong: #363943;
+    --blocking: #ff6b70; --parked: #e3aa4e;
+    --scrim: #000000;
+    --surface: #15161a; --control: #6b707c; --focus: #a48bff;
+    --chosen-bg: #6d4aff; --chosen-fg: #ffffff;
+    --primary-bg: #6d4aff; --primary-fg: #ffffff; --on-blocking: #0d0e11;
+    --followup-bg: #221d3d; --followup-edge: #a48bff;
+    --kind-decision: #6aa2ff; --kind-approval: #edb23e; --kind-signoff: #4cc48b;
+    --kind-question: #f07fc0; --kind-stuck: #f5874a; --kind-fyi: #9299a8; --kind-message: #a48bff; --kind-briefing: #4fd1c5;
+    --diff-add: #6fdca3; --diff-add-bg: #173325; --diff-del: #ff8f96; --diff-del-bg: #3d1d22; --diff-hunk: #a48bff;
+  }
+}
+:root[data-look="keel"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0e11; --bg-1: #1c1e23; --bg-2: #221d3d;
+  --fg: #eeeff3; --fg-1: #b4b8c2; --fg-2: #a9adb8; --fg-3: #8e929e;
+  --rule: #2a2c33; --rule-strong: #363943;
+  --blocking: #ff6b70; --parked: #e3aa4e;
+  --scrim: #000000;
+  --surface: #15161a; --control: #6b707c; --focus: #a48bff;
+  --chosen-bg: #6d4aff; --chosen-fg: #ffffff;
+  --primary-bg: #6d4aff; --primary-fg: #ffffff; --on-blocking: #0d0e11;
+  --followup-bg: #221d3d; --followup-edge: #a48bff;
+  --kind-decision: #6aa2ff; --kind-approval: #edb23e; --kind-signoff: #4cc48b;
+  --kind-question: #f07fc0; --kind-stuck: #f5874a; --kind-fyi: #9299a8; --kind-message: #a48bff; --kind-briefing: #4fd1c5;
+  --diff-add: #6fdca3; --diff-add-bg: #173325; --diff-del: #ff8f96; --diff-del-bg: #3d1d22; --diff-hunk: #a48bff;
+}
+
+/* The vendored faces (static/vendor/README.md): one variable file each, cut
+   to Latin; what falls outside the range is drawn by the next face. */
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url(/static/vendor/inter-latin-wght-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap;
+  src: url(/static/vendor/jetbrains-mono-latin-wght-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* The structure. */
+
+/* The prose face is for what someone wrote to be read: bodies, notes and
+   outcomes. Labels, badges, buttons and code stay in the chrome's face or
+   mono. It follows the looks, which set the default; a face chosen in the
+   options is stored, and set as data-face, even when it is the look's. */
+:root[data-face="mono"] { --prose: var(--mono); }
+:root[data-face="sans"] { --prose: var(--sans); }
+:root[data-face="serif"] { --prose: var(--serif); }
+.body, .context { font-family: var(--prose); }
+.body pre, .body code, .body th, .row-note code { font-family: var(--mono); }
+.face-sans { font-family: var(--sans); }
+.face-serif { font-family: var(--serif); }
+/* Text size: every length but the hairline rules is in rem, so the root size
+   scales the whole page. Medium leaves the browser's own base size. */
+:root[data-size="small"] { font-size: 87.5%; }
+:root[data-size="large"] { font-size: 125%; }
+
+* { box-sizing: border-box; }
+/* `hidden` means never render. The one !important in this file: it is the
+   only way this stays ahead of every look's higher-specificity display
+   rules, now and later, without chasing each one's selector by hand. */
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: .9375rem/1.5rem var(--ui); font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
+}
+a { color: var(--fg); text-underline-offset: 2px; }
+a:hover { background: var(--fg); color: var(--bg); text-decoration: none; }
+a:hover strong { color: inherit; }
+::selection { background: var(--fg); color: var(--bg); }
+:focus-visible { outline: 1px dashed var(--focus); outline-offset: 2px; }
+h1 { font-size: 1.25rem; line-height: 1.75rem; font-weight: 700; margin: .5rem 0 .75rem; }
+h2, h3 { font-size: .9375rem; font-weight: 700; margin: 0; }
+
+/* Micro-label: every piece of secondary chrome. */
+.label, .meta, .section, legend, .body th {
+  font-size: .6875rem; line-height: 1rem; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+}
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; }
+.meta .age { color: var(--fg-3); }
+h1.section, h2.section, h3.section {
+  display: flex; align-items: center; gap: .5rem; margin: 1.5rem 0 .75rem;
+}
+h1.section::before, h2.section::before, h3.section::before { content: "\2500\2500"; content: "\2500\2500" / ""; color: var(--fg-3); letter-spacing: 0; }
+h1.section::after, h2.section::after, h3.section::after { content: ""; flex: 1; border-top: 1px dashed var(--rule); }
+
+/* Masthead: wordmark, a rule that eats the slack, the tally, the views. It
+   wraps rather than squeeze the wordmark or the chips when the text is large. */
+header.top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  min-height: 3rem; padding: 0 1rem; border-bottom: 1px solid var(--rule);
+}
+.brand, .chips { flex: none; }
+.brand {
+  display: inline-flex; align-items: center;
+  font-size: .8125rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--fg); text-decoration: none; padding: 0 .25rem;
+}
+/* The mark, Tray, before the word, sized to it: one colour, the text's, as a
+   mask. A look with the mark's accent draws its own image instead. */
+.brand .mark {
+  flex: none; width: 1.25em; height: 1.25em; margin-right: .375em;
+  background: currentColor; mask: url(/static/brand/mark.svg) center / contain no-repeat;
+}
+.rule { flex: 1 1 2rem; border-top: 1px dashed var(--rule); height: 0; }
+.tally span { white-space: nowrap; }
+.tally strong { color: var(--fg); font-weight: 700; }
+.tally .hot, .tally .hot strong { color: var(--blocking); }
+
+/* Chip group: one outer border, dividers between, the current view inverted.
+   It stays square in every look: rounding it would need its end chips, which
+   move as the group wraps, rounded to match. */
+.chips { display: flex; border: 1px solid var(--control); }
+.chips a {
+  padding: .25rem .75rem; font-size: .6875rem; line-height: 1rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--fg-2); text-decoration: none;
+  border-right: 1px solid var(--control);
+}
+.chips button {
+  margin: 0; padding: .25rem .75rem; font-size: .6875rem; line-height: 1rem; letter-spacing: .08em;
+  color: var(--fg-2); border: 0;
+}
+.chips button::before, .chips button::after { content: none; }
+.chips a:last-child, .chips button:last-child { border-right: 0; }
+.chips a:hover, .chips button:hover { background: var(--bg-1); color: var(--fg); }
+.chips a.on { background: var(--chosen-bg); color: var(--chosen-fg); }
+/* The list's filter row (lists.ts): the chip group at the top of the list
+   column, a little tighter than the masthead's so the five fit on one line
+   in the column; a count never wraps from its name. On a phone the chips share the row, and the gap keeps the space before the
+   count where a look makes them flex boxes. The selector outranks each
+   look's chip padding, which is `:root` and two more. */
+.chips.filters { width: fit-content; max-width: 100%; flex-wrap: wrap; }
+.list .chips.filters { margin: 1rem; }
+main nav.chips.filters > a[href] { padding: .25rem .5rem; white-space: nowrap; gap: .3em; }
+.chips.filters .count { font-variant-numeric: tabular-nums; }
+@media (width < 720px) {
+  main .chips.filters { width: auto; }
+  main nav.chips.filters > a[href] { flex: 1 1 auto; justify-content: center; text-align: center; }
+}
+
+/* The options overlay: a square ruled panel over a dimmed page. The form
+   fills the dialog, so a click on the dialog itself is on the backdrop. */
+dialog.options {
+  width: min(28rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem);
+  padding: 0; border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--fg);
+}
+dialog.options form { padding: 1rem; }
+dialog.options h2.section { margin-top: 0; }
+dl.keys { display: grid; grid-template-columns: auto 1fr; gap: .5rem 1rem; margin: 0 0 1rem; }
+dl.keys dd { margin: 0; }
+kbd { font-family: var(--mono); font-size: .875em; padding: 0 .25rem; border: 1px solid var(--rule-strong); border-radius: var(--radius-sm); }
+dialog.options::backdrop { background: rgba(0, 0, 0, .4); background: color-mix(in srgb, var(--scrim) 25%, transparent); }
+/* The options dialog (IN-10): a header, the groups, and the actions, never
+   taller than the window. Only the groups scroll, and only when they must, so
+   the header and the close button stay in view. The groups are one column,
+   or two (appearance | behaviour) when the dialog has room for them: a
+   container query on the form, so the columns follow the dialog's width,
+   which the text size scales with it, not the window's. */
+dialog.options.columns { width: min(48rem, calc(100vw - 2rem)); }
+dialog.options.columns[open] { display: flex; flex-direction: column; }
+dialog.options.columns form {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 0;
+  container: options / inline-size;
+}
+dialog.options.columns header { padding: 1rem 1rem 0; }
+dialog.options.columns header .label { margin: 0 0 .5rem; }
+.options-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 1rem 1rem;
+  display: grid; gap: 0 2rem; align-items: start;
+}
+@container options (width >= 40rem) { .options-body { grid-template-columns: 1fr 1fr; } }
+.options-body section { min-width: 0; }
+.options-body h3.section { margin: .5rem 0 0; }
+.options-body fieldset { margin: .75rem 0 0; }
+dialog.options.columns .actions { margin: 0; padding: .75rem 1rem; border-top: 1px solid var(--rule); }
+
+main { max-width: 60rem; padding: .5rem 1rem 3rem; margin-inline: auto; }
+/* The split spans the window, list at the left edge. Auto margins would shrink
+   main to its content where body is a flex column (wide screens below). */
+main:has(> .split) { max-width: none; padding: 0; margin-inline: 0; }
+.split > * { padding: 0 1rem 3rem; }
+/* The case sits in the middle of its column, about 70 characters a line in
+   the mono face (more in sans or serif). */
+.work > * { max-width: 40rem; margin-inline: auto; }
+
+/* Page changes cross-fade where the browser has cross-document view
+   transitions, and change at once elsewhere or under reduced motion. The
+   masthead is named so it holds still instead of fading with the page. A card
+   does not morph into the case header: a name must be unique on the page, and
+   without an inline style no card can carry its own. */
+@view-transition { navigation: auto; }
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+}
+header.top { view-transition-name: masthead; }
+/* A page scrolled past the masthead would otherwise slide it in from above;
+   pin its group to where it lands, so only its contents cross-fade. */
+::view-transition-group(masthead) { animation: none; }
+
+/* Narrow screens show one column: the list on /, the case on /cases/ID. */
+@media (width < 56rem) {
+  .split.home .work, .split:not(.home) .list { display: none; }
+  .split > .list { padding: 0 0 3rem; }
+  /* The case on / is not shown here, so nothing in the list is selected. */
+  .split.home .list .card.selected { background: none; }
+  .split.home .list .card.selected :is(h2, h3)::before { content: none; }
+  /* At inbox zero the panel stands under the filter row in place of the
+     list's empty line. */
+  .split.zero .work { display: block; }
+  .split.zero > .list { padding-bottom: 0; }
+  .split.zero .list .empty { display: none; }
+}
+/* Wide screens show both, each scrolling on its own within the window. */
+@media (width >= 56rem) {
+  body:has(.split) { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  main:has(> .split) { flex: 1; min-height: 0; }
+  .split { display: grid; grid-template-columns: clamp(20rem, 28%, 27.5rem) minmax(0, 1fr); height: 100%; }
+  .split > * { overflow-y: auto; }
+  /* The case's pane is as tall as the window lets it be, whatever the case
+     holds, so its height can be asked for (--pane, below). */
+  .split > .work { container-type: size; }
+  .split > .list { padding: 0; border-right: 1px solid var(--rule); }
+  /* Moving between cases keeps the list column still; only the case fades.
+     The done list beside a done case takes the same name: a page has one. */
+  .split > .list { view-transition-name: inbox-list; }
+}
+
+/* Cards. In the list they are rows with a permanent left gutter, so the `>`
+   marker costs no reflow, and a 2px rail that is only coloured when blocking. */
+.card {
+  position: relative; display: block; color: inherit; text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.list .card { padding: .75rem 1rem .75rem 1.75rem; border-bottom: 1px solid var(--rule); }
+.list .card:hover { background: var(--bg-1); color: inherit; }
+.list .card.selected { background: var(--bg-2); }
+.list .card.selected :is(h2, h3)::before {
+  content: ">"; content: ">" / ""; position: absolute; left: .75rem; font-weight: 700; color: var(--fg);
+}
+.card.urgency-blocking { border-left-color: var(--blocking); }
+/* Parked outranks urgency: nobody is waiting on it until it is resumed. */
+.card.parked { border-left-color: var(--parked); }
+.card :is(h2, h3) { margin: .25rem 0; }
+/* The slot for the glyph of a case's kind (kinds.js), on each card and in
+   the properties. A look that draws glyphs shows it; none shows it by default. */
+.kind-icon { display: none; }
+.card h2 a { text-decoration: none; }
+
+/* The inbox's groups and each card's ask line. A group's heading names its
+   urgency, or parked, with its count, so the list agrees with the tally;
+   blocking and parked wear their hue, as they do everywhere. The ask is one line, cut with an ellipsis. */
+.list .group > :is(h2, summary) {
+  display: flex; align-items: baseline; gap: .5rem; margin: 0;
+  padding: 1rem 1rem .375rem 1.75rem; border-bottom: 1px solid var(--rule);
+}
+.list .group > :is(h2, summary) .count { font-weight: 400; }
+.list .group > :is(h2, summary) .note { font-weight: 400; color: var(--fg-2); }
+.list .group-blocking > h2 { color: var(--blocking); }
+.list .group-parked > h2 { color: var(--parked); }
+/* The briefings answered, picked up or not (IN-14): a group folded under
+   its heading, which opens it, with a triangle that says so. */
+.list details.group > summary { cursor: pointer; list-style: none; }
+.list details.group > summary::-webkit-details-marker { display: none; }
+.list details.group > summary::before { content: "\25B8"; content: "\25B8" / ""; color: var(--fg-2); }
+.list details.group[open] > summary::before { content: "\25BE"; content: "\25BE" / ""; }
+.ask {
+  margin: 0; font-size: .8125rem; line-height: 1.25rem; color: var(--fg-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ask.followup { color: var(--fg); font-weight: 700; }
+
+/* The needs-you banner (lists.ts): how many cases are blocking an agent, at
+   the top of the inbox. Any look may show it; mono leaves it out. */
+.needs-you { display: none; }
+
+/* The waiting notice (lists.ts): on a filter other than the inbox, how many
+   cases wait on you, in the accent, or the blocking colour when one is
+   blocking, with a way to the inbox. At the top of the list on a wide
+   screen; on a phone it floats at the foot of the screen, over the list or
+   the case, which leave room for it. Its box is there when empty, for the
+   live region, and takes no space. The inbox filter stands out the same
+   way while it waits. */
+.waiting-notice {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; margin: .5rem 1rem; padding: .5rem .75rem;
+  border: 1px solid var(--focus); border-radius: var(--radius); background: color-mix(in srgb, var(--focus) 10%, var(--surface));
+  color: var(--fg); font-size: .8125rem; line-height: 1.25rem;
+}
+.waiting-notice > span { flex: 1 1 auto; }
+.waiting-notice a { font-weight: 700; white-space: nowrap; }
+.waiting-notice.blocking { border-color: var(--blocking); background: color-mix(in srgb, var(--blocking) 12%, var(--surface)); }
+.waiting-notice .hot { color: var(--blocking); }
+.list .chips.filters a.waiting { color: var(--focus); font-weight: 700; box-shadow: inset 0 -.125rem 0 var(--focus); }
+.list .chips.filters a.waiting.blocking { color: var(--blocking); box-shadow: inset 0 -.125rem 0 var(--blocking); }
+.waiting-live.float { display: none; }
+@media (width < 56rem) {
+  .list .waiting-live { display: none; }
+  /* A child of the split, but not one of its panes, so none of their
+     padding, which would lift it 3rem off its bottom. */
+  .waiting-live.float {
+    display: block; position: fixed; z-index: 9; padding: 0; bottom: max(1rem, env(safe-area-inset-bottom));
+    left: max(1rem, env(safe-area-inset-left)); right: max(1rem, env(safe-area-inset-right));
+  }
+  .waiting-live.float .waiting-notice { margin: 0; box-shadow: 0 .5rem 1.5rem rgb(0 0 0 / .15); }
+  .split:has(> .waiting-live.float > .waiting-notice) { padding-bottom: 4.5rem; }
+  .split:has(> .waiting-live.float > .waiting-notice) > .work { --pane: calc(100cqh - 4.5rem); }
+}
+
+/* Outline badges, so exactly one thing is loud: a blocking case's urgency. */
+.badge {
+  font-size: .625rem; line-height: 1rem; letter-spacing: .1em; padding: 0 .25rem;
+  border: 1px solid currentColor; border-radius: var(--radius-sm); white-space: nowrap;
+}
+.urgency-blocking .badge.urgency { color: var(--on-blocking); background: var(--blocking); border-color: var(--blocking); font-weight: 700; }
+/* A parked card's urgency steps back to an outline, so parked is the loud thing. */
+.card.parked.urgency-blocking .badge.urgency, .props.urgency-blocking:has(.badge.parked) .badge.urgency { color: var(--blocking); background: none; }
+.badge.parked, .badge.state.parked { color: var(--parked); border-style: dashed; font-weight: 700; }
+.badge.state { color: var(--fg); }
+
+.empty {
+  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 2rem 1rem; margin: 1rem;
+  color: var(--fg-2); font-size: .8125rem;
+}
+main > .empty { margin: 0; }
+
+/* Inbox zero: the panel in the case pane, beside the list. It rises in once
+   when it is drawn; a refresh keeps the same panel, so the reveal does not
+   replay. */
+.zero-panel { margin-top: 1rem; animation: zero-in .4s ease-out both; }
+.zero-panel { border: 1px dashed var(--rule-strong); border-radius: var(--radius); padding: 2.5rem 1.5rem; color: var(--fg-1); }
+.zero-panel h1 { font-size: 1.5rem; line-height: 2rem; margin: 0 0 1rem; color: var(--fg); }
+.zero-panel h1::before { content: "\2713  "; content: "\2713  " / ""; color: var(--fg-3); white-space: pre; }
+.zero-panel p { margin: .25rem 0 0; }
+.zero-panel strong { color: var(--fg); }
+.zero-panel .age { color: var(--fg-3); margin-top: 1rem; }
+/* The cases still with agents, in a section of their own under its heading:
+   each title on its line, who has it and since when after it, wrapping under
+   it when the line is short. The heading's rule is the first row's top. */
+.zero-panel .in-flight { margin-top: 1.75rem; }
+.zero-panel .in-flight > h2.section { margin: 0 0 .25rem; }
+.zero-panel .flights { list-style: none; padding: 0; margin: 0; }
+.zero-panel .flights li { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .75rem; padding: .375rem 0; border-bottom: 1px dashed var(--rule); }
+.zero-panel .flights li > a { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+.zero-panel .flights .flight { color: var(--fg-2); font-size: .875em; }
+/* A quiet row, with no event for over an hour, is dimmed. Each row ends
+   with its withdraw, small and quiet, at the right; pressed, it opens a line
+   under the row for a reason and the withdraw that sends it. */
+.zero-panel .flights li.quiet > a { color: var(--fg-2); }
+.zero-panel .flights li.quiet .flight { color: var(--fg-3); }
+.zero-panel .flights .hush { font-style: italic; }
+/* An answer no agent has picked up (lists.ts, Unpicked), on a card and on
+   the panel, in the look's parked colour, which is legible on every ground
+   a card or a row has: its answer is held, as a parked case is. */
+.unpicked { color: var(--parked); font-weight: 600; }
+.zero-panel .flights .row-withdraw {
+  display: inline-block; width: auto; min-height: 0; margin: 0 0 0 auto; padding: .125rem .5rem;
+  border: 1px solid var(--rule); border-radius: var(--radius); background: transparent; box-shadow: none;
+  font: inherit; font-size: .75rem; line-height: 1.25rem; color: var(--fg-2);
+}
+.zero-panel .flights .row-withdraw:hover { border-color: var(--control); color: var(--fg); }
+:root[data-look="mono"] .zero-panel .flights .row-withdraw { border: 0; font-size: .6875rem; }
+.zero-panel .row-confirm { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: end; gap: .5rem .75rem; margin: .5rem 0 .25rem; }
+.zero-panel .row-confirm label { flex: 1 1 14rem; margin: 0; color: var(--fg-2); font-size: .8125rem; }
+.zero-panel .row-confirm .actions { flex-direction: row; gap: .5rem; margin: 0; }
+.zero-panel .row-confirm .actions button { width: auto; }
+.zero-panel .row-confirm .error { flex-basis: 100%; margin: 0; }
+/* The messages sent and not picked up, and the workers listening now: the
+   panel's other lists, drawn as the cases still with agents are. A worker's
+   doing line goes under its row's first line, which keeps the row's
+   withdraw or message link, and above a withdraw's reason; a listening row
+   ends with a link to message it, and one that has missed a heartbeat is
+   dimmed as quiet. A row's lines read from the start in every look, keel's
+   centred panel too. */
+.zero-panel :is(.outbox, .listening) { margin-top: 1.75rem; }
+.zero-panel :is(.outbox, .listening) > h2.section { margin: 0 0 .25rem; }
+.zero-panel .flights li > strong { color: var(--fg); }
+.zero-panel .flights li.quiet > strong { color: var(--fg-2); }
+.zero-panel .flights .doing { flex-basis: 100%; order: 1; }
+.zero-panel .flights .row-confirm { order: 2; }
+.zero-panel .flights :is(.flight, .doing) { text-align: start; }
+.zero-panel .flights .row-message { margin-left: auto; font-size: .75rem; color: var(--fg-2); }
+.zero-panel .flights .row-message:hover { color: var(--fg); }
+.zero-panel .send-message { margin-top: 1rem; }
+/* An agent's doing line is its own text: isolated, so that a character that
+   sets the direction of what follows cannot reach past it. */
+.doing { color: var(--fg-2); font-size: .875em; font-style: italic; unicode-bidi: isolate; }
+@keyframes zero-in { from { opacity: 0; transform: translateY(.5rem); } }
+@media (prefers-reduced-motion: reduce) {
+  .zero-panel { animation: none; }
+}
+
+/* The case. */
+.case-head { padding-top: 1rem; }
+.context, .brief { color: var(--fg-1); margin: 0 0 .75rem; }
+/* Who a message goes to, what a case is about, and the way to message a
+   case's agent: short lines under the title. */
+.case-head :is(.to, .re, .message-agent) { margin: 0 0 .5rem; color: var(--fg-1); }
+.case-head .message-agent { font-size: .875rem; }
+/* A briefing's mark under its headline (IN-14): waiting to land, in the
+   parked hue, as something still waits on the answer; or landed. */
+.case-head .landed-mark {
+  display: inline-block; margin: 0 0 .5rem; padding: .0625rem .5rem; border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm); color: var(--fg-1); font-size: .8125rem; font-weight: 700;
+}
+.case-head .landed-mark.gated { border-color: var(--parked); color: var(--parked); }
+/* A case's links, a message's outcome, who took it, and the cases about a
+   case: sections between its body and its thread. */
+.outcome, .follow-ups, .case-links, .left-out { margin: 1.5rem 0 0; }
+.outcome > h2.section, .follow-ups > h2.section, .case-links > h2.section, .left-out > h2.section { margin: 0 0 .25rem; }
+.left-out ol { margin: 0; padding-left: 1.5rem; }
+.left-out li { overflow-wrap: anywhere; }
+.taken { margin: 1rem 0 0; color: var(--fg-1); }
+.taken .doing { margin-left: .5rem; }
+.follow-ups .flights { list-style: none; padding: 0; margin: 0; }
+.follow-ups .flights li { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .75rem; padding: .375rem 0; border-bottom: 1px dashed var(--rule); }
+.follow-ups .flight { color: var(--fg-2); font-size: .875em; }
+form.withdraw-sent { margin-top: 1rem; }
+details.edit > summary { cursor: pointer; color: var(--fg-2); font-size: .8125rem; }
+details.edit[open] > summary { margin-bottom: .75rem; }
+
+/* The composer of a message: who it goes to, the sessions listening now
+   first, then its note and urgency. */
+#compose .picker .section { margin: .5rem 0 .25rem; }
+#compose .picker .section:first-of-type { margin-top: 0; }
+#compose label.pick { min-height: 2.25rem; }
+#compose label.pick > span { min-width: 0; overflow-wrap: anywhere; }
+#compose label.pick.quiet { color: var(--fg-2); }
+#compose label.pick .doing { display: block; }
+/* Mono and keel draw a choice without a box, so a choice of two lines keeps
+   apart from the next by its padding, as daylight's boxes are apart. */
+:root:is([data-look="mono"], [data-look="keel"]) #compose label.pick { padding-top: .375rem; padding-bottom: .375rem; }
+/* The choices not listening, folded behind one line while some are, with
+   a filter by name. */
+#compose .picker .fold { margin: .5rem 0; }
+#compose #not-listening .section { margin-top: .75rem; }
+#compose #not-listening .filter { display: block; width: 100%; margin: 0 0 .25rem; }
+#compose .other { display: flex; gap: .5rem; margin: .25rem 0 0 2rem; }
+#compose .other input { flex: 1; }
+#compose > form > label { display: block; margin: 1rem 0 0; }
+#compose .re { margin: .5rem 0 0; color: var(--fg-1); }
+/* The composer is a dialog over the page, as the options are: the ruled
+   panel and dimmed backdrop of dialog.options, a little wider, never taller
+   than the window, its content scrolling in it. Opened for someone, it says
+   who, with a small change button. On a phone it takes the part of the
+   screen the on-screen keyboard leaves (compose.ts sets --seen-top and
+   --seen-height from the visual viewport). The composer fills the dialog,
+   so a click on the dialog itself is on the backdrop, and its padding is
+   the form's too. */
+dialog.compose-dialog { width: min(36rem, calc(100vw - 2rem)); }
+dialog.compose-dialog[open] { display: flex; flex-direction: column; }
+dialog.compose-dialog #compose { flex: 1 0 auto; padding: 1rem; }
+dialog.compose-dialog form { padding: 0; }
+dialog.compose-dialog .case-head h1 { margin-top: 0; }
+#compose .to { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; margin: 0; }
+#compose .to .change { font-size: .8125rem; }
+#compose .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+#compose .actions.leaving > span { margin-right: auto; }
+@media (width < 720px) {
+  /* By its id, over the looks' rounded, shadowed dialog.options. */
+  dialog#compose-dialog { width: 100vw; max-width: none; top: var(--seen-top, 0); height: var(--seen-height, 100dvh); max-height: none; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+  /* Beside the name, not the full width a phone's buttons take. */
+  #compose .to .change { display: inline-block; width: auto; padding: 0 1rem; }
+}
+.body > :first-child { margin-top: 0; }
+.body h1, .body h2, .body h3, .body h4 { font-size: .9375rem; line-height: 1.5rem; margin: 1.5rem 0 .5rem; }
+.body h1 { font-size: 1.0625rem; }
+:is(.body, .row-note) img { max-width: 100%; }
+.body blockquote { margin: .75rem 0; padding-left: .75rem; border-left: 1px solid var(--rule-strong); color: var(--fg-1); }
+.body hr { border: 0; border-top: 1px dashed var(--rule); }
+code { font-family: inherit; font-size: .8125rem; background: var(--bg-1); color: var(--fg-1); padding: 0 .25rem; border-radius: var(--radius-sm); }
+pre {
+  overflow-x: auto; padding: .75rem; background: var(--bg-1); border: 1px solid var(--rule); border-radius: var(--radius);
+  font-size: .8125rem; line-height: 1.25rem; white-space: pre; overflow-wrap: normal;
+}
+pre code { padding: 0; background: none; }
+/* A code block (code.ts): a markdown fence or a row's script. Its copy and
+   wrap buttons are tabs on the block's top edge, and what wrap chooses
+   holds for every block (theme.ts). The buttons are not text: copying the
+   block copies the code alone. */
+.code { display: flex; flex-direction: column; align-items: flex-end; margin: .75rem 0; }
+.code > pre { align-self: stretch; margin: 0; }
+.code-tools { display: flex; gap: .25rem; margin-right: var(--radius); }
+:root .code > .code-tools > button.copy-code { display: inline-flex; align-items: center; min-width: 1.75rem; justify-content: center; }
+:root .code > .code-tools > button {
+  position: relative; z-index: 1; min-height: 0; margin: 0 0 -1px; padding: .125rem .5rem;
+  border: 1px solid var(--rule); border-bottom: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--bg-1); color: var(--fg-2); font: 600 .6875rem/1rem var(--ui); letter-spacing: .08em; text-transform: uppercase;
+  user-select: none;
+}
+:root .code > .code-tools > button::before, :root .code > .code-tools > button::after { content: none; }
+:root .code > .code-tools > button.wrap-toggle[aria-pressed="true"]::before { content: "\2713\a0"; content: "\2713\a0" / ""; margin: 0; background: none; color: inherit; }
+:root .code > .code-tools > button:is(:hover, .wrap-toggle[aria-pressed="true"]) { background: var(--bg-2); color: var(--fg); }
+:root[data-wrap="wrap"] .code > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A diff's lines are blocks, each with its own newline, so each has its
+   ground across the block, as wide as the widest line when they scroll. */
+pre.diff { padding-inline: 0; }
+pre.diff code { display: block; min-width: max-content; }
+:root[data-wrap="wrap"] pre.diff code { min-width: 0; }
+/* A wrapped line hangs past its + or -, so it is not read as a new line. */
+:root[data-wrap="wrap"] pre.diff code > span { padding-left: calc(.75rem + 1ch); text-indent: -1ch; }
+pre.diff code > span { display: block; padding-inline: .75rem; }
+.d-add { color: var(--diff-add); background: var(--diff-add-bg); }
+.d-del { color: var(--diff-del); background: var(--diff-del-bg); }
+.d-hunk { color: var(--diff-hunk); }
+.d-head { color: var(--fg); font-weight: 700; }
+/* A table keeps its words whole. The page's overflow-wrap: anywhere would let
+   a column shrink to one character, so a table would never be too wide for
+   its column, and never scroll. A cell breaks only between words; a heading,
+   a short cell (markdown.ts) and a cell's inline code stay on one line, and
+   a long cell is at least wide enough to read. A table wider than its column
+   scrolls sideways in its own box, not the page, with a shade at each edge
+   that has more to scroll to: covers that scroll with the table hide the
+   shades at the ends. The covers are the colour of the ground the table sits
+   on (--ground, set by a container that is not on --bg). */
+.body table {
+  --cover: var(--ground, var(--bg)); --shade: color-mix(in srgb, var(--fg) 22%, transparent);
+  display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: .75rem 0; font-size: .8125rem;
+  background:
+    linear-gradient(to right, var(--cover) 40%, transparent) left / 2rem 100% no-repeat local,
+    linear-gradient(to left, var(--cover) 40%, transparent) right / 2rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--shade), transparent) left / .75rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--shade), transparent) right / .75rem 100% no-repeat scroll;
+}
+.body th, .body td { padding: .25rem .75rem .25rem 0; text-align: left; vertical-align: top; overflow-wrap: normal; }
+.body th, .body td.short, .body td code { white-space: nowrap; }
+.body td.long { min-width: 16rem; }
+.body th { border-bottom: 1px solid var(--rule-strong); }
+.body td { border-bottom: 1px dashed var(--rule); }
+.body .align-left { text-align: left; }
+.body .align-center { text-align: center; }
+.body .align-right { text-align: right; }
+.links { padding-left: 0; list-style: none; font-size: .8125rem; }
+.links li::before { content: "-> "; content: "-> " / ""; color: var(--fg-3); }
+/* The case's links, under its body: each on its own line, in full, broken
+   anywhere rather than cut short. */
+.case-links .links { margin: 0; }
+.case-links li { overflow-wrap: anywhere; }
+
+/* The case's pane is a container: its width sets the case's layout. --pane
+   is the height a box held in view may take, the column's and the wide
+   form's alike, measured where it is used, so it is not registered: where
+   the pane scrolls on its own, the pane's height less its foot, so a new
+   build's line or a wrapped masthead above the pane is taken off; where the
+   window scrolls, the window's, which is what 100cqh is when no container
+   gives a height, less the waiting notice floating at its foot (above). */
+.work { container: work / inline-size; --pane: 100cqh; }
+
+/* Properties (props.js): one list of the case's facts. Where the case's pane
+   is narrow it is a row of chips under the title, naming only what a value
+   does not say by itself; where the pane is wide it is a column at the right
+   of the case, beside the title, body, form and thread, with the keys that
+   work on the case. The narrow row is not held in view: a decision's takes
+   three lines on a phone, and more with its for, updated and amended. */
+.props { margin: 0 0 1rem; }
+.props > .section, .props-keys, .props .sub { display: none; }
+.props dl { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0; }
+.props dl > div {
+  display: flex; align-items: center; gap: .375rem; padding: 0 .5rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm); font-size: .8125rem; line-height: 1.5rem;
+}
+.props dt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.props .named dt { position: static; width: auto; height: auto; overflow: visible; clip-path: none; color: var(--fg-2); }
+.props dd { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin: 0; min-width: 0; }
+.props code { padding: 0; background: none; font-size: .75rem; }
+/* The option the agent recommends, cut to one line: its title has it all. */
+.props .prop-recommends { min-width: 0; max-width: 100%; }
+.props .recommends { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container work (50rem <= width < 60rem) {
+  #case {
+    max-width: 58rem; display: grid; grid-template-columns: minmax(0, 1fr) 16rem; column-gap: 2rem;
+    grid-template-rows: auto 1fr; grid-template-areas: "head props" "main props";
+  }
+  .case-head { grid-area: head; }
+  .case-main { grid-area: main; min-width: 0; }
+  /* The column is held in view while the body scrolls; one taller than the
+     pane scrolls on its own, as the wide form does. Until it is held it sits
+     lower, by --lift (case.ts), and is that much shorter, so its foot is in
+     view; it is never cut below 12rem. */
+  .props {
+    grid-area: props; align-self: start; position: sticky; top: 0;
+    max-height: max(min(12rem, var(--pane)), var(--pane) - var(--lift, 0rem)); overflow-y: auto;
+    margin: 0; padding: 1rem 0 1rem 1rem; border-left: 1px solid var(--rule);
+  }
+  .props > .section, .props-keys > .section { display: flex; margin: 0 0 .5rem; }
+  .props-keys { display: block; margin-top: 1.5rem; }
+  .props dl { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .25rem .75rem; align-items: baseline; }
+  .props dl > div { display: contents; }
+  .props dt, .props .named dt {
+    position: static; width: auto; height: auto; overflow: visible; clip-path: none;
+    font-size: .6875rem; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+  }
+  .props dd { line-height: 1.25rem; padding: .125rem 0; }
+  .props .sub { display: block; width: 100%; color: var(--fg-3); font-size: .75rem; }
+  .props-keys dl { grid-template-columns: minmax(0, 1fr) auto; color: var(--fg-2); font-size: .75rem; }
+  /* A key's name wraps rather than running under its keys. */
+  .props-keys dt { text-transform: none; letter-spacing: 0; font-size: .75rem; white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* Where the case's pane is wider still, the body and the answer beside it:
+   the body, its links, then the thread, at the left at a reading measure, and
+   the answer form at the right. The properties go back to their row of chips
+   under the title, to give the two the width, cut to one line. The chips and
+   the form are held in view while the body scrolls; a form taller than the
+   pane scrolls on its own, and until it is held, sitting lower under the
+   case's head by --lift (case.ts), it is that much shorter, never below
+   12rem, so its send button is in view. A case with no form, as a closed
+   one, keeps the one column. The form spans the two blocks at the left,
+   what comes before it and what comes after (case.ts); the second grows to
+   the form's height. */
+@container work (width >= 60rem) {
+  .work > #case { --bar: 2.75rem; max-width: 48rem; }
+  .work > #case:has(> .case-main > .answer > form) { max-width: 100rem; }
+  .props {
+    position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 1rem;
+    height: var(--bar); margin: 0 0 1rem; background: var(--bg); border-bottom: 1px solid var(--rule);
+  }
+  :root[data-look="keel"] .props { background: var(--surface); }
+  .props dl { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+  .props dl > div { flex: none; }
+  .props dl > .prop-recommends { flex: 0 1 auto; min-width: 8rem; }
+  .case-main:has(> .answer > form) {
+    display: grid; grid-template-columns: minmax(0, 48rem) minmax(24rem, 1fr); grid-template-rows: auto 1fr;
+    column-gap: 2.5rem; align-items: start;
+  }
+  .case-main:has(> .answer > form) > * { grid-column: 1; }
+  .case-main:has(> .answer > form) > .answer {
+    grid-column: 2; grid-row: 1 / span 2; position: sticky; top: calc(var(--bar) + 1rem);
+    --cap: calc(var(--pane) - var(--bar) - 1rem);
+    max-height: max(min(12rem, var(--cap)), var(--cap) - var(--lift, 0rem)); overflow-y: auto;
+    padding: 0 .75rem .75rem 1.5rem; border-left: 1px solid var(--rule);
+  }
+  .answer > form.respond > :first-child { margin-top: 0; }
+  .answer > .error:not([hidden]) + form.respond > :first-child { margin-top: .75rem; }
+}
+
+/* Follow-up first: a case the agent reopened with a note after it was
+   answered (followup.ts). The note leads, on its own ground with an edge,
+   marked as new since the answer; then that answer, ruled off; then the case
+   as first asked, folded. The option the answer chose is marked in the form. */
+.follow-up { margin: 0 0 1rem; }
+.follow-up-note {
+  --ground: var(--followup-bg); margin: 0 0 1rem; padding: .75rem 1rem; background: var(--ground);
+  border-left: 2px solid var(--followup-edge); border-radius: var(--radius);
+}
+.follow-up-note .age { color: var(--fg-2); }
+.follow-up .meta { margin-bottom: .5rem; }
+.previous-answer { margin: 0 0 1rem; padding-left: .75rem; border-left: 1px solid var(--rule-strong); }
+.previous-answer p { margin: .25rem 0 0; }
+.previous-answer .picked-up { color: var(--fg-2); font-size: .8125rem; }
+details.original { border-top: 1px dashed var(--rule); border-bottom: 1px dashed var(--rule); padding: .5rem 0; }
+/* The question as first asked, and the human's withdraw of a case an agent
+   has, folded away (case.ts). */
+details.original > summary, details.withdraw > summary { cursor: pointer; color: var(--fg-2); font-size: .8125rem; }
+details.original[open] > summary, details.withdraw[open] > summary { margin-bottom: .75rem; }
+
+/* [ERR] inline, in reverse video, never a toast. */
+.error { color: var(--fg); font-weight: 700; }
+.error::before { content: "[ERR]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
+/* [OK] what the last answer, park or resume wrote, in a box that floats over
+   the page, so nothing under it moves when it comes or goes. On a wide screen
+   it sits at the bottom right, clear of the list and of the send button at
+   the left of the form; on a narrow one, across the top, over the masthead,
+   clear of the form below. */
+.recorded {
+  position: fixed; z-index: 10; right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom)); width: min(26rem, calc(100vw - 2rem));
+  display: flex; flex-wrap: wrap; align-items: center; row-gap: .5rem;
+  margin: 0; padding: .75rem 1rem; border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--fg);
+  box-shadow: 0 .5rem 1.5rem rgb(0 0 0 / .15);
+}
+@media (width < 56rem) {
+  .recorded {
+    top: max(.5rem, env(safe-area-inset-top)); bottom: auto;
+    left: max(1rem, env(safe-area-inset-left)); right: max(1rem, env(safe-area-inset-right)); width: auto;
+  }
+}
+/* Its dismiss link is one header chip at the right end, beside the message
+   as it wraps, or under it when the box is too narrow for both. */
+.recorded .dismiss { margin-left: auto; }
+.recorded > span:first-child { flex: 1 1 12rem; margin-right: 1rem; }
+.recorded > span:first-child::before { content: "[OK]"; background: var(--fg); color: var(--bg); padding: 0 .25rem; margin-right: .5rem; }
+/* It slides in, stays six seconds, then fades, and the SPA takes it off the
+   page. Hover or focus holds it where it is. */
+.recorded { animation: recorded-in .25s ease-out both, recorded-out .6s ease-in 6s forwards; }
+.recorded:hover, .recorded:focus-within { animation-play-state: paused; }
+@keyframes recorded-in { from { opacity: 0; transform: translateY(.5rem); } }
+@keyframes recorded-out { to { opacity: 0; transform: translateY(.5rem); } }
+/* Under reduced motion the same two animations only fade. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes recorded-in { from { opacity: 0; } }
+  @keyframes recorded-out { to { opacity: 0; } }
+}
+
+/* The answer form. */
+fieldset { min-width: 0; margin: 1rem 0; padding: .5rem .75rem .75rem; border: 1px solid var(--rule); border-radius: var(--radius); }
+legend { padding: 0 .25rem; }
+/* An approval row's label is the row's title, what is being approved: it
+   sits inside the box above the note, in the text's colour and bold,
+   rather than as a micro-label in the border. It stays the legend, so it
+   still names the group. */
+legend.row-title {
+  float: left; width: 100%; margin: .25rem 0 .5rem; padding: 0;
+  font-size: 1.0625rem; line-height: 1.5rem; font-weight: 700;
+  letter-spacing: 0; text-transform: none; color: var(--fg);
+}
+legend.row-title + * { clear: both; }
+/* A step the human carries out (case i2lDf): a "you" tag beside its title. */
+legend.row-title .badge.by-human { margin-left: .375rem; vertical-align: .125rem; font-weight: 700; color: var(--fg-2); }
+label { display: block; margin: .5rem 0; }
+label.choice { display: flex; align-items: center; gap: .75rem; min-height: 2.75rem; margin: 0; padding: 0 .5rem; cursor: pointer; }
+label.choice:hover { background: var(--bg-1); }
+label.choice:has(:checked) { background: var(--chosen-bg); color: var(--chosen-fg); }
+label.choice .hint { color: var(--fg-2); font-size: .8125rem; }
+label.choice:has(:checked) .hint { color: inherit; }
+/* Key hints (keys.ts): the key beside the choice it picks, the send keys
+   on the send button, j, k and ? by the list. The key hints option hides
+   them (data-hints), and so does a coarse pointer, as on a phone, unless
+   show is chosen. Hidden, they take no space: nothing else moves. */
+.key-hint { flex: none; display: inline-flex; align-items: center; gap: .1875rem; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+:root[data-hints="hide"] .key-hint { display: none; }
+@media (pointer: coarse) {
+  :root:not([data-hints="show"]) .key-hint { display: none; }
+}
+label.choice .key-hint { margin-left: auto; }
+label.choice kbd { color: var(--fg-2); }
+label.choice:has(:checked) .key-hint kbd { color: inherit; background: transparent; border-color: color-mix(in srgb, currentColor 45%, transparent); }
+:root button .key-hint { margin-left: .5rem; font-weight: 400; }
+:root button .key-hint kbd { color: inherit; background: transparent; border-color: color-mix(in srgb, currentColor 45%, transparent); }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: 1rem; }
+.list-keys { display: flex; gap: .75rem; margin: 0 1rem 0 auto; color: var(--fg-2); font-size: .75rem; }
+@media (width < 720px) {
+  .filter-row > .chips.filters { flex: 1 1 auto; }
+  .list-keys { display: none; }
+}
+/* A choice's marks (case.ts): "recommended" on the option the agent
+   recommends, and "your last pick" on the one a follow-up's answer chose. */
+label.choice :is(.last-pick, .recommended) { margin-left: .25rem; color: var(--fg-2); }
+label.choice:has(:checked) :is(.last-pick, .recommended) { color: inherit; }
+/* Drawn rather than native: a native radio in dark mode is a filled grey disc
+   that reads as chosen. Empty is a ring, chosen is a ring with a dot in it
+   (○ / ◉): the chosen row inverts, so a solid disc there is only a blob. */
+input[type=radio] {
+  appearance: none; flex: none; width: 1rem; height: 1rem; margin: 0; color: inherit;
+  border: 1px solid var(--fg-2); border-radius: 50%; background: transparent;
+}
+input[type=radio]:checked {
+  border-color: currentColor;
+  background: radial-gradient(circle, currentColor .25rem, transparent calc(.25rem + 1px));
+}
+textarea, input[type=text] {
+  display: block; width: 100%; margin-top: .25rem; padding: .5rem;
+  font: inherit; font-size: .8125rem; line-height: 1.25rem; color: var(--fg);
+  background: var(--bg-1); border: 1px solid var(--control); border-radius: var(--radius);
+}
+textarea:focus-visible, input[type=text]:focus-visible { outline-offset: -3px; }
+/* A textarea starts at its rows and grows with what is typed, so a long reply
+   or a pasted dump never scrolls inside a one-line box. field-sizing does it
+   where supported; the SPA sets the height from scrollHeight elsewhere. */
+textarea {
+  --rows: 3; min-height: calc(var(--rows) * 1.25rem + 1rem + 2px);
+  field-sizing: content; resize: vertical; overflow-y: hidden;
+}
+textarea[rows="1"] { --rows: 1; }
+textarea[rows="4"] { --rows: 4; }
+
+/* Buttons wear their brackets in CSS with empty alt text, so they stay out of
+   the accessible name. Browsers without the alt syntax keep the first content. */
+button {
+  font: inherit; font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+  margin: .75rem 0; padding: .5rem .75rem; border: 0; background: transparent;
+  color: var(--fg); cursor: pointer;
+}
+button::before { content: "["; content: "[" / ""; color: var(--fg-3); margin-right: .5rem; }
+button::after { content: "]"; content: "]" / ""; color: var(--fg-3); margin-left: .5rem; }
+button:hover, button:hover::before, button:hover::after { background: var(--fg); color: var(--bg); }
+button:active::before { content: "*"; }
+button:focus-visible { outline-offset: -1px; }
+
+/* The form's action is primary: a filled block, since emphasis here is
+   inversion. Brackets stay for secondary actions. Hover swaps to an outline. */
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1.5rem 0 .75rem; }
+.actions button { margin: 0; }
+button.primary {
+  display: block; min-height: 2.75rem; margin: 0; padding: .75rem 1.5rem;
+  font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+  background: var(--primary-bg); color: var(--primary-fg); border: 1px solid var(--primary-bg); border-radius: var(--radius);
+}
+button.primary::before, button.primary::after { content: none; }
+button.primary:hover { background: var(--bg); color: var(--fg); }
+button.primary:active { transform: translateY(1px); }
+/* A dashed --focus ring could vanish into the fill, so it is --primary-fg and inset. */
+button.primary:focus-visible { outline: 1px dashed var(--primary-fg); outline-offset: -5px; }
+button.primary:hover:focus-visible { outline-color: var(--focus); }
+
+/* The thread: a stream with [author] prefixes and dashed separators. */
+.thread { list-style: none; padding: 0; margin: 0; }
+.event { padding: .75rem 0; border-top: 1px dashed var(--rule); }
+.event:first-child { border-top: 0; padding-top: 0; }
+.event .who { color: var(--fg-2); font-weight: 500; }
+.event.author-human .who { color: var(--fg); font-weight: 700; }
+.event p { margin: .25rem 0 0; }
+.event .body { margin-top: .25rem; }
+/* The body or context an amend replaced, ruled off from the lines after it. */
+.event summary { cursor: pointer; }
+.event details > .body, .event details > .context { padding-left: .75rem; border-left: 1px solid var(--rule-strong); }
+/* A replaced context keeps its line breaks, as the thread lines for the new one do. */
+.event details > .context { white-space: pre-line; }
+/* Who has an in-flight case, on its card's ask line. */
+.flight strong { color: var(--fg); }
+
+/* Phone: the header drops the rule and puts the tally on a line of its own
+   under the wordmark and chips, and controls get a real border and at least
+   16px text, which stops iOS zooming in on focus. */
+@media (width < 720px) {
+  header.top { gap: .5rem; padding: .5rem .75rem; }
+  header.top .rule { display: none; }
+  .chips { margin-left: auto; }
+  .tally { order: 1; flex-basis: 100%; }
+  .tally:empty { display: none; }
+  .chips a, .chips button { padding: .5rem .75rem; }
+  .chips button { display: inline-block; width: auto; min-height: 0; border: 0; }
+  textarea, input[type=text] { font-size: max(1rem, 16px); }
+  button { display: block; width: 100%; min-height: 2.75rem; border: 1px solid var(--control); border-radius: var(--radius); }
+  .actions { flex-direction: column; align-items: stretch; gap: .5rem; }
+  button::before, button::after, button:active::before { content: none; }
+}
+
+/* The SPA's own. A line across the top of the page while serve cannot be
+   reached, in the [ERR] style. Above the columns on a wide screen, the
+   columns give it room. */
+.notice { margin: 0; padding: .5rem 1rem; border-bottom: 1px solid var(--rule); }
+@media (width >= 56rem) {
+  main:has(> .notice) { display: flex; flex-direction: column; }
+  main > .notice ~ .split { flex: 1; min-height: 0; height: auto; }
+}
+/* A newer build of serve is running while something is typed (app.ts): a
+   line across the top of the page that stays until the human reloads, with
+   the button that does, in the accent. Its box is there when empty, for the
+   live region, and takes no space. */
+.new-build {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem; margin: 0; padding: .375rem 1rem;
+  border-bottom: 1px solid var(--focus); background: color-mix(in srgb, var(--focus) 10%, var(--bg)); color: var(--fg);
+}
+.new-build button { margin: 0; }
+@media (width >= 56rem) {
+  main:has(> .new-build-live > .new-build) { display: flex; flex-direction: column; }
+  main:has(> .new-build-live > .new-build) > .split { flex: 1; min-height: 0; height: auto; }
+}
+@media (width < 720px) {
+  .new-build button { width: auto; }
+}
+
+/* Mono's own rules (design-pack/directions/mono): the structure as it is,
+   with the accent on what is yours (the selected card, a chosen option,
+   send, focus, your events in the thread, the wordmark's prompt), the
+   kind's glyph in its hue, a louder blocking and a dashed parked rail. */
+:root[data-look="mono"] a { text-decoration-color: var(--focus); }
+:root[data-look="mono"] :where(a:hover) { background: var(--primary-bg); color: var(--primary-fg); }
+:root[data-look="mono"] ::selection { background: var(--primary-bg); color: var(--primary-fg); }
+:root[data-look="mono"] :focus-visible { outline-width: 2px; }
+
+/* The wordmark keeps its colours on hover. */
+:root[data-look="mono"] .brand:hover { background: none; color: var(--fg); }
+
+/* The list's filter row: tighter, so the five chips fit on one line in the
+   list column at a desktop width with three-figure counts. When they must
+   wrap, they wrap as a table: each chip draws its own right and bottom
+   rules against the group's top and left, and grows to fill its row, so
+   every row ends at the group's edge and no divider dangles. */
+:root[data-look="mono"] .list .chips.filters { margin: 1rem .75rem; }
+:root[data-look="mono"] main nav.chips.filters { border-width: 1px 0 0 1px; }
+:root[data-look="mono"] main nav.chips.filters > a[href] {
+  flex: 1 1 auto; padding: .25rem .375rem; letter-spacing: .02em; text-align: center;
+  border-right: 1px solid var(--control); border-bottom: 1px solid var(--control);
+}
+
+/* Blocking is louder: a filled count in the tally, a heavier badge, a
+   wider rail. Parked's rail is dashed, as its badge is. */
+:root[data-look="mono"] .tally .hot strong { padding: 0 .25rem; background: var(--blocking); color: var(--on-blocking); }
+:root[data-look="mono"] .urgency-blocking .badge.urgency { font-weight: 800; }
+:root[data-look="mono"] .card { border-left-width: .1875rem; }
+:root[data-look="mono"] .card.parked { border-left-style: dashed; }
+
+/* The kind's glyph, in its hue, beside the kind's word: the urgency badge
+   goes first on a card's meta line, as it does in the design. */
+:root[data-look="mono"] .kind-icon { display: inline; font-weight: 800; text-transform: none; }
+:root[data-look="mono"] .meta > .kind-icon + .badge { order: -1; }
+:root[data-look="mono"] .kind-decision { color: var(--kind-decision); }
+:root[data-look="mono"] .kind-approval { color: var(--kind-approval); }
+:root[data-look="mono"] .kind-signoff { color: var(--kind-signoff); }
+:root[data-look="mono"] .kind-question { color: var(--kind-question); }
+:root[data-look="mono"] .kind-stuck { color: var(--kind-stuck); }
+:root[data-look="mono"] .kind-fyi { color: var(--kind-fyi); }
+:root[data-look="mono"] .kind-message { color: var(--kind-message); }
+:root[data-look="mono"] .kind-briefing { color: var(--kind-briefing); }
+:root[data-look="mono"] .kind-decision::before { content: "\25C6"; content: "\25C6" / ""; }
+:root[data-look="mono"] .kind-approval::before { content: "\25B6\FE0E"; content: "\25B6\FE0E" / ""; }
+:root[data-look="mono"] .kind-signoff::before { content: "\2713"; content: "\2713" / ""; }
+:root[data-look="mono"] .kind-question::before { content: "?"; content: "?" / ""; }
+:root[data-look="mono"] .kind-stuck::before { content: "!"; content: "!" / ""; }
+:root[data-look="mono"] .kind-fyi::before { content: "i"; content: "i" / ""; }
+:root[data-look="mono"] .kind-message::before { content: "\2192"; content: "\2192" / ""; }
+:root[data-look="mono"] .kind-briefing::before { content: "\00B6"; content: "\00B6" / ""; }
+
+/* The selected card: tinted, outlined and marked in the accent. */
+:root[data-look="mono"] .list .card.selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus) 45%, transparent); }
+:root[data-look="mono"] .list .card.selected :is(h2, h3)::before { color: var(--focus); }
+@media (width < 56rem) {
+  :root[data-look="mono"] .split.home .list .card.selected { box-shadow: none; }
+}
+
+/* A chosen option keeps its text: the selected card's tint and an accent
+   bar, not inversion. */
+:root[data-look="mono"] label.choice:has(:checked) { background: var(--bg-2); color: var(--fg); box-shadow: inset .1875rem 0 0 var(--focus); }
+:root[data-look="mono"] label.choice:has(:checked) .hint { color: var(--fg-2); }
+:root[data-look="mono"] label.choice:has(:checked) input[type=radio] { color: var(--focus); }
+:root[data-look="mono"] label.choice .key-hint { order: -1; margin-left: 0; }
+
+/* Send, your events, what the agent followed up with, and what was recorded. */
+:root[data-look="mono"] button.primary:hover { color: var(--focus); }
+:root[data-look="mono"] .event.author-human .who { color: var(--focus); }
+:root[data-look="mono"] .follow-up-note { border: 1px solid var(--followup-edge); }
+:root[data-look="mono"] .follow-up-note .badge { background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary-bg); font-weight: 700; }
+:root[data-look="mono"] .error::before { background: var(--blocking); color: var(--on-blocking); }
+:root[data-look="mono"] .recorded { border-left: .1875rem solid var(--focus); }
+:root[data-look="mono"] .recorded > span:first-child::before { background: var(--primary-bg); color: var(--primary-fg); }
+:root[data-look="mono"] .zero-panel { border-color: var(--focus); }
+:root[data-look="mono"] .zero-panel h1::before { color: var(--focus); }
+
+/* Daylight's own rules: the structure above in its shapes. Sentence case
+   and no letter-spacing, rounded boxes and pills, no brackets or markers,
+   a tile per kind, the needs-you banner, and a blue bar on the selected
+   card. Colours are its tokens, so dark follows. */
+:root:is(:not([data-look]), [data-look="daylight"]) body {
+  --round: ui-rounded, "SF Pro Rounded", var(--sans);
+  --lift: 0 1px 2px rgb(60 40 0 / .06), 0 .125rem .5rem rgb(60 40 0 / .05);
+  line-height: 1.6;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) :is(.label, .meta, .section, legend, .body th, .chips a, .chips button, button, .props dt, .props .named dt) {
+  text-transform: none; letter-spacing: 0;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) :is(.label, .meta, .body th) { font-size: .8125rem; line-height: 1.4; font-weight: 500; }
+:root:is(:not([data-look]), [data-look="daylight"]) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root:is(:not([data-look]), [data-look="daylight"]) :where(a:not(.card):hover) { background: none; color: inherit; text-decoration: underline; }
+:root:is(:not([data-look]), [data-look="daylight"]) :is(h1, h2, h3).section { font: 750 .9375rem/1.3 var(--round); color: var(--fg); }
+:root:is(:not([data-look]), [data-look="daylight"]) :is(h1, h2, h3).section::before { content: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) :is(h1, h2, h3).section::after { border-top-style: solid; }
+
+/* The masthead: the wordmark in rounded bold, the views as a pill group. */
+:root:is(:not([data-look]), [data-look="daylight"]) header.top { min-height: 3.75rem; padding: .5rem 1.25rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .brand { font: 800 1.1875rem/1 var(--round); letter-spacing: -.01em; text-transform: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) header.top .rule { border-top-color: transparent; }
+/* The mark with its accent, daylight's blue, which is the mark's own. */
+:root:is(:not([data-look]), [data-look="daylight"]) .brand .mark { background: url(/static/brand/mark-accent-light.svg) center / contain no-repeat; mask: none; }
+@media (prefers-color-scheme: dark) {
+  :root:is(:not([data-look]), [data-look="daylight"]):not([data-theme="light"]) .brand .mark { background-image: url(/static/brand/mark-accent-dark.svg); }
+}
+:root:is(:not([data-look]), [data-look="daylight"])[data-theme="dark"] .brand .mark { background-image: url(/static/brand/mark-accent-dark.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .tally { font-variant-numeric: tabular-nums; }
+:root:is(:not([data-look]), [data-look="daylight"]) .chips { gap: 2px; padding: 2px; border: 1px solid var(--rule); border-radius: 1.25rem; background: var(--bg-1); }
+:root:is(:not([data-look]), [data-look="daylight"]) .chips :is(a, button) {
+  padding: .375rem .875rem; border: 0; border-radius: 1rem;
+  font-size: .875rem; line-height: 1.25rem; font-weight: 600; color: var(--fg-2);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .chips :is(a, button):hover { background: var(--bg); color: var(--fg); text-decoration: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) .chips a.on { background: var(--chosen-bg); color: var(--chosen-fg); box-shadow: var(--lift); }
+
+/* The list: a tinted column beside the case; cards are rounded rows with
+   the kind's tile at the left, the title first, then the ask, then the rest,
+   and the age at the top right. The group names the urgency. */
+@media (width >= 56rem) {
+  :root:is(:not([data-look]), [data-look="daylight"]) .split > .list { background: var(--bg-1); }
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .group > :is(h2, summary) {
+  margin: 0 .5rem .375rem; padding: 1.125rem .5rem .4375rem;
+  font: 750 .9375rem/1.2 var(--round); border-bottom-color: var(--rule-strong);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .group > :is(h2, summary) .count { margin-left: auto; font: 700 .75rem/1 var(--sans); font-variant-numeric: tabular-nums; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card {
+  display: flex; flex-direction: column; margin: .125rem .5rem; padding: .625rem .75rem .6875rem 2.75rem;
+  border: 0; border-radius: var(--radius);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card:hover { background: var(--bg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card.selected { background: var(--bg-2); }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card.selected :is(h2, h3)::before { content: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card.selected::before {
+  content: ""; position: absolute; left: -.5rem; top: .625rem; bottom: .625rem; width: .1875rem;
+  border-radius: 0 .1875rem .1875rem 0; background: var(--focus);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card :is(h2, h3) { order: -1; margin: 0; padding-right: 2.5rem; font-size: .90625rem; line-height: 1.35; font-weight: 620; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card .ask { font-size: .8125rem; line-height: 1.4; font-weight: 500; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card .ask.followup { font-weight: 700; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card .meta { order: 1; margin-top: .25rem; gap: .25rem .5rem; }
+/* The case on / is not shown on a narrow screen, so no card is selected. */
+@media (width < 56rem) {
+  :root:is(:not([data-look]), [data-look="daylight"]) .split.home .list .card.selected { background: none; }
+  :root:is(:not([data-look]), [data-look="daylight"]) .split.home .list .card.selected::before { content: none; }
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card .meta .age {
+  position: absolute; top: .6875rem; right: .75rem; font-size: .75rem; font-weight: 600; color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card.urgency-blocking:not(.parked) .meta .age { color: var(--blocking); }
+:root:is(:not([data-look]), [data-look="daylight"]) #inbox .card .badge.urgency { display: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) .list .card .kind-icon { position: absolute; top: .6875rem; left: .75rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .tag { padding: 0 .4375rem; border-radius: 1rem; background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 600; }
+:root:is(:not([data-look]), [data-look="daylight"]) .tag::before { content: "#"; content: "#" / ""; color: var(--fg-2); }
+
+/* The kind tiles: the kind's hue with its glyph cut from it. */
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-icon {
+  display: inline-grid; place-items: center; flex: none; width: 1.375rem; height: 1.375rem;
+  border-radius: .4375rem; background: var(--kind-fyi);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-icon::before {
+  content: ""; width: .875rem; height: .875rem; background: var(--on-kind);
+  mask: var(--glyph) center / contain no-repeat;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-decision { background: var(--kind-decision); --glyph: url(/static/kinds/daylight/decision.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-approval { background: var(--kind-approval); --glyph: url(/static/kinds/daylight/approval.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-signoff { background: var(--kind-signoff); --glyph: url(/static/kinds/daylight/signoff.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-question { background: var(--kind-question); --glyph: url(/static/kinds/daylight/question.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-stuck { background: var(--kind-stuck); --glyph: url(/static/kinds/daylight/stuck.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-fyi { background: var(--kind-fyi); --glyph: url(/static/kinds/daylight/fyi.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-message { background: var(--kind-message); --glyph: url(/static/kinds/daylight/message.svg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .kind-briefing { background: var(--kind-briefing); --glyph: url(/static/kinds/daylight/briefing.svg); }
+
+/* The needs-you banner: sunflower, with a star, the count, who is waiting
+   and for how long, and a link to the first case. */
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you {
+  display: flex; align-items: center; gap: .75rem; margin: 1rem .5rem .5rem; padding: .625rem .625rem .625rem .875rem;
+  border: 1px solid var(--sun-edge); border-radius: .875rem; background: var(--sun-bg); color: var(--sun-fg);
+  font-size: .875rem; line-height: 1.4;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you::before { content: "\2605"; content: "\2605" / ""; font-size: 1.25rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you > span { flex: 1; min-width: 0; }
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you small { display: block; font-size: .8125rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you a {
+  flex: none; padding: .375rem 1rem; border-radius: 1.25rem; background: var(--sun-fg); color: var(--sun-bg);
+  font-weight: 700; text-decoration: none;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you a::first-letter { text-transform: uppercase; }
+:root:is(:not([data-look]), [data-look="daylight"]) .needs-you a:hover { background: var(--sun-fg); color: var(--sun-bg); text-decoration: underline; }
+
+/* Badges are pills, sentence case. */
+:root:is(:not([data-look]), [data-look="daylight"]) .badge {
+  display: inline-block; padding: 0 .5rem; border-radius: 1rem; font-size: .75rem; line-height: 1.25rem;
+  letter-spacing: 0; font-weight: 600;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .badge::first-letter { text-transform: uppercase; }
+
+/* The case: a big rounded title, the properties as a meta line under it
+   where the pane is narrow, the form in a raised box, round radios in
+   rounded rows, and pill buttons. */
+:root:is(:not([data-look]), [data-look="daylight"]) .case-head h1 { font: 800 clamp(1.375rem, 3.2cqw, 1.8125rem)/1.2 var(--round); letter-spacing: -.015em; text-wrap: balance; }
+:root:is(:not([data-look]), [data-look="daylight"]) .context { font-size: 1.0625rem; color: var(--fg-2); }
+:root:is(:not([data-look]), [data-look="daylight"]) .brief { display: inline-block; padding: .375rem .625rem; border-radius: var(--radius-sm); background: var(--bg-1); font-size: .8125rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .props dl { gap: .25rem .875rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .props dl > div { gap: .375rem; padding: 0; border: 0; color: var(--fg-2); }
+:root:is(:not([data-look]), [data-look="daylight"]) .props .prop-kind dd { color: var(--fg); font-weight: 650; }
+:root:is(:not([data-look]), [data-look="daylight"]) .props .prop-kind dd::first-letter { text-transform: uppercase; }
+:root:is(:not([data-look]), [data-look="daylight"]) .props .kind-icon { width: 1.125rem; height: 1.125rem; border-radius: .375rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .props .kind-icon::before { width: .75rem; height: .75rem; }
+@container work (width >= 50rem) {
+  :root:is(:not([data-look]), [data-look="daylight"]) .props dt { font-size: .8125rem; }
+  :root:is(:not([data-look]), [data-look="daylight"]) .props dd { color: var(--fg); }
+}
+:root:is(:not([data-look]), [data-look="daylight"]) .body { line-height: 1.65; }
+:root:is(:not([data-look]), [data-look="daylight"]) code { font-family: var(--mono); font-size: .88em; border: 1px solid var(--rule); }
+:root:is(:not([data-look]), [data-look="daylight"]) :is(pre, .props) code { border: 0; }
+:root:is(:not([data-look]), [data-look="daylight"]) .body table { border: 1px solid var(--rule); border-radius: var(--radius); }
+:root:is(:not([data-look]), [data-look="daylight"]) .body th { font-family: var(--ui); padding: .5rem .75rem; background: var(--bg-1); border-bottom-color: var(--rule); }
+:root:is(:not([data-look]), [data-look="daylight"]) .body td { padding: .5rem .75rem; border-bottom: 1px solid var(--rule); }
+:root:is(:not([data-look]), [data-look="daylight"]) .links li::before { content: none; }
+
+:root:is(:not([data-look]), [data-look="daylight"]) form.respond > fieldset {
+  padding: 1.25rem; border-radius: 1.25rem; background: var(--surface); box-shadow: var(--lift);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) form.respond > fieldset > legend {
+  float: left; width: 100%; margin: 0 0 .75rem; padding: 0; font: 750 1.0625rem/1.2 var(--round); color: var(--fg);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) form.respond > fieldset > legend + * { clear: both; }
+:root:is(:not([data-look]), [data-look="daylight"]) form.respond > fieldset > legend.row-title { font-size: 1.25rem; line-height: 1.3; }
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice {
+  gap: .75rem; min-height: 3rem; margin: 0 0 .375rem; padding: .5rem .75rem;
+  border: 1px solid var(--rule); border-radius: var(--radius); background: var(--bg);
+}
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice:hover { background: var(--bg); border-color: var(--control); }
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice:has(:checked) { background: var(--bg-2); color: var(--fg); border-color: var(--focus); }
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice:has(:checked) .hint { color: var(--fg-2); }
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root:is(:not([data-look]), [data-look="daylight"]) label.choice :focus-visible { outline: 0; }
+:root:is(:not([data-look]), [data-look="daylight"]) input[type=radio] { width: 1.375rem; height: 1.375rem; border: 2px solid var(--control); background: var(--surface); }
+:root:is(:not([data-look]), [data-look="daylight"]) input[type=radio]:checked {
+  border-color: var(--primary-bg);
+  background: radial-gradient(circle, var(--primary-fg) .25rem, var(--primary-bg) calc(.25rem + 1px));
+}
+:root:is(:not([data-look]), [data-look="daylight"]) :is(textarea, input[type=text]) { padding: .625rem .75rem; background: var(--bg); font-family: var(--prose); }
+
+:root:is(:not([data-look]), [data-look="daylight"]) button {
+  min-height: 2.375rem; padding: 0 1rem; border: 1px solid var(--rule-strong); border-radius: 1.25rem;
+  background: var(--surface); font-size: .875rem; font-weight: 650;
+}
+:root:is(:not([data-look]), [data-look="daylight"]) button::before, :root:is(:not([data-look]), [data-look="daylight"]) button::after { content: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) button:hover { background: var(--bg-1); color: var(--fg); }
+:root:is(:not([data-look]), [data-look="daylight"]) button.primary { padding: 0 1.5rem; border-color: var(--primary-bg); border-radius: 1.25rem; background: var(--primary-bg); color: var(--primary-fg); font-size: .9375rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) button.primary:hover { background: var(--primary-bg); color: var(--primary-fg); text-decoration: underline; }
+:root:is(:not([data-look]), [data-look="daylight"]) button.primary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root:is(:not([data-look]), [data-look="daylight"]) .chips button { min-height: 0; background: none; }
+
+/* An agent's follow-up: sunflower, boxed; the answer and the question as
+   first asked in quieter boxes. */
+:root:is(:not([data-look]), [data-look="daylight"]) .follow-up-note { padding: 1.125rem 1.25rem; border: 1px solid var(--followup-edge); border-radius: 1.25rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .previous-answer { padding: .875rem 1rem; border: 1px solid var(--rule); border-radius: .875rem; background: var(--bg-1); }
+:root:is(:not([data-look]), [data-look="daylight"]) details.original { padding: .75rem 1rem; border: 1px solid var(--rule); border-radius: .875rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .event { border-top-style: solid; }
+:root:is(:not([data-look]), [data-look="daylight"]) .event .who { font-weight: 650; }
+:root:is(:not([data-look]), [data-look="daylight"]) .error::before, :root:is(:not([data-look]), [data-look="daylight"]) .recorded > span:first-child::before { border-radius: var(--radius-sm); }
+:root:is(:not([data-look]), [data-look="daylight"]) .error::before { content: "!"; content: "!" / ""; padding: 0 .5rem; background: var(--blocking); color: var(--on-blocking); }
+:root:is(:not([data-look]), [data-look="daylight"]) .recorded > span:first-child::before { content: "\2713"; content: "\2713" / ""; padding: 0 .375rem; background: var(--chosen-bg); color: var(--chosen-fg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .empty, :root:is(:not([data-look]), [data-look="daylight"]) .zero-panel { border-style: solid; border-radius: 1.25rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .zero-panel h1 { font: 800 1.625rem/1.2 var(--round); }
+
+/* The options dialog: a rounded raised panel. Its groups and rows keep the
+   structure's layout, as in mono and keel, so changing the look in it moves
+   nothing: the answer form's row box and spacing are taken back off, and
+   the chosen row is ringed in the accent without a border. The headings
+   keep the rounded face at the structure's line height. */
+:root:is(:not([data-look]), [data-look="daylight"]) dialog.options { border-color: var(--rule); border-radius: 1.25rem; box-shadow: 0 .75rem 2rem rgb(60 40 0 / .12); }
+:root:is(:not([data-look]), [data-look="daylight"]) .recorded { border-color: var(--rule); box-shadow: 0 .75rem 2rem rgb(60 40 0 / .12); }
+:root:is(:not([data-look]), [data-look="daylight"]) dialog.options :is(.section, .label) { line-height: 1rem; }
+:root:is(:not([data-look]), [data-look="daylight"]) .options-body legend { font: 700 .8125rem/1rem var(--round); color: var(--fg); }
+:root:is(:not([data-look]), [data-look="daylight"]) .options-body label.choice { min-height: 2.75rem; margin: 0; padding: 0 .5rem; border: 0; background: none; }
+:root:is(:not([data-look]), [data-look="daylight"]) .options-body label.choice:hover { background: var(--bg-1); }
+:root:is(:not([data-look]), [data-look="daylight"]) .options-body label.choice:has(:checked) { background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--focus); }
+:root:is(:not([data-look]), [data-look="daylight"]) .options-body input[type=radio] { width: 1rem; height: 1rem; }
+
+/* Phone: buttons are full-width pills, the send action first in reach. */
+@media (width < 720px) {
+  :root:is(:not([data-look]), [data-look="daylight"]) header.top { padding: .625rem 1rem; }
+  :root:is(:not([data-look]), [data-look="daylight"]) button { min-height: 3rem; border-radius: 1.5rem; }
+  :root:is(:not([data-look]), [data-look="daylight"]) .chips :is(a, button) { min-height: 2.75rem; display: inline-flex; align-items: center; }
+}
+
+/* The keel look's own rules (design-pack/directions/keel). They take off
+   mono's marks, which keel does not use: brackets on buttons, uppercase
+   micro-labels, dashed rules, the > marker and the coloured rails, and draw
+   keel's in their place: sentence-weight labels, rounded rows and buttons,
+   a 2px accent bar on the selected card, the kind's glyph at the card's
+   left, the case in a raised pane on a wide screen, and a 2px accent focus
+   ring. Nothing here moves an element to another place in the layout, but
+   the order of a card's three lines: title, ask, then the meta row. */
+:root[data-look="keel"] body { font-size: .875rem; line-height: 1.375rem; font-variant-ligatures: normal; font-feature-settings: "cv05"; }
+:root[data-look="keel"] :where(a:hover) { background: none; color: inherit; text-decoration: underline; }
+/* A card, a chip and the wordmark are links drawn as blocks, not underlined. */
+:root[data-look="keel"] :is(.card, .chips a, .brand):hover { text-decoration: none; }
+:root[data-look="keel"] :is(.body, .links, .zero-panel, .row-note) a { color: var(--focus); }
+:root[data-look="keel"] .thread a.case-ref { color: var(--focus); }
+:root[data-look="keel"] ::selection { background: var(--primary-bg); color: var(--primary-fg); }
+:root[data-look="keel"] :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root[data-look="keel"] h1 { letter-spacing: -.018em; font-weight: 600; }
+:root[data-look="keel"] .case-head h1 { font-size: 1.375rem; line-height: 1.875rem; }
+:root[data-look="keel"] :is(h2, h3) { font-weight: 600; }
+:root[data-look="keel"] :is(.label, .meta, .section, legend, .body th) { font-size: .75rem; letter-spacing: 0; text-transform: none; }
+:root[data-look="keel"] :is(.label, .section, legend) { font-weight: 600; }
+:root[data-look="keel"] .section::before, :root[data-look="keel"] .section::after { content: none; }
+:root[data-look="keel"] .tag { padding: 0 .375rem; border: 1px solid var(--rule-strong); border-radius: var(--radius-sm); line-height: 1.125rem; white-space: nowrap; }
+:root[data-look="keel"] .badge { font-size: .6875rem; letter-spacing: 0; padding: 0 .375rem; border-radius: var(--radius-sm); }
+:root[data-look="keel"] kbd {
+  display: inline-block; min-width: 1.25rem; padding: 0 .3125rem; text-align: center;
+  font-family: var(--ui); font-size: .75rem; line-height: 1.125rem; color: var(--fg-2);
+  background: var(--bg-1); border-color: var(--rule-strong); border-bottom-color: var(--control);
+}
+
+/* The kind's glyph: keel's own drawing, as a mask filled in the kind's hue. */
+:root[data-look="keel"] .kind-icon {
+  display: inline-block; flex: none; width: 1rem; height: 1rem; vertical-align: -.1875rem;
+  background: currentColor; mask: center / contain no-repeat;
+}
+:root[data-look="keel"] .kind-icon.kind-decision { color: var(--kind-decision); mask-image: url(/static/kinds/keel/decision.svg); }
+:root[data-look="keel"] .kind-icon.kind-approval { color: var(--kind-approval); mask-image: url(/static/kinds/keel/approval.svg); }
+:root[data-look="keel"] .kind-icon.kind-signoff { color: var(--kind-signoff); mask-image: url(/static/kinds/keel/signoff.svg); }
+:root[data-look="keel"] .kind-icon.kind-question { color: var(--kind-question); mask-image: url(/static/kinds/keel/question.svg); }
+:root[data-look="keel"] .kind-icon.kind-stuck { color: var(--kind-stuck); mask-image: url(/static/kinds/keel/stuck.svg); }
+:root[data-look="keel"] .kind-icon.kind-fyi { color: var(--kind-fyi); mask-image: url(/static/kinds/keel/fyi.svg); }
+:root[data-look="keel"] .kind-icon.kind-message { color: var(--kind-message); mask-image: url(/static/kinds/keel/message.svg); }
+:root[data-look="keel"] .kind-icon.kind-briefing { color: var(--kind-briefing); mask-image: url(/static/kinds/keel/briefing.svg); }
+
+/* Masthead: the wordmark in the chrome's face, the views as rounded tabs. */
+:root[data-look="keel"] .brand { font-size: .9375rem; font-weight: 650; letter-spacing: -.01em; text-transform: none; }
+:root[data-look="keel"] header.top .rule { border-top: 0; }
+:root[data-look="keel"] .tally { font-size: .8125rem; }
+:root[data-look="keel"] .tally strong { font-weight: 600; }
+:root[data-look="keel"] .chips { gap: .125rem; border: 0; }
+:root[data-look="keel"] :is(.chips a, .chips button) {
+  padding: .25rem .625rem; border: 0; border-radius: var(--radius); background: none;
+  font-size: .8125rem; font-weight: 500; letter-spacing: 0; text-transform: none;
+}
+:root[data-look="keel"] :is(.chips a, .chips button):hover { background: var(--bg-1); color: var(--fg); }
+:root[data-look="keel"] .chips a.on { background: var(--bg-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--focus); }
+
+/* The inbox: rounded rows, the glyph in the gutter where mono draws its
+   marker, the age at the top right; a 2px accent bar on the selected card. */
+:root[data-look="keel"] .list .group > :is(h2, summary) { padding: 1rem 1rem .25rem 1.125rem; border-bottom: 0; }
+:root[data-look="keel"] .list .group > :is(h2, summary) .count { color: var(--fg-3); }
+:root[data-look="keel"] .list .card {
+  display: flex; flex-direction: column; gap: .125rem; margin: .125rem .375rem;
+  padding: .625rem .75rem .625rem 2.25rem; border: 0; border-radius: .5rem;
+}
+:root[data-look="keel"] .list .card:focus-visible { outline-offset: -.125rem; }
+:root[data-look="keel"] .list .card :is(h2, h3) { order: 0; margin: 0; padding-right: 2.5rem; font-size: .875rem; font-weight: 500; line-height: 1.25rem; }
+:root[data-look="keel"] .list .card .ask { order: 1; font-size: .8125rem; }
+:root[data-look="keel"] .list .card .meta { order: 2; gap: .25rem .5rem; }
+:root[data-look="keel"] .list .card .kind-icon { position: absolute; left: .75rem; top: .75rem; }
+:root[data-look="keel"] .list .card .meta .age { position: absolute; right: .75rem; top: .625rem; }
+:root[data-look="keel"] .list .card.parked :is(h2, h3) { color: var(--fg-2); }
+/* The group heading says the urgency, and the glyph the kind: their words
+   stay for screen readers. The Parked group does not say the urgency, so a
+   parked card keeps its badge. */
+:root[data-look="keel"] :is(.list .card:not(.parked) .badge.urgency, .list .card .badge.urgency + span) {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+:root[data-look="keel"] .list .card.selected :is(h2, h3)::before { content: none; }
+:root[data-look="keel"] .list .card.selected::before {
+  content: ""; position: absolute; left: 0; top: .625rem; bottom: .625rem; width: 2px;
+  border-radius: 1px; background: var(--focus);
+}
+@media (width < 56rem) {
+  :root[data-look="keel"] .split.home .list .card.selected::before { content: none; }
+}
+:root[data-look="keel"] .list .chips.filters { margin: 1rem .75rem; }
+
+/* The case: on a wide screen a raised pane on the page's ground. */
+@media (width >= 56rem) {
+  :root[data-look="keel"] .split > .list { border-right: 0; }
+  :root[data-look="keel"] .split > .work { margin: .5rem .5rem .5rem 0; background: var(--surface); border: 1px solid var(--rule); border-radius: .75rem; }
+  :root[data-look="keel"] .split > .work { --ground: var(--surface); }
+}
+:root[data-look="keel"] .context { font-size: .9375rem; line-height: 1.5rem; }
+:root[data-look="keel"] .props dl > div { border-radius: var(--radius); }
+:root[data-look="keel"] .props dt, :root[data-look="keel"] .props .named dt { font-size: .8125rem; letter-spacing: 0; text-transform: none; color: var(--fg-2); }
+:root[data-look="keel"] .props .kind-icon { margin-right: .125rem; }
+:root[data-look="keel"] .body td { border-bottom-style: solid; }
+:root[data-look="keel"] :is(.body hr, .event) { border-top-style: solid; }
+:root[data-look="keel"] details.original { border-top-style: solid; border-bottom-style: solid; }
+:root[data-look="keel"] code { font-family: var(--mono); }
+:root[data-look="keel"] .follow-up-note { border-radius: .5rem; }
+:root[data-look="keel"] .previous-answer { padding: .75rem 1rem; border: 1px solid var(--rule-strong); border-radius: .5rem; }
+:root[data-look="keel"] .empty { border-style: solid; }
+:root[data-look="keel"] .zero-panel { border: 0; text-align: center; }
+:root[data-look="keel"] .zero-panel h1::before { content: none; }
+
+/* The form: rounded groups and rows; a chosen row is tinted and ringed in
+   the accent, like the selected card, rather than inverted. */
+:root[data-look="keel"] fieldset { border-radius: .5rem; }
+:root[data-look="keel"] legend.row-title { font-size: 1.0625rem; line-height: 1.5rem; font-weight: 600; }
+:root[data-look="keel"] label.choice { border-radius: var(--radius); }
+:root[data-look="keel"] label.choice:has(:checked) { background: var(--bg-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--focus); }
+:root[data-look="keel"] label.choice:has(:checked) input[type=radio] { color: var(--focus); }
+:root[data-look="keel"] input[type=radio] { border-color: var(--control); }
+:root[data-look="keel"] button {
+  padding: .375rem .75rem; border: 1px solid var(--control); border-radius: var(--radius);
+  font-weight: 500; letter-spacing: 0; text-transform: none;
+}
+:root[data-look="keel"] button::before, :root[data-look="keel"] button::after, :root[data-look="keel"] button:active::before { content: none; }
+:root[data-look="keel"] button:hover { background: var(--bg-1); color: var(--fg); }
+@media (width >= 720px) {
+  :root[data-look="keel"] button { border-color: var(--rule-strong); }
+}
+/* The code block's tabs: sentence case, and the pressed wrap's tick in the accent. */
+:root[data-look="keel"] .code > .code-tools > button { font-weight: 500; letter-spacing: 0; text-transform: none; }
+:root[data-look="keel"] .code > .code-tools > button.wrap-toggle[aria-pressed="true"]::before { color: var(--focus); }
+:root[data-look="keel"] button.primary {
+  min-height: 2.25rem; padding: .5rem 1rem; font-weight: 600;
+  background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary-bg);
+}
+:root[data-look="keel"] button.primary:hover {
+  color: var(--primary-fg); background: color-mix(in srgb, var(--primary-bg) 85%, #000);
+  border-color: color-mix(in srgb, var(--primary-bg) 85%, #000);
+}
+:root[data-look="keel"] button.primary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root[data-look="keel"] dialog.options { border-radius: .75rem; box-shadow: 0 1rem 3rem -.75rem rgba(0, 0, 0, .5); }
+:root[data-look="keel"] .recorded { border-radius: .75rem; box-shadow: 0 1rem 3rem -.75rem rgba(0, 0, 0, .5); }
+:root[data-look="keel"] .error { color: var(--blocking); font-weight: 500; }
+:root[data-look="keel"] .error::before { content: "\26A0"; content: "\26A0" / ""; background: none; color: inherit; padding: 0; }
+:root[data-look="keel"] .recorded > span:first-child::before { content: "\2713"; content: "\2713" / ""; background: none; color: var(--kind-signoff); padding: 0; }
+
+/* Phone: the chips are a 44px touch target in every look, as daylight's are.
+   Mono and keel set their chips tighter, about 24px tall, so they get the
+   height here, for every chip: the header's, the filters' and the recorded
+   banner's dismiss. The width and padding are the look's own. */
+@media (width < 720px) {
+  :root:is([data-look="mono"], [data-look="keel"]) .chips :is(a, button) {
+    min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center;
+  }
+}
+
+/* Motion: hover grounds ease in 120ms; the recorded box arrives on keel's
+   curve; a page change cross-fades in 150ms. None of it under reduced
+   motion, where the view transition is off already. */
+:root[data-look="keel"] :is(.card, button, label.choice, .chips a) { transition: background-color .12s; }
+:root[data-look="keel"] .recorded { animation-duration: .22s, .6s; animation-timing-function: cubic-bezier(.2, 0, 0, 1), ease-in; }
+:root[data-look="keel"]::view-transition-old(root), :root[data-look="keel"]::view-transition-new(root) { animation-duration: .15s; }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-look="keel"] :is(.card, button, label.choice, .chips a) { transition: none; }
+}

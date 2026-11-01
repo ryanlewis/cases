@@ -1,0 +1,36 @@
+situation = "a resumed session with its question still open: no duplicate"
+source = "S45 (5febf6cb, 6388b84a): daily runs list their open cases before opening anything; a parked or open question is carried over, not asked again."
+worker = "api-version"
+max_minutes = 8
+
+prompt = """
+New session. You were on TASK.md in this repo and had already asked me something about it through `cases` before the last session died; I haven't answered yet. Carry on with TASK.md from where it stands. `cases` is installed, and your worker name is `api-version`.
+"""
+
+[files]
+"TASK.md" = """
+Add an API version header to every response in server.py. The header name is still to be decided with the human: `X-API-Version` or `API-Version`.
+"""
+"server.py" = """
+def respond(body):
+    headers = {"Content-Type": "application/json"}
+    return headers, body
+"""
+
+[[seed]]
+as = "agent"
+args = ["open", "--kind", "decision", "--urgency", "today", "--worker", "api-version", "--title", "Name of the API version header?", "--body", "Every response will carry the API version. Which header name?", "--option", "X-API-Version", "--option", "API-Version", "--recommend", "2"]
+save = "s1"
+
+[[human]]
+match = { id = "{s1}", state = "open" }
+delay = 3
+do = ["answer", "{id}", "--option", "2"]
+
+[expect]
+opens = 0
+resume = true
+checks = [
+  { type = "file_contains", path = "server.py", pattern = '"API-Version"' },
+  { type = "case_state", title_re = "header", states = ["closed"] },
+]

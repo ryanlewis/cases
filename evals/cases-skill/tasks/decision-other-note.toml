@@ -1,0 +1,36 @@
+situation = "a decision answered with other and a note"
+source = "S34 (5bd23502) and S38 (b9228d93): the human answered other, with a note that set a direction none of the options named, and the agent acted on the note."
+worker = "lint-rules"
+max_minutes = 8
+
+prompt = """
+The lint job in this repo is failing on the `no-explicit-any` rule in src/api.ts. Ask me through `cases` (installed; worker name `lint-rules`) whether to fix the types, disable the rule for that file, or turn the rule off repo-wide. I'm on my phone, so wait for the answer, then do what I say and tell me what you did.
+"""
+
+[files]
+".eslintrc.json" = """
+{
+  "rules": {
+    "no-explicit-any": "error"
+  }
+}
+"""
+"src/api.ts" = """
+export function parse(body: any): any {
+  return JSON.parse(body);
+}
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+do_question = ["answer", "{id}", "--text", "none of these: make it a warning repo-wide in .eslintrc.json, I will fix the types later"]
+delay = 2
+do = ["answer", "{id}", "--other", "--note", "none of these: make it a warning repo-wide in .eslintrc.json, I'll fix the types later"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = ".eslintrc.json", pattern = '"no-explicit-any":\s*"warn' },
+  { type = "file_contains", path = "src/api.ts", pattern = 'any' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

@@ -1,0 +1,17 @@
+{
+  "about": "Code that mermaid's vendored bundle (static/vendor/mermaid/) embeds from its own dependencies, at the version it was built with, which npm's lockfile does not show. Each entry names the file and the text in it that names the version; advisories.js checks both, and fails on a bundled-licence banner that is not listed here. Bundled code without a banner (d3, dagre-d3-es, stylis and others) carries no version to check. Update this with the vendored files (static/vendor/README.md).",
+  "bundled": [
+    {
+      "package": "dompurify",
+      "version": "3.4.12",
+      "file": "static/vendor/mermaid/chunks/mermaid.esm.min/chunk-FWWDAFD2.mjs",
+      "marker": "@license DOMPurify 3.4.12 "
+    },
+    {
+      "package": "lodash-es",
+      "version": "4.18.1",
+      "file": "static/vendor/mermaid/chunks/mermaid.esm.min/chunk-D36F7FYG.mjs",
+      "marker": "--repo lodash/lodash#4.18.1 "
+    }
+  ]
+}

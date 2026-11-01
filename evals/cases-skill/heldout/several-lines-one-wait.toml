@@ -1,0 +1,56 @@
+situation = "three cases settled in one sitting, so one wait can return several lines"
+source = "S39 (0579f4f4) and 35bb6d9b (audit 2026-09-29): one label wait over several cases, where the human answered one and ended another in the same sitting."
+worker = "infra-tidy"
+max_minutes = 14
+
+prompt = """
+TODO.md has three changes to infra.toml that need my yes or no. Ask me all three through `cases` (installed; worker `infra-tidy`) from this one session, do what I say, and close them out. I answer in batches when I get a minute.
+"""
+
+[files]
+"TODO.md" = """
+1. Raise the worker pool from 4 to 8 (pool = 8)?
+2. Turn on the nightly backup job (nightly_backup = true)?
+3. Send alerts to oncall@example.com instead of ops@example.com?
+"""
+"infra.toml" = """
+pool = 4
+nightly_backup = false
+alerts_email = "ops@example.com"
+"""
+
+[[human]]
+match = { kind = ["decision", "question", "approval"], state = "open", title_re = "pool|worker" }
+choose = "yes|8|raise"
+delay = 6
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "yes, 8"]
+rows = { "pool|8" = "approve" }
+do_approval = ["answer", "{id}", "{rows}"]
+
+[[human]]
+match = { kind = ["decision", "question", "approval"], state = "open", title_re = "backup|nightly" }
+after_wait = false
+delay = 0
+do = ["withdraw", "{id}", "--reason", "the backup moves to the new cluster; not here"]
+
+[[human]]
+match = { kind = ["decision", "question", "approval"], state = "open", title_re = "alert|oncall|email" }
+choose = "yes|oncall|switch|send"
+after_wait = false
+delay = 0
+rows = { "alert|oncall|email" = "approve" }
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "yes, oncall@example.com"]
+do_approval = ["answer", "{id}", "{rows}"]
+
+[expect]
+opens = 3
+checks = [
+  { type = "file_contains", path = "infra.toml", pattern = 'pool\s*=\s*8' },
+  { type = "file_contains", path = "infra.toml", pattern = 'nightly_backup\s*=\s*false' },
+  { type = "file_contains", path = "infra.toml", pattern = 'oncall@example\.com' },
+  { type = "case_state", title_re = "pool|worker", states = ["closed"] },
+  { type = "case_state", title_re = "backup|nightly", states = ["withdrawn"] },
+  { type = "case_state", title_re = "alert|oncall|email", states = ["closed"] },
+]

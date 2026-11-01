@@ -1,0 +1,31 @@
+situation = "a listening session with no case of its own takes messages"
+source = "S30 (5febf6cb): the human messaged the session to add a feed, and later sent 'just testing', which the agent closed with a short acknowledgement."
+worker = "standby"
+max_minutes = 10
+
+prompt = """
+You're the `standby` session and have nothing to do yet. Listen for messages from me through `cases` (installed; worker `standby`) and act on each one as it arrives. When one says it's the last, handle it and stop.
+"""
+
+[files]
+"status.txt" = """
+standby
+"""
+
+[[human]]
+at = "waiting"
+delay = 2
+do = ["message", "--to", "standby", "--title", "Just testing", "--body", "just testing, nothing to do"]
+
+[[human]]
+at = "waiting"
+delay = 3
+do = ["message", "--to", "standby", "--title", "Append ok to status.txt", "--body", "Append a line `ok` to status.txt. That's the last one."]
+
+[expect]
+opens = 0
+checks = [
+  { type = "file_contains", path = "status.txt", pattern = '^ok$' },
+  { type = "case_state", title_re = "testing", states = ["closed"] },
+  { type = "case_state", title_re = "status\\.txt", states = ["closed"] },
+]

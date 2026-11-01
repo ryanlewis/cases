@@ -1,0 +1,67 @@
+[package]
+name = "cases-store-remote"
+version = "0.0.0"
+description = "A cases store on a hosted server, over its HTTP API."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# The hosted half: the sign-in routes, whoami and revoking a token, and TLS
+# for an https server. Without it the crate is the store protocol and the
+# pipe a forwarded store is reached by (`Dial`), with no TLS, which is how
+# the cli's default build takes it.
+default = ["hosted"]
+hosted = ["dep:getrandom", "dep:sha2", "ureq/rustls"]
+
+[dependencies]
+cases-core = { path = "../core" }
+# The operating system's random bytes, for a sign-in's PKCE verifier and
+# state. Only with `hosted`.
+getrandom = { version = "=0.4.3", optional = true }
+# SHA-256, for the PKCE challenge (S256). Only with `hosted`.
+sha2 = { version = "=0.11.1", optional = true }
+# The wire shapes.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+# The HTTP client: blocking, on the calling thread. With `hosted`, TLS by
+# rustls and the ring provider, and the root certificates of webpki-roots.
+# `rustls` is the only optional feature: no gzip, no cookies, no JSON
+# helpers. A forwarded store speaks HTTP/1.1 over a pipe, through the
+# client's transport API (`ureq::unversioned`), which is why ureq is pinned
+# with `=`: that API is outside ureq's semver.
+ureq = { version = "=3.5.0", default-features = false }
+
+# A dropped connection's child is killed with its process group, so that
+# what an `exec:` forward's shell started goes too. The cli builds it
+# already.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["process", "std"] }
+
+[dev-dependencies]
+# The fake server keeps each store in a SQLite store of its own.
+cases-store-sqlite = { path = "../store-sqlite" }
+# The store vectors' runner.
+cases-vectors = { path = "../vectors" }
+# One test for each vector.
+libtest-mimic = "=0.8.2"
+# The store-sqlite tests' helpers, which write a vector's rows straight
+# into the fake's store.
+rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled"] }
+# A directory of its own for each of the fake's stores.
+tempfile = "=3.27.0"
+# The fake checks a sign-in's PKCE challenge.
+sha2 = "=0.11.1"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "vectors"
+harness = false
+
+[[test]]
+name = "store_vectors"
+harness = false

@@ -1,0 +1,52 @@
+situation = "a stuck case that the human parks and later resumes"
+source = "S19 (19294440) and S20 (23e9ebc6): signed commits failed while the signing agent was locked; the agent opened a stuck case asking the human to unlock it. No real park was seen, so the park and resume are added here."
+worker = "sign-fix"
+max_minutes = 10
+
+prompt = """
+Commit the staged release notes with `./commit.sh "docs: release notes for 0.9"`. Commits here must be signed, and signing has been flaky. If it fails in a way only I can fix, tell me through `cases` (installed; worker `sign-fix`) as a stuck case and wait. I might set it aside for a bit if I'm not at the laptop; keep waiting until I come back to it, then carry on and commit.
+"""
+
+[files]
+"commit.sh" = """
+#!/bin/sh
+if [ ! -f signing.ok ]; then
+  echo "error: signing failed: the signing agent refused (is the machine locked?)" >&2
+  exit 1
+fi
+echo "$1" >> COMMITTED.txt
+echo "committed and signed: $1"
+"""
+"NOTES.md" = """
+Release notes for 0.9, staged.
+"""
+
+[[human]]
+match = { kind = ["stuck", "question", "decision"], state = "open" }
+delay = 2
+do = ["park", "{id}", "--note", "not at the laptop, back in a few minutes"]
+do_question = ["park", "{id}", "--note", "not at the laptop, back in a few minutes"]
+do_decision = ["park", "{id}", "--note", "not at the laptop, back in a few minutes"]
+may_fail = true
+
+[[human]]
+match = { state = "parked" }
+fresh = false
+delay = 8
+do = ["resume", "{id}"]
+
+[[human]]
+# The resume left the case open at the human's own revision, so a fresh
+# match would wait for the agent to write to it; the human comes back anyway.
+match = { kind = ["stuck", "question"], state = "open" }
+fresh = false
+delay = 2
+write = { "signing.ok" = "unlocked\n" }
+do = ["answer", "{id}", "--text", "unlocked it, try again"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "COMMITTED.txt", pattern = 'release notes for 0\.9' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

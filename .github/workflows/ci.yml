@@ -1,0 +1,213 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # The registry and git deps, keyed by this job (the default), plus
+      # target/.
+      # Only main saves it: a pull request's cache is readable by that pull
+      # request alone, and each one would push main's out of the cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The page's tests run its modules in node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: crates/cli/src/commands/serve/web/.node-version
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # The hosted client is parked behind the cli's `remote` feature, off
+      # in a release. It still builds and passes its tests.
+      - name: Lint and test with the remote feature
+        run: |
+          cargo clippy --workspace --all-targets --locked --features cases/remote -- -D warnings
+          cargo test --workspace --locked --features cases/remote
+
+      # --workspace unifies features, so store-remote's `hosted` is on in the
+      # steps above. This builds and tests the cli as a release does, with
+      # its default features (no `remote`).
+      - name: Lint and test the release configuration
+        run: |
+          cargo clippy -p cases --all-targets --locked -- -D warnings
+          cargo test -p cases --locked
+
+      # A release speaks the store protocol to a forwarded store over ssh,
+      # with no TLS: the cli without the remote feature must not depend on
+      # rustls, its roots or the keychain, nor take store-remote's hosted
+      # half (sign-in, whoami, revoke).
+      - name: Keep the hosted client out of a release
+        run: |
+          tree=$(cargo tree -p cases -e normal --locked --prefix none)
+          if grep -E '^(rustls|webpki-roots|ring|security-framework) ' <<<"$tree"; then
+            echo "the cases binary depends on the hosted client without the remote feature" >&2
+            exit 1
+          fi
+          features=$(cargo tree -p cases -e features --locked --prefix none -i cases-store-remote)
+          if grep -F 'cases-store-remote feature "hosted"' <<<"$features"; then
+            echo "the cases binary takes store-remote's hosted half without the remote feature" >&2
+            exit 1
+          fi
+
+      # The remote store is a client of a hosted store: no SQLite and no
+      # async runtime in it. Its tests' fake server keeps its stores in
+      # cases-store-sqlite, a dev-dependency, which this tree leaves out.
+      - name: Keep rusqlite and tokio out of the remote store
+        run: |
+          tree=$(cargo tree -p cases-store-remote -e normal --locked --prefix none)
+          if grep -E '^(rusqlite|tokio) ' <<<"$tree"; then
+            echo "cases-store-remote depends on rusqlite or tokio" >&2
+            exit 1
+          fi
+
+      - name: Docs
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Build the core and ids for a target without std
+        run: |
+          rustup target add thumbv7em-none-eabihf
+          cargo build -p cases-core -p cases-id --lib --locked --target thumbv7em-none-eabihf
+
+  # Its own job: a new advisory fails this job, not fmt, clippy or test.
+  deny:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-deny@0.20.2
+          fallback: none
+
+      - name: Check advisories, licences, bans and sources
+        run: cargo deny check
+
+  # The workflows themselves: missing permissions, template injection, unpinned
+  # or impostor actions. The token only reads public advisories and tags.
+  zizmor:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: zizmor@1.30.1
+          fallback: none
+
+      - name: Audit the workflows
+        run: zizmor --format=github .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # The inbox's TypeScript, checked by tsc. build.rs strips the types for the
+  # binary; this is where they are checked, and where node runs the inbox's
+  # tests (web/test). No secrets, and no install scripts.
+  typecheck:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: crates/cli/src/commands/serve/web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: crates/cli/src/commands/serve/web/.node-version
+
+      - name: Install tsc and the libraries' types
+        run: npm ci --ignore-scripts
+
+      - name: Check the types
+        run: npx --no-install tsc --noEmit -p tsconfig.json
+
+      - name: Run the inbox's tests
+        run: npm test
+
+  # The vectors are the core's contract: a change to them must be logged.
+  vectors:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check that every vector change is in CHANGES.md
+        run: .github/scripts/check-vector-changes.py "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+  semver:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # cargo-semver-checks builds both sides' rustdoc under target/. This job
+      # runs only on pull requests, so it saves at the pull request's scope:
+      # the cache serves that pull request's later pushes.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-targets: true
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-semver-checks@0.50.0
+          fallback: none
+
+      - name: Check the published crates' public APIs against the base
+        run: .github/scripts/semver-check.sh "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}

@@ -1,0 +1,40 @@
+{
+  "about": "Advisories against the inbox's JavaScript that do not apply to cases, each with why. advisories.js fails on an advisory not listed here, and on an entry that matches no advisory any more. `where` is `vendored` (served by the binary, from static/vendor/) or `npm` (the lockfile, used only by tsc and the tests). Check each reason again when the code it names changes.",
+  "exceptions": [
+    {
+      "id": "GHSA-55q2-fjhq-7xh7",
+      "package": "dompurify",
+      "version": "3.4.12",
+      "where": "vendored",
+      "reason": "Needs IN_PLACE with a hook that removes the node. mermaid 12.2.0 sanitises strings only (sanitize(text) and sanitize(text, {FORBID_TAGS}) in sanitizeText, sanitize(svg, {ADD_TAGS, ADD_ATTR, HTML_INTEGRATION_POINTS}) in render), never IN_PLACE, and its only hooks set and restore an <a>'s target. The page cannot pass dompurifyConfig: diagram.ts leaves it unset and lists it in `secure`. Nothing to update to: mermaid 12.2.0 is the latest release and bundles 3.4.12."
+    },
+    {
+      "id": "GHSA-6688-9rhm-gjv2",
+      "package": "dompurify",
+      "version": "3.4.12",
+      "where": "vendored",
+      "reason": "Needs IN_PLACE on a Node input. mermaid passes strings, never IN_PLACE (see GHSA-55q2-fjhq-7xh7)."
+    },
+    {
+      "id": "GHSA-cg2g-xh64-v4q7",
+      "package": "dompurify",
+      "version": "3.4.12",
+      "where": "vendored",
+      "reason": "Needs SAFE_FOR_TEMPLATES with RETURN_DOM, RETURN_DOM_FRAGMENT or IN_PLACE, on input that carries a shadow root. mermaid sets none of these and returns strings; diagram.ts cannot set dompurifyConfig; and no template engine reads the output."
+    },
+    {
+      "id": "GHSA-mrv2-3pqr-j5jr",
+      "package": "dompurify",
+      "version": "3.4.12",
+      "where": "vendored",
+      "reason": "Needs IN_PLACE with a hook that removes a parent or sibling. mermaid never uses IN_PLACE, and its hooks remove nothing (see GHSA-55q2-fjhq-7xh7)."
+    },
+    {
+      "id": "GHSA-c6gr-qvv4-5v3f",
+      "package": "dompurify",
+      "version": "3.4.12",
+      "where": "vendored",
+      "reason": "Needs PARSER_MEDIA_TYPE application/xhtml+xml with attributeName allowed. mermaid uses the default text/html parser and does not set PARSER_MEDIA_TYPE; diagram.ts cannot set dompurifyConfig."
+    }
+  ]
+}

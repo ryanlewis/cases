@@ -1,0 +1,134 @@
+[package]
+name = "cases"
+version = "0.0.1-alpha.6"
+description = "A human-in-the-loop inbox for agents."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "cases"
+path = "src/main.rs"
+
+[features]
+# The hosted client: stores on a server, `cases login`, `logout` and
+# `stores`, TLS, and the token in the macOS keychain. Hosted is parked, so
+# it is off by default and a release is built without it: the binary then
+# has no TLS and makes no connection but the ssh of a forwarded store. CI
+# builds and tests it too.
+remote = ["cases-store-remote/hosted", "dep:security-framework"]
+
+[dependencies]
+cases-core = { path = "../core" }
+cases-id = { path = "../id" }
+cases-store-sqlite = { path = "../store-sqlite" }
+# The store protocol: a forwarded store, over a pipe to `ssh host cases
+# dial-stdio`, and with the `remote` feature a store on a hosted server,
+# over HTTPS (ST-11). Without `hosted`, it has no TLS, sign-in or account.
+cases-store-remote = { path = "../store-remote", default-features = false }
+# Argument parsing. The default features add colour, which the CLI does not
+# use.
+clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+# JSON output. `raw_value` puts each event's record in `show --json` as it is
+# stored.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+# The config file. Only reading it: the default features add writing TOML.
+toml = { version = "1.1.6", default-features = false, features = ["std", "parse", "serde"] }
+# The web inbox's server (SV-02): axum's routes on hyper, on a tokio runtime
+# that only `cases serve` starts. Only HTTP/1: a browser speaks nothing else
+# to a plain http address. serve runs its own accept loop, for the timeouts
+# axum::serve does not take, so axum's `tokio` feature is left off.
+axum = { version = "0.8.9", default-features = false, features = ["http1"] }
+http-body = "1.1.0"
+hyper = { version = "1.11.1", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["http1", "server-graceful", "service", "tokio"] }
+tokio = { version = "1.53.3", features = ["macros", "net", "rt", "signal", "sync", "time"] }
+# Query strings, such as `?state=open%2Cparked`.
+form_urlencoded = "1.2.2"
+# The operating system's random bytes, for serve's CSRF token and boot id.
+getrandom = "0.4.3"
+# The vendored mermaid, which build.rs gzips into the binary: unzipped for a
+# request that does not take gzip, and by the test that checks each file
+# against its release. Only the miniz_oxide backend, in Rust: the default
+# features would also lock zlib-rs, which is never built.
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+
+# SHA-256, for the token a kept list of a server's stores was read with
+# (SV-01), and in the tests to check the vendored files and the page's
+# policy against their hashes.
+sha2 = "=0.11.1"
+
+# The stats strip's image in `cases tui`, sent to the terminal in base64.
+# Already locked by ureq.
+base64 = "=0.23.1"
+
+# The file `cases tui` gives the editor, private and removed afterwards.
+tempfile = "=3.27.0"
+# The terminal inbox (`cases tui`): ratatui draws it, on crossterm. Only
+# the crossterm backend: the default features add widgets and macros the
+# inbox does not use.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+
+# Whether the process a running `cases serve` recorded is still there,
+# serve's status screen on a terminal, whose keys it waits for in poll, and
+# serve's log file, which it points stderr at; and the computer's name,
+# for the name of the token `cases login` makes.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["event", "process", "stdio", "system", "termios"] }
+# A SIGTERM or SIGHUP ends `cases tui` with the terminal put back. crossterm
+# already builds it, for the window's size.
+signal-hook = "0.4.0"
+
+# The macOS login keychain, where `cases login` keeps its token (AC-03):
+# generic password items, and the switch that makes a read off a terminal
+# fail rather than show a dialog nobody sees. Pinned with `=`: it is the
+# one crate that touches the keychain, so each bump is a deliberate one.
+# The default features are for TLS, which cases does not use it for. Only
+# with the `remote` feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "=3.7.0", default-features = false, optional = true }
+
+# build.rs strips the types from the inbox's TypeScript (web/static/*.ts),
+# leaving the JavaScript the browser runs. Pinned with `=`: oxc's API changes
+# between minor versions, so each bump is a deliberate one.
+[build-dependencies]
+oxc_allocator = "=0.155.0"
+oxc_ast = "=0.155.0"
+oxc_ast_visit = "=0.155.0"
+oxc_parser = "=0.155.0"
+oxc_span = "=0.155.0"
+# build.rs gzips the vendored mermaid (web/static/vendor/mermaid/).
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+# The store vectors' runner, for a forwarded store through dial-stdio.
+cases-vectors = { path = "../vectors" }
+# One test for each vector.
+libtest-mimic = "=0.8.2"
+# Raw rows in a store, as a hand edit or a newer cases could write them.
+rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled"] }
+# A home and a store of its own for each test.
+tempfile = "=3.27.0"
+# Time that a test moves by hand, for serve's timeouts.
+tokio = { version = "=1.54.1", features = ["io-util", "macros", "rt", "test-util"] }
+# The type strip's own tests (tests/strip.rs), and the check that what the
+# page serves is JavaScript. The same pins as the build's.
+oxc_allocator = "=0.155.0"
+oxc_ast = "=0.155.0"
+oxc_ast_visit = "=0.155.0"
+oxc_parser = "=0.155.0"
+oxc_span = "=0.155.0"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "forward_vectors"
+harness = false
+
+[[test]]
+name = "forward_store_vectors"
+harness = false

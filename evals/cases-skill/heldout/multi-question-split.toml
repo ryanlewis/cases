@@ -1,0 +1,35 @@
+situation = "two questions, so two cases"
+source = "S51 (3645f0ed and others): a 'Today's plan' question held four sub-questions and got one reply that covered only some of them."
+worker = "scaffold"
+max_minutes = 10
+human_order = "any"
+
+prompt = """
+Before you scaffold the new repo I need to decide two separate things: the license (MIT or Apache-2.0), and the CI system (GitHub Actions or Buildkite). Ask me through `cases` (installed; worker `scaffold`) and wait. Then write LICENSE.txt with the license's name on its first line, and CI.txt with the CI system's name, and close everything out.
+"""
+
+[files]
+"README.md" = """
+# new-repo
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "licen" }
+choose = "MIT"
+delay = 2
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "MIT"]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "\\bCI\\b|actions|buildkite|pipeline" }
+choose = "actions"
+delay = 4
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "GitHub Actions"]
+
+[expect]
+opens = 2
+checks = [
+  { type = "file_contains", path = "LICENSE.txt", pattern = 'MIT' },
+  { type = "file_contains", path = "CI.txt", pattern = '(?i)actions' },
+]

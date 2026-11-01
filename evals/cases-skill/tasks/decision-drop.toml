@@ -1,0 +1,31 @@
+situation = "a decision the human drops"
+source = "S33 (6388b84a): after a long back and forth the human answered drop, pick it up another day, and the agent stopped the work and closed the case."
+worker = "dep-upgrade"
+max_minutes = 8
+
+prompt = """
+There's a new major of the HTTP client we use (v4 → v5, see NOTES.md). Ask me via `cases` (it's installed; use worker name `dep-upgrade`) whether to upgrade now or wait for 5.1, and wait for my answer before touching package.json. Then act on it.
+"""
+
+[files]
+"package.json" = """
+{
+  "name": "svc",
+  "dependencies": { "fetchy": "4.8.2" }
+}
+"""
+"NOTES.md" = """
+fetchy 5.0.0 is out. It drops the callback API; we use callbacks in two places.
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+delay = 2
+do = ["answer", "{id}", "--drop", "--note", "not doing this upgrade at all this quarter"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "package.json", pattern = '"fetchy": "4\.8\.2"' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

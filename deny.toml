@@ -1,0 +1,49 @@
+# cargo-deny: https://embarkstudios.github.io/cargo-deny/
+# Run with `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory fails the check, as do yanked crates. An advisory
+# that does not apply goes in `ignore`, with the reason.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Only what the dependency tree needs today. `cargo deny list` shows it; add a
+# licence here only when a new dependency needs it.
+allow = [
+    "Apache-2.0",
+    # matchit, axum's router, carries httprouter's licence beside its own MIT.
+    "BSD-3-Clause",
+    # dragonbox_ecma, which oxc (build.rs's type strip) prints numbers with,
+    # is Apache-2.0 WITH LLVM-exception or BSL-1.0.
+    "BSL-1.0",
+    # Mozilla's root certificates in webpki-roots, which the remote store's
+    # HTTP client (ureq, through rustls) checks a server's certificate by.
+    "CDLA-Permissive-2.0",
+    # ring (beside Apache-2.0), rustls-webpki and untrusted: the TLS of the
+    # remote store's HTTP client (ureq, through rustls).
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    # foldhash, the hasher of the hashbrown that ratatui's layout solver
+    # (kasuari) uses.
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+# Nothing is banned yet. Two versions of one crate are worth knowing about,
+# not a failure.
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

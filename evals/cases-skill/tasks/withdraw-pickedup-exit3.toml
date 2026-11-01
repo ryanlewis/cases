@@ -1,0 +1,41 @@
+situation = "the human withdraws a case the agent has picked up, so its close exits 3 or 4"
+source = "Designed on 26 Sep (stale-pickups-2026-09-26.md): a close that fails on a case the human withdrew means the human ended it. S22 (5febf6cb) is the real exit 3 on a picked-up case."
+worker = "cfg-rename"
+max_minutes = 10
+
+prompt = """
+The config key `timeout` in config.yaml is ambiguous. Ask me through `cases` (installed; worker `cfg-rename`) whether to rename it to `timeout_ms` or `timeout_s`, wait for the answer, then rename it in config.yaml, src/load.py and docs/config.md, and close it out.
+"""
+
+[files]
+"config.yaml" = """
+timeout: 30
+retries: 3
+"""
+"src/load.py" = """
+def load(cfg):
+    return cfg["timeout"], cfg["retries"]
+"""
+"docs/config.md" = """
+- `timeout`: how long to wait.
+- `retries`: how many times to retry.
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "_s\\b|second"
+delay = 2
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "timeout_s"]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "pickedup" }
+after_wait = false
+delay = 1
+do = ["withdraw", "{id}", "--reason", "stop: we're replacing this config format next week, leave it as it is"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "case_state", title_re = ".", states = ["withdrawn"] },
+]

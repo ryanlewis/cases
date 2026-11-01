@@ -1,0 +1,82 @@
+situation = "a long session: five calls in a row, each coming out of the work after the last"
+source = "19d9fbaf and 35bb6d9b (audit 2026-09-29): lead sessions that opened 23 and 28 cases, decisions, approvals and signoffs in turn, each after the work the last answer set off; open_chained passed in 4 of 28 real sessions before #78."
+worker = "svc-setup"
+max_minutes = 20
+
+prompt = """
+Work through PLAN.md, one step at a time and in order. Every step needs my call first, and you only know what to ask about a step once the step before it is done. Ask me through `cases` (installed; worker `svc-setup`). I'm on my phone, so I'll answer each as it comes in.
+"""
+
+[files]
+"PLAN.md" = """
+# Setting up the service
+
+1. Pick the database: SQLite or Postgres. Set `db` in config.toml.
+2. Pick the log level: debug or info. Set `log_level` in config.toml.
+3. Run scripts/migrate.sh and scripts/seed.sh. Both touch the database, so they need approval first.
+4. Write CHANGES.md: two or three lines on what changed in steps 1 to 3. Get it signed off.
+5. Tag the release: run scripts/tag.sh. Ask first.
+"""
+"config.toml" = """
+db = ""
+log_level = ""
+"""
+"scripts/migrate.sh" = """
+#!/bin/sh
+echo migrated > .migrated
+"""
+"scripts/seed.sh" = """
+#!/bin/sh
+echo seeded > .seeded
+"""
+"scripts/tag.sh" = """
+#!/bin/sh
+echo tagged > .tagged
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "database|db|sqlite|postgres" }
+choose = "sqlite"
+delay = 3
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "SQLite"]
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open", title_re = "log" }
+delay = 3
+do = ["answer", "{id}", "--other", "--note", "neither: warn. Set log_level = \"warn\"."]
+do_question = ["answer", "{id}", "--text", "neither: warn. Set log_level = \"warn\"."]
+
+[[human]]
+match = { kind = "approval", state = "open" }
+delay = 3
+rows = { "migrat" = "approve", "seed" = "reject:no seed data on this box" }
+do = ["answer", "{id}", "{rows}"]
+
+[[human]]
+match = { kind = "signoff", state = "open" }
+delay = 3
+do = ["answer", "{id}", "--changes", "--note", "say the seed step was skipped on purpose"]
+
+[[human]]
+match = { kind = "signoff", state = "open", last_event = ["note", "amend"] }
+delay = 2
+do = ["answer", "{id}", "--accept"]
+
+[[human]]
+match = { kind = ["decision", "question", "approval"], state = "open", title_re = "tag|release" }
+delay = 3
+do = ["answer", "{id}", "--drop", "--note", "not today, I'll tag it myself next week"]
+
+[expect]
+opens = 5
+checks = [
+  { type = "file_contains", path = "config.toml", pattern = '(?i)db\s*=\s*"sqlite"' },
+  { type = "file_contains", path = "config.toml", pattern = 'log_level\s*=\s*"warn"' },
+  { type = "file_exists", path = ".migrated" },
+  { type = "file_absent", path = ".seeded" },
+  { type = "file_contains", path = "CHANGES.md", pattern = '(?i)seed' },
+  { type = "file_absent", path = ".tagged" },
+  { type = "case_kind", title_re = "migrat|seed|script", kinds = ["approval"] },
+  { type = "case_kind", title_re = "CHANGES|sign|changelog", kinds = ["signoff"] },
+]

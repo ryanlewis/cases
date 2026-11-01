@@ -1,0 +1,49 @@
+situation = "a coding task where a call for the human comes out of the work; the prompt names cases only in passing"
+source = "e64e0e3e and 19d9fbaf (audit 2026-09-29): real sessions opened cases in the middle of other work, not because the prompt was about cases; status_beside_first_open passed in 15 of 28 real sessions before #78."
+worker = "pricing"
+max_minutes = 12
+
+prompt = """
+Implement round_price in pricing.py to SPEC.md, and make `python3 test_pricing.py` pass. I'm away from the keyboard for a while; `cases` is installed (worker `pricing`) if you need anything from me.
+"""
+
+[files]
+"SPEC.md" = """
+# round_price
+
+round_price(amount: str) -> str takes a decimal amount as a string, such as "12.345", and returns it rounded to whole cents, such as "12.35".
+
+How to round an exact half cent is not settled: finance has to choose between half-up (12.345 -> 12.35) and half-even (12.345 -> 12.34, 12.355 -> 12.36). Whoever implements this asks Ryan, and records the answer as `halves = "up"` or `halves = "even"` in pricing.toml. round_price reads it from there.
+"""
+"pricing.toml" = """
+halves = ""
+"""
+"pricing.py" = """
+def round_price(amount: str) -> str:
+    raise NotImplementedError
+"""
+"test_pricing.py" = """
+from pricing import round_price
+
+assert round_price("12.341") == "12.34"
+assert round_price("12.349") == "12.35"
+assert round_price("0.004") == "0.00"
+assert round_price("7") == "7.00"
+print("ok")
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+choose = "even"
+delay = 4
+do = ["answer", "{id}", "--option", "{choice}"]
+do_question = ["answer", "{id}", "--text", "half-even"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "pricing.toml", pattern = 'halves\s*=\s*"even"' },
+  { type = "file_lacks", path = "pricing.py", pattern = 'NotImplementedError' },
+  { type = "file_contains", path = "pricing.py", pattern = 'pricing\.toml' },
+  { type = "case_state", title_re = ".", states = ["closed"] },
+]

@@ -1,0 +1,110 @@
+name: Mutants
+
+# Mutation testing of cases-core, cases-id, cases-store-sqlite and
+# cases-store-remote with cargo-mutants: each mutant is a small change to the
+# code, and a mutant the tests still pass is a gap in them.
+# A pull request mutates only the code it changes. The full run is weekly,
+# Mondays at 03:17 UTC, and can be started by hand; the weekly run is skipped when
+# main has not changed since the last full run that passed.
+# Exclusions, each with its reason, are in .cargo/mutants.toml.
+
+on:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Mutants built and tested at once (cargo mutants --jobs); empty means 2
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # Its own job, so that actions: read never reaches the job that builds and
+  # runs the code. It fails open: on any error the mutants run.
+  gate:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.last.outputs.skip }}
+    steps:
+      - name: Find the commit of the last full run that passed
+        id: last
+        run: |
+          if ! last=$(gh api "repos/$REPO/actions/workflows/mutants.yml/runs?branch=main&status=success&per_page=50" \
+            --jq '[.workflow_runs[] | select(.event == "schedule" or .event == "workflow_dispatch")][0].head_sha // ""'); then
+            echo "Could not list the earlier runs: the mutants run."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ -z "$last" ]]; then
+            echo "No earlier full run passed: the mutants run."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$last" == "$HEAD_SHA" ]]; then
+            echo "The last full run that passed was on $last, main's head: skipped."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The last full run that passed was on $last, not $HEAD_SHA: the mutants run."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+
+  mutants:
+    needs: gate
+    # The gate is skipped outside schedule, and its output is empty when it
+    # fails; either way the mutants run.
+    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
+    # x64, not ARM: install-action has no aarch64 Linux build of cargo-mutants.
+    # GitHub's 2 vCPUs fit 2 jobs at once.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      JOBS: ${{ inputs.jobs || '2' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # cargo-mutants builds in copies of the tree without target/, so only
+      # the registry and git deps are worth keeping. The weekly run on main
+      # saves it; pull requests only restore it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+
+      - name: Mutate the code this pull request changes
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff "$BASE_SHA...HEAD" > "$RUNNER_TEMP/pr.diff"
+          cargo mutants -p cases-core -p cases-id -p cases-store-sqlite -p cases-store-remote --jobs "$JOBS" --in-diff "$RUNNER_TEMP/pr.diff" --output "$RUNNER_TEMP"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+      - name: Mutate the whole core, ids and stores
+        if: github.event_name != 'pull_request'
+        run: cargo mutants -p cases-core -p cases-id -p cases-store-sqlite -p cases-store-remote --jobs "$JOBS" --output "$RUNNER_TEMP"
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants.out
+          path: ${{ runner.temp }}/mutants.out
+          if-no-files-found: ignore

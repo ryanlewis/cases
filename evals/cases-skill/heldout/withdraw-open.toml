@@ -1,0 +1,30 @@
+situation = "the human withdraws an open case"
+source = "Designed from the 26 Sep stale-pickups note, with S23 (8e3ec50d): the human changed direction before answering, and the case was withdrawn."
+worker = "dns-records"
+max_minutes = 8
+
+prompt = """
+We're moving the docs site to a new host. Ask me through `cases` (installed; worker `dns-records`) which of the two CNAME targets in PLAN.md to use, and wait. Once I answer, update records.txt to match.
+"""
+
+[files]
+"PLAN.md" = """
+Docs site move. Candidate CNAME targets:
+1. docs.pages.example.net
+2. docs-prod.cdn.example.org
+"""
+"records.txt" = """
+docs CNAME old-docs.example.com
+"""
+
+[[human]]
+match = { kind = ["decision", "question"], state = "open" }
+delay = 3
+do = ["withdraw", "{id}", "--reason", "we're not moving the docs site after all; leave the records alone"]
+
+[expect]
+opens = 1
+checks = [
+  { type = "file_contains", path = "records.txt", pattern = 'old-docs\.example\.com' },
+  { type = "case_state", title_re = ".", states = ["withdrawn"] },
+]

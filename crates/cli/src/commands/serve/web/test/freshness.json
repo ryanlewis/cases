@@ -1,0 +1,2886 @@
+{
+  "about": "Generated from spec/vectors/freshness.json by crates/cli/src/output/freshness.rs; do not edit. Regenerate with CASES_WRITE_FIXTURES=1 cargo test -p cases freshness.",
+  "vectors": [
+    {
+      "description": "nothing since the form was drawn: unchanged",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "a note on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "several notes on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:03:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Tried again.","noted_at":"2026-11-01T09:02:00Z"}
+          },
+          {
+            "seq": 4,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0004-agent-note.json",
+            "at": "2026-11-01T09:03:00Z",
+            "data": {"body":"And again.","noted_at":"2026-11-01T09:03:00Z"}
+          }
+        ],
+        "revision": 4,
+        "amend_seq": 0,
+        "last_seq": 4
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "rows numbered with gaps, and a note since: unchanged",
+      "drawn": {
+        "revision": 2,
+        "seq": 3
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 7,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0007-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Tried again.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 7
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend of links on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "links": [
+          "https://example.com/pr/1"
+        ],
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","links":["https://example.com/pr/1"]}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend of labels and context on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "labels": [
+          "infra"
+        ],
+        "context": "More context.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","context":"More context.","labels":["infra"]}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend of the recommend on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 2,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","recommend":2}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend of the title on an open case: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun to 1.1?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","title":"Pin bun to 1.1?"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "a briefing's amend of landed: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "briefing",
+        "urgency": "whenever",
+        "title": "Pinned bun",
+        "body": "Bun is pinned.",
+        "landed": false,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"briefing","opened_at":"2026-11-01T09:00:00Z","title":"Pinned bun","urgency":"whenever"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "briefing",
+        "urgency": "whenever",
+        "title": "Pinned bun",
+        "body": "Bun is pinned.",
+        "landed": true,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"briefing","opened_at":"2026-11-01T09:00:00Z","title":"Pinned bun","urgency":"whenever"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","landed":true}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend that sets the body the case has: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "links": [
+          "https://example.com/pr/1"
+        ],
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","links":["https://example.com/pr/1"]},
+            "body_in_case": true
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "an amend of the body on an open case changes the question: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "New body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"body":"Body.","kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"}
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 2,
+        "last_seq": 2
+      },
+      "since": "changed"
+    },
+    {
+      "description": "an amend that adds an option changes the question: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float",
+          "wait"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","options":["wait"]}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 2,
+        "last_seq": 2
+      },
+      "since": "changed"
+    },
+    {
+      "description": "an amend of the question, then a note: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float",
+          "wait"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","options":["wait"]}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 2,
+        "last_seq": 3
+      },
+      "since": "changed"
+    },
+    {
+      "description": "an amend of the question before the form was drawn, then a note: unchanged",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float",
+          "wait"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","options":["wait"]}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 2,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float",
+          "wait"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "amend",
+            "from": "open",
+            "file": "0002-agent-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z","options":["wait"]}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 2,
+        "last_seq": 3
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "the human's edit of a sent message's body: unchanged",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "sent",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "sent",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Rebase, then push.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"body":"Body.","kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"}
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "amend",
+            "from": "sent",
+            "file": "0002-human-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 2,
+        "last_seq": 2
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "the human's edit of a sent message, then a pickup: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "sent",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "pickedup",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Rebase, then push.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "pickup": {
+          "by": "bun-pins",
+          "picked_up_at": "2026-11-01T09:02:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"body":"Body.","kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"}
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "amend",
+            "from": "sent",
+            "file": "0002-human-amend.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"amended_at":"2026-11-01T09:01:00Z"},
+            "body_in_case": true
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "pickup",
+            "from": "sent",
+            "file": "0003-agent-pickup.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"by":"bun-pins","picked_up_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 2,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a message picked up: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "sent",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "pickedup",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "pickup": {
+          "by": "bun-pins",
+          "picked_up_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "pickup",
+            "from": "sent",
+            "file": "0002-agent-pickup.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"by":"bun-pins","picked_up_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a message withdrawn by the human: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "sent",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "withdrawn",
+        "kind": "message",
+        "urgency": "today",
+        "title": "Rebase onto main",
+        "body": "Body.",
+        "worker": "bun-pins",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "human",
+            "event": "open",
+            "file": "0001-human-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"message","opened_at":"2026-11-01T09:00:00Z","title":"Rebase onto main","urgency":"today","worker":"bun-pins"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "withdraw",
+            "from": "sent",
+            "file": "0002-human-withdraw.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"withdrawn_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "moved"
+    },
+    {
+      "description": "answered elsewhere: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a note, then an answer: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:02:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 3,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0003-human-answer.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"answered_at":"2026-11-01T09:02:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "two notes, then an answer: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:03:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:03:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Tried again.","noted_at":"2026-11-01T09:02:00Z"}
+          },
+          {
+            "seq": 4,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0004-human-answer.json",
+            "at": "2026-11-01T09:03:00Z",
+            "data": {"answered_at":"2026-11-01T09:03:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 4,
+        "amend_seq": 0,
+        "last_seq": 4
+      },
+      "since": "moved"
+    },
+    {
+      "description": "an answer picked up: moved",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "pickedup",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "pickup": {
+          "by": "bun-pins",
+          "picked_up_at": "2026-11-01T09:02:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "pickup",
+            "from": "answered",
+            "file": "0003-agent-pickup.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"by":"bun-pins","picked_up_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "answered, picked up and closed: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "closed",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:03:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "pickup": {
+          "by": "bun-pins",
+          "picked_up_at": "2026-11-01T09:02:00Z"
+        },
+        "close": {
+          "outcome": "Done.",
+          "closed_at": "2026-11-01T09:03:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "pickup",
+            "from": "answered",
+            "file": "0003-agent-pickup.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"by":"bun-pins","picked_up_at":"2026-11-01T09:02:00Z"}
+          },
+          {
+            "seq": 4,
+            "author": "agent",
+            "event": "close",
+            "from": "pickedup",
+            "file": "0004-agent-close.json",
+            "at": "2026-11-01T09:03:00Z",
+            "data": {"closed_at":"2026-11-01T09:03:00Z","outcome":"Done."}
+          }
+        ],
+        "revision": 4,
+        "amend_seq": 0,
+        "last_seq": 4
+      },
+      "since": "moved"
+    },
+    {
+      "description": "withdrawn by the agent: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "withdrawn",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "withdraw",
+            "from": "open",
+            "file": "0002-agent-withdraw.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"withdrawn_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "moved"
+    },
+    {
+      "description": "an answered case withdrawn by the human: moved",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "withdrawn",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "human",
+            "event": "withdraw",
+            "from": "answered",
+            "file": "0003-human-withdraw.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"withdrawn_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "parked: moved",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "parked",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "park": {
+          "note": "after the release",
+          "parked_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "park",
+            "from": "open",
+            "file": "0002-human-park.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"note":"after the release","parked_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a reopening note on an answered case: moved",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "answered",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Reconsider.","noted_at":"2026-11-01T09:02:00Z","reopen":true}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a reopening amend of links on an answered case: moved",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "choice": 1,
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","choice":1}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "links": [
+          "https://example.com/pr/2"
+        ],
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","choice":1}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "amend",
+            "from": "answered",
+            "file": "0003-agent-amend.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"amended_at":"2026-11-01T09:02:00Z","links":["https://example.com/pr/2"],"reopen":true}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "moved"
+    },
+    {
+      "description": "a reopening amend that changes the question: changed",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "choice": 1,
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","choice":1}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "decision",
+        "urgency": "today",
+        "title": "Pin bun?",
+        "body": "Body.",
+        "options": [
+          "pin",
+          "float",
+          "wait"
+        ],
+        "recommend": 1,
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"decision","opened_at":"2026-11-01T09:00:00Z","options":["pin","float"],"recommend":1,"title":"Pin bun?","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","choice":1}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "amend",
+            "from": "answered",
+            "file": "0003-agent-amend.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"amended_at":"2026-11-01T09:02:00Z","options":["wait"],"reopen":true}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 3,
+        "last_seq": 3
+      },
+      "since": "changed"
+    },
+    {
+      "description": "answered elsewhere and reopened between two reads: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "answered",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Reconsider.","noted_at":"2026-11-01T09:02:00Z","reopen":true}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "changed"
+    },
+    {
+      "description": "answered, reopened, answered again and picked up: changed",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "answered",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "answer": {
+          "text": "Try the other mirror.",
+          "answered_at": "2026-11-01T09:01:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "pickedup",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:04:00Z",
+        "answer": {
+          "text": "Use the mirror in Frankfurt.",
+          "answered_at": "2026-11-01T09:03:00Z"
+        },
+        "pickup": {
+          "by": "bun-pins",
+          "picked_up_at": "2026-11-01T09:04:00Z"
+        },
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0002-human-answer.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"answered_at":"2026-11-01T09:01:00Z","text":"Try the other mirror."}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "answered",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Reconsider.","noted_at":"2026-11-01T09:02:00Z","reopen":true}
+          },
+          {
+            "seq": 4,
+            "author": "human",
+            "event": "answer",
+            "from": "open",
+            "file": "0004-human-answer.json",
+            "at": "2026-11-01T09:03:00Z",
+            "data": {"answered_at":"2026-11-01T09:03:00Z","text":"Use the mirror in Frankfurt."}
+          },
+          {
+            "seq": 5,
+            "author": "agent",
+            "event": "pickup",
+            "from": "answered",
+            "file": "0005-agent-pickup.json",
+            "at": "2026-11-01T09:04:00Z",
+            "data": {"by":"bun-pins","picked_up_at":"2026-11-01T09:04:00Z"}
+          }
+        ],
+        "revision": 5,
+        "amend_seq": 0,
+        "last_seq": 5
+      },
+      "since": "changed"
+    },
+    {
+      "description": "parked and resumed: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "human",
+            "event": "park",
+            "from": "open",
+            "file": "0002-human-park.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"note":"after the release","parked_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 3,
+            "author": "human",
+            "event": "resume",
+            "from": "parked",
+            "file": "0003-human-resume.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"resumed_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "changed"
+    },
+    {
+      "description": "a row the fold skipped since: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 1
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "revision": 1,
+        "amend_seq": 0,
+        "last_seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "problems": [
+          "0002-agent-note.json: the note is blank"
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "changed"
+    },
+    {
+      "description": "a row the fold skipped before the form was drawn, then a note: unchanged",
+      "drawn": {
+        "revision": 2,
+        "seq": 2
+      },
+      "drawn_case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:00:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          }
+        ],
+        "problems": [
+          "0002-agent-note.json: the note is blank"
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "problems": [
+          "0002-agent-note.json: the note is blank"
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "unchanged"
+    },
+    {
+      "description": "a revision above the case's: changed",
+      "drawn": {
+        "revision": 3,
+        "seq": 2
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "changed"
+    },
+    {
+      "description": "a form drawn before the open: changed",
+      "drawn": {
+        "revision": 0,
+        "seq": 0
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "changed"
+    },
+    {
+      "description": "a seq above the case's: changed",
+      "drawn": {
+        "revision": 1,
+        "seq": 5
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:01:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          }
+        ],
+        "revision": 2,
+        "amend_seq": 0,
+        "last_seq": 2
+      },
+      "since": "changed"
+    },
+    {
+      "description": "a seq below the one its revision had, then a note: changed",
+      "drawn": {
+        "revision": 2,
+        "seq": 1
+      },
+      "case": {
+        "id": "UkLWZ",
+        "state": "open",
+        "kind": "stuck",
+        "urgency": "today",
+        "title": "Mirror unreachable",
+        "body": "Body.",
+        "opened_at": "2026-11-01T09:00:00Z",
+        "updated_at": "2026-11-01T09:02:00Z",
+        "events": [
+          {
+            "seq": 1,
+            "author": "agent",
+            "event": "open",
+            "file": "0001-agent-open.json",
+            "at": "2026-11-01T09:00:00Z",
+            "data": {"kind":"stuck","opened_at":"2026-11-01T09:00:00Z","title":"Mirror unreachable","urgency":"today"},
+            "body_in_case": true
+          },
+          {
+            "seq": 2,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0002-agent-note.json",
+            "at": "2026-11-01T09:01:00Z",
+            "data": {"body":"Still looking.","noted_at":"2026-11-01T09:01:00Z"}
+          },
+          {
+            "seq": 3,
+            "author": "agent",
+            "event": "note",
+            "from": "open",
+            "file": "0003-agent-note.json",
+            "at": "2026-11-01T09:02:00Z",
+            "data": {"body":"Found it.","noted_at":"2026-11-01T09:02:00Z"}
+          }
+        ],
+        "revision": 3,
+        "amend_seq": 0,
+        "last_seq": 3
+      },
+      "since": "changed"
+    }
+  ]
+}
