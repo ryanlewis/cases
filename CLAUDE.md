@@ -1,6 +1,6 @@
 # cases (Rust)
 
-cases, a human-in-the-loop inbox for agents, in Rust. It reached parity with the Go CLI, a proof of concept whose repo is gone (a local copy is at `~/dev/cases`), and has moved past it. The Go CLI is not the reference, and Go stores are not read or supported. The spec below is the reference. This repo is private until v1, then public.
+cases, a human-in-the-loop inbox for agents, in Rust. It reached parity with the Go CLI, a proof of concept whose repo is gone (a local copy is at `~/dev/cases`), and has moved past it. The Go CLI is not the reference, and Go stores are not read or supported. The spec below is the reference. This repo is public. It went public on 1 Nov 2026 with its history flattened to one commit, and PR numbers start again from #1. The earlier history, with PRs #1 to #223 that notes and comments refer to, is in the private `ryanlewis/cases-archive` (the `archive` remote).
 
 ## Direction (10 Oct 2026)
 
