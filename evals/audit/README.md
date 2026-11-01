@@ -4,7 +4,7 @@ Grades real Claude Code sessions (`~/.claude/projects/*/*.jsonl`) against a skil
 
 ```sh
 python3 evals/audit/audit.py --rules evals/audit/rules_cases.py --rules evals/audit/rules_team_lead.py \
-    --out ~/dev/notes/projects/cases/skill-audit-<date>.md
+    --out ~/skill-audit-<date>.md
 ```
 
 - `history.py` reads a real transcript into the eval harness's Transcript: it drops subagent (sidechain) turns, ends background tasks where their `<task-notification>` arrived, takes a background wait's output from a later read of its file when the file is gone, numbers the human turns, and treats heredoc bodies and quoted strings as data, not commands.
