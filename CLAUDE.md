@@ -19,7 +19,7 @@ Hosted is parked. Keep `cases login` and the hosted half of `store-remote` build
 
 ## Spec
 
-- User stories: `crates/cli/STORIES.md` maps each acceptance criterion of every keep and change story to the tests that prove it.
+- Stories and their tests: `crates/cli/STORIES.md` maps the user stories' acceptance criteria, in short, to the tests that prove them.
 - Core vectors: `spec/vectors/` (format in its README.md). `core` must pass every vector. Errors are compared by category, never by message.
 - A vector change needs a line in `spec/vectors/CHANGES.md` naming the vector by its description; CI refuses a pull request without one.
 
