@@ -91,9 +91,10 @@ pub(crate) fn dir() -> Result<PathBuf, Error> {
 
 /// The instance file for the store at `store`, in the state directory:
 /// `serve-<file name>-<hash>.json`, where the hash is of the store's absolute
-/// path, so that serves on two stores never share a file, and the file name
-/// is there for people. It is the same for every build of cases, since
-/// each finds the serve another started.
+/// path with its symlinks resolved ([`resolve`]), so that serves on two
+/// stores never share a file and every path to one store finds the same
+/// one, and the file name is there for people. It is the same for every
+/// build of cases, since each finds the serve another started.
 pub(crate) fn path(store: &Path) -> Result<PathBuf, Error> {
     let store = resolve(&std::path::absolute(store)?);
     let name = output::slug(&store.file_name().unwrap_or_default().to_string_lossy());
@@ -124,9 +125,10 @@ pub(crate) fn running(store: &Path) -> Result<Option<Info>, Error> {
     Ok(Some(info))
 }
 
-/// `path` with each `..` taking off the name before it, so that
-/// `a/../cases.db` and `cases.db` name one store and so one instance file.
-/// `std::path::absolute` keeps `..`.
+/// `path` with each `..` taking off the name before it, as text, without
+/// looking at the filesystem: the store as cases shows it to people, such as
+/// in `status`. `std::path::absolute` keeps `..`. It does not resolve
+/// symlinks, so the instance file is found by [`resolve`], not by this.
 pub(crate) fn clean(path: &Path) -> PathBuf {
     let mut clean = PathBuf::new();
     for component in path.components() {
