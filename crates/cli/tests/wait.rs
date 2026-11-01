@@ -352,7 +352,7 @@ fn wait_wakes_on_a_park_and_a_resume_and_not_on_the_agent_s_own_events() {
     assert_eq!(lines[0]["state"], "open");
 
     // The agent's own events never wake it. The agent does not resume a
-    // case (HU-05), so a note and a withdraw stand in for Go's agent resume.
+    // case (HU-05), so its note and withdraw stand for its events here.
     let waiting = Waiting::after_first_read(&env, &marker, &[]);
     run(&env, "note", &id, &["--body", "Trying the mirror."]);
     run(&env, "withdraw", &id, &["--reason", "The mirror works."]);

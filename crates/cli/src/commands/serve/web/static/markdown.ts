@@ -42,9 +42,9 @@ marked.use({
       if (url.origin !== location.origin) a += ' target="_blank" rel="noopener noreferrer"';
       return `${a}>${text}</a>`;
     },
-    // A column's alignment is a class, which style.css aligns, as the Go
-    // inbox drew it. So is a cell's length (`fit`): style.css keeps a short
-    // cell on one line and gives a long one room to read.
+    // A column's alignment is a class, which style.css aligns. So is a
+    // cell's length (`fit`): style.css keeps a short cell on one line and
+    // gives a long one room to read.
     tablecell(token) {
       const text = this.parser.parseInline(token.tokens);
       const tag = token.header ? "th" : "td";

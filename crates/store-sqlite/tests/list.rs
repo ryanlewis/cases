@@ -1,5 +1,4 @@
-//! Reading cases, and the poller. The Go store's `list_test.go`, as
-//! `PARITY.md` maps it.
+//! Reading cases, and the poller.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

@@ -1,5 +1,5 @@
-//! Durations as flags and the config file take them: Go's spelling, such
-//! as `30m`, `72h` or `1h30m`, and days, such as `7d`.
+//! Durations as flags and the config file take them: numbers with units,
+//! such as `30m`, `72h` or `1h30m`, and days, such as `7d`.
 
 use std::time::Duration;
 
@@ -75,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn durations_read_as_go_writes_them() {
+    fn durations_read_in_each_unit_and_combination() {
         for (text, want) in [
             ("0", Duration::ZERO),
             ("0s", Duration::ZERO),

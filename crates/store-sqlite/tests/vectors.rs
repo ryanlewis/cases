@@ -1,6 +1,6 @@
-//! Runs every vector in `spec/vectors/` through the store, as the Go store's
-//! `checkStore` did. Each vector is a test of its own, named by its file and
-//! its description, and each has a store of its own.
+//! Runs every vector in `spec/vectors/` through the store. Each vector is a
+//! test of its own, named by its file and its description, and each has a
+//! store of its own.
 //!
 //! A vector with an append writes it with the store's writer: the rows are
 //! stored as the vector gives them, with none of the store's checks, and the

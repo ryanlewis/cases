@@ -145,7 +145,7 @@ fn serve_stops_on_ctrl_c_and_removes_its_record() {
 }
 
 /// A stop waits for the requests in flight, and a second Ctrl-C ends it at
-/// once, as the Go build did, rather than wait out the stop.
+/// once, rather than wait out the stop.
 #[test]
 fn a_second_ctrl_c_ends_a_slow_stop_at_once() {
     let env = Env::new();
@@ -268,8 +268,8 @@ fn serve_url(out: &common::Output) -> &str {
         .unwrap()
 }
 
-/// The store is recorded as the Go build recorded it: absolute, and with
-/// each `..` taken off, for status to show.
+/// The store is recorded absolute, and with each `..` taken off, for status
+/// to show.
 #[test]
 fn serve_records_its_store_without_dot_dots() {
     let env = Env::new();
