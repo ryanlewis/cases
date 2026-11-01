@@ -95,7 +95,7 @@ pub(crate) fn dir() -> Result<PathBuf, Error> {
 /// is there for people. It is the same for every build of cases, since
 /// each finds the serve another started.
 pub(crate) fn path(store: &Path) -> Result<PathBuf, Error> {
-    let store = clean(&std::path::absolute(store)?);
+    let store = resolve(&std::path::absolute(store)?);
     let name = output::slug(&store.file_name().unwrap_or_default().to_string_lossy());
     let hash = fnv1a(store.as_os_str().as_encoded_bytes());
     Ok(dir()?.join(format!("serve-{name}-{hash:016x}.json")))
@@ -139,6 +139,22 @@ pub(crate) fn clean(path: &Path) -> PathBuf {
         }
     }
     clean
+}
+
+/// The absolute path `path` with its symlinks resolved, so that every path
+/// to one store gives one instance file: `link/../cases.db`, where `link` is
+/// a symlink to a directory, is the `cases.db` beside that directory, not
+/// the one beside `link`. A path that is not there yet, such as a store
+/// serve has still to make, resolves as far as it is there, and the rest is
+/// cleaned as text.
+fn resolve(path: &Path) -> PathBuf {
+    for there in path.ancestors() {
+        if let Ok(real) = fs::canonicalize(there) {
+            let rest = path.strip_prefix(there).unwrap_or(Path::new(""));
+            return clean(&real.join(rest));
+        }
+    }
+    clean(path)
 }
 
 /// The page of the case `id` in the inbox at `base`.
@@ -257,6 +273,23 @@ mod tests {
                 path(Path::new("/tmp/cases.db")).unwrap()
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_a_symlink_and_a_parent_is_the_same_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(real.join("a").join("b")).unwrap();
+        std::os::unix::fs::symlink(real.join("a").join("b"), real.join("link")).unwrap();
+        let through = real.join("link").join("..").join("cases.db");
+        let store = real.join("a").join("cases.db");
+        assert_eq!(resolve(&through), store, "a store that is not there yet");
+        fs::write(&store, "").unwrap();
+        assert_eq!(resolve(&through), store);
+        assert_eq!(resolve(&store), store);
+        let missing = real.join("x").join("..").join("cases.db");
+        assert_eq!(resolve(&missing), real.join("cases.db"));
     }
 
     #[test]
