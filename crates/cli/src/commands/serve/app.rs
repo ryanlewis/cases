@@ -1080,6 +1080,27 @@ mod tests {
         assert!(!same(b"", b"abc"));
     }
 
+    /// A renewal is a store route's lock renewal, as `Client::hold` sends
+    /// it over HTTP, and nothing that has only some of its parts.
+    #[test]
+    fn a_renewal_is_a_store_route_s_lock_renewal() {
+        assert!(is_renewal("/v1/stores/main/store/lock/h1/renew"));
+        for path in [
+            // Not a store route.
+            "/v1/cases/store/lock/h1/renew",
+            "/store/lock/h1/renew",
+            // Not a lock.
+            "/v1/stores/main/store/h1/renew",
+            "/v1/cases/UkLWZ/renew",
+            // Not a renewal.
+            "/v1/stores/main/store/lock/h1/release",
+            "/v1/stores/main/store/lock/h1/renew/x",
+            "/v1/stores/main/store/lock",
+        ] {
+            assert!(!is_renewal(path), "{path}");
+        }
+    }
+
     #[test]
     fn the_pages_are_the_list_its_old_done_address_and_a_case() {
         for path in ["/", "/done", "/message", "/cases/UkLWZ"] {
