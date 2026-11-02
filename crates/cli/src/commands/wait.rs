@@ -563,12 +563,18 @@ fn wait(
     // they are kept here until the wait gives its cases.
     let mut taken: Vec<Turn> = Vec::new();
     let mut collecting: Option<Collecting> = None;
+    // What a lingering wait collected at its last read, beside the
+    // messages it took: what it has, should its timeout pass while the
+    // store cannot be read.
+    let mut collected: Vec<Turn> = Vec::new();
     loop {
         if let Some(error) = lapsed(far) {
             return stop(taken, error);
         }
-        let Some(cases) = asked.read(&mut poller, &none, first.is_some(), &mut offline)? else {
-            continue;
+        let cases = match asked.read(&mut poller, &none, first.is_some(), &mut offline) {
+            Ok(Some(cases)) => cases,
+            Ok(None) => continue,
+            Err(error) => return failed(error, collecting.is_some(), collected, taken),
         };
         warn_once(db, cases, &mut warned, &mut unfolded);
         if let Some(listening) = &mut listening {
@@ -588,7 +594,14 @@ fn wait(
         if !woke {
             collecting = None;
         }
-        asked.rest(&poller, collecting.as_ref(), &mut offline)?;
+        collected = if collecting.is_some() {
+            found.give(Vec::new())
+        } else {
+            Vec::new()
+        };
+        if let Err(error) = asked.rest(&poller, collecting.as_ref(), &mut offline) {
+            return failed(error, collecting.is_some(), collected, taken);
+        }
     }
 }
 
@@ -876,6 +889,30 @@ fn stop(taken: Vec<Turn>, error: Failure) -> Result<Vec<Turn>, Error> {
     }
     ctx::warn(format_args!("{error}"));
     Ok(taken)
+}
+
+/// The end of a wait whose read of the store, or held poll, failed with
+/// `error`. A timeout that passed while it was `collecting` gives what it
+/// `collected` at its last read, with the messages it `taken` (AG-18). Any
+/// other failure after it took messages, which no later wait takes again,
+/// gives them, with what it collected so that its `next_since` passes no
+/// event it has not printed, and says the failure on stderr (AG-16), as
+/// [`stop`] does; with none taken, it is `error`.
+fn failed(
+    error: Error,
+    collecting: bool,
+    collected: Vec<Turn>,
+    taken: Vec<Turn>,
+) -> Result<Vec<Turn>, Error> {
+    if !(collecting && error.status() == Status::Timeout) {
+        if taken.is_empty() {
+            return Err(error);
+        }
+        ctx::warn(format_args!("{error}"));
+    }
+    // What it collected holds no message it took: a withdraw of one is
+    // urgent, and ended the wait at that read.
+    Ok(collected.into_iter().chain(taken).collect())
 }
 
 /// The error of a wait whose timeout passed with nothing to report.
