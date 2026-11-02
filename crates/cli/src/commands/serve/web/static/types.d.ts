@@ -144,6 +144,13 @@ export interface Event {
   body_in_case?: boolean;
 }
 
+// An event as serve sends it: one whose record has no data has null for
+// it. api.ts gives each such event empty data before the page reads it, so
+// the page reads `Event`, whose data is always there.
+export interface ServedEvent extends Omit<Event, "data"> {
+  data: EventData | null;
+}
+
 // A case, as `show --json` gives it (AG-13), and each item of a list.
 export interface Case {
   id: string;
@@ -187,9 +194,14 @@ export interface Case {
   url?: string;
 }
 
+// A case as serve sends it, its events as serve sent them (`ServedEvent`).
+export interface ServedCase extends Omit<Case, "events"> {
+  events: ServedEvent[];
+}
+
 // `GET /v1/cases`.
 export interface List {
-  list: Case[];
+  list: ServedCase[];
 }
 
 // A worker listening for messages now (ST-16): its labels, when it began
@@ -254,7 +266,7 @@ export interface Refusal {
   error: {
     category: Category;
     message: string;
-    case?: Case;
+    case?: ServedCase;
   };
 }
 
@@ -286,7 +298,7 @@ export interface Notification {
     file: string;
     at?: Time;
   };
-  case: Case;
+  case: ServedCase;
 }
 
 // `GET /v1/notifications`.
