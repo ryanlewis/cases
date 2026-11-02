@@ -36,10 +36,11 @@ struct Forwarding {
 /// count above 0, it takes one off that first and sends its stdin on to
 /// `dial-stdio` through a `cat` whose pid it writes to `@RELAYPID@`, so
 /// that a test can stop what is sent, as a network that drops it does.
-/// That `dial-stdio` runs in a process group of its own, out of the near
-/// side's reach as a far side on another machine is: a hold that lost its
-/// lease kills its child's group 200 ms after closing its stdin, which must
-/// not let go of the far side's locks before their lease runs out.
+/// The relayed `dial-stdio` runs in a process group of its own, out of the
+/// near side's reach as a far side on another machine is: a dropped pipe
+/// whose child has not exited 200 ms after its stdin closed kills the
+/// child's group, as a hold that lost its lease does, and that must not let
+/// go of the far side's locks before their lease runs out.
 const SSH: &str = r#"#!/bin/sh
 echo "$*" >> "@LOG@"
 while [ $# -gt 0 ] && [ "$1" != "cases" ]; do shift; done
