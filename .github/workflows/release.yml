@@ -104,7 +104,7 @@ jobs:
   # under Rosetta when the runner has it.
   macos:
     needs: version
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -233,7 +233,7 @@ jobs:
   macos-verify:
     needs: [version, macos-sign]
     if: needs.macos-sign.outputs.signed == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 10
     env:
       VERSION: ${{ needs.version.outputs.version }}
