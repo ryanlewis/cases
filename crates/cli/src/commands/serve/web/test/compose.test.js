@@ -30,6 +30,11 @@ test("the picker lists the agents listening now, then the workers and labels of 
   // Two days back, and no further.
   assert.equal(RECENT, 2 * 24 * 60 * 60 * 1000);
   assert.deepEqual(picks([], [kase("b1", "fresh", [], 47 * 60), kase("b2", "stale", [], 49 * 60)], now).map((p) => p.key), ["worker:fresh"]);
+  // A case not updated counts from when it opened; one with no time, or no
+  // labels, adds no label.
+  const opened = { ...kase("c1", "opened", undefined, 0), updated_at: undefined, opened_at: at(60) };
+  const timeless = { ...kase("c2", "timeless", ["t"], 0), updated_at: undefined };
+  assert.deepEqual(picks([], [opened, timeless], now).map((p) => p.key), ["worker:opened"]);
 });
 
 const fields = (extra) => ({ pick: "worker:bun-pins", other: "", otherKind: "worker", body: " Rebase onto main\n\nThen test. ", ...extra });
@@ -65,6 +70,7 @@ test("a drafted message goes to the pick, with its text trimmed, and says what i
   assert.deepEqual(drafted(fields(), choices, "UkLWZ").body, { kind: "message", urgency: "today", title: "Rebase onto main", body: "Rebase onto main\n\nThen test.", worker: "bun-pins", re: "UkLWZ" });
   assert.deepEqual(drafted(fields({ pick: "label:release", body: "Rebase" }), kept(choices, "label:release"), "").body, { kind: "message", urgency: "today", title: "Rebase", body: "Rebase", labels: ["release"] });
   assert.deepEqual(drafted(fields({ pick: "other", other: " ops ", otherKind: "label" }), choices, "").body.labels, ["ops"]);
+  assert.deepEqual(drafted(fields({ pick: "other", other: " ops ", otherKind: "worker" }), choices, "").body, { kind: "message", urgency: "today", title: "Rebase onto main", body: "Rebase onto main\n\nThen test.", worker: "ops" });
   assert.equal(drafted(fields({ pick: "" }), choices, "").problem, "choose who it goes to");
   assert.equal(drafted(fields({ pick: "other", other: " " }), choices, "").problem, "name the worker or label it goes to");
   assert.equal(drafted(fields({ body: " \n " }), choices, "").problem, "write a note");
@@ -186,6 +192,8 @@ test("the filter leaves the choices whose name has it, whatever its case, and th
   assert.deepEqual(keys(" OS "), ["worker:ghost"]);
   assert.deepEqual(keys("zzz"), []);
   assert.deepEqual(keys("dep", "worker:ghost"), ["worker:ghost", "label:Deploy"]);
+  // A choice that names no one has no name to match.
+  assert.deepEqual(filtered([{ key: "x", target: {}, live: false }], "x", ""), []);
 });
 
 test("while who listens is not known, the composer lists the recent workers and labels plainly, saying nothing of who listens", () => {

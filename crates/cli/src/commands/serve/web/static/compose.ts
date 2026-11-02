@@ -7,6 +7,7 @@
 // are folded behind one line, with a filter, as there can be many. A label
 // someone listens on is sent to as "another". The same listening rows are
 // the inbox-zero panel's (lists.ts).
+import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as api from "./api.js";
 import { Text } from "./case.js";
@@ -306,6 +307,246 @@ export class Entry {
   }
 }
 
+// What the composer's ways out read and change: its fields, whether it asks
+// before it closes, and its dialog.
+interface Leaving {
+  f: Fields;
+  leaving: boolean;
+  setLeaving: (leaving: boolean) => void;
+  dialog: RefObject<HTMLDialogElement>;
+}
+
+// Closes the dialog, or, with a note written, asks first.
+function leave(c: Leaving): void {
+  if (c.f.body.trim() && !c.leaving) {
+    c.setLeaving(true);
+    return;
+  }
+  c.dialog.current?.close();
+}
+
+// Back does what Escape does: closes the composer, or asks first when a
+// note is written. Whether it asked.
+function backed(c: Leaving): boolean {
+  if (c.f.body.trim()) {
+    c.setLeaving(true);
+    return true;
+  }
+  c.dialog.current?.close();
+  return false;
+}
+
+// The case a reply is about is shown on the page behind the dialog: the
+// app goes to it, and the composer goes, once the human says so when a
+// note is written. One opened in another tab leaves the dialog as it is.
+function toCase(c: Leaving, e: MouseEvent): void {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (c.f.body.trim()) {
+    e.preventDefault();
+    c.setLeaving(true);
+  }
+}
+
+// What a send reads and changes besides: the choices, the case it is about,
+// whether a send is under way, and where it says what came of it.
+interface Sending {
+  f: Fields;
+  choices: Pick[];
+  re: string;
+  sending: { current: boolean };
+  dialog: RefObject<HTMLDialogElement>;
+  setRefusal: (refusal: string) => void;
+  onSent: (after: Case) => void;
+}
+
+// Sends the message the fields give, once, and closes the composer when it
+// is sent; else says why not.
+async function submit(s: Sending, e: Event): Promise<void> {
+  e.preventDefault();
+  if (s.sending.current) return;
+  const { body, problem } = drafted(s.f, s.choices, s.re);
+  if (problem) {
+    s.setRefusal(problem);
+    return;
+  }
+  s.sending.current = true;
+  const release = setTimeout(() => (s.sending.current = false), 10000);
+  let sent = false;
+  try {
+    const { after, refusal: why } = await api.sendMessage(body!);
+    if (after) {
+      sent = true;
+      s.setRefusal("");
+      s.dialog.current?.close();
+      s.onSent(after);
+      return;
+    }
+    s.setRefusal(why);
+  } finally {
+    clearTimeout(release);
+    // A message sent is not sent again: the composer goes once it is
+    // sent, and a second send before then, which no revision refuses,
+    // would be a second message.
+    if (!sent) s.sending.current = false;
+  }
+}
+
+// The dialog's own events: Escape, and a click on the dialog itself, which
+// is on the backdrop: the composer fills it, on a phone too (style.css). A
+// press that starts inside and ends outside, as a drag does, is not.
+function dialogEvents(c: Leaving, down: { current: boolean }) {
+  return {
+    onCancel: (e: Event) => {
+      e.preventDefault();
+      leave(c);
+    },
+    onPointerDown: (e: PointerEvent) => (down.current = e.target === e.currentTarget),
+    onClick: (e: MouseEvent) => {
+      if (e.target === e.currentTarget && down.current) leave(c);
+      down.current = false;
+    },
+  };
+}
+
+// Opens as a modal, with the note focused.
+function useShown(dialog: RefObject<HTMLDialogElement>): void {
+  useEffect(() => {
+    const d = dialog.current;
+    if (!d) return;
+    if (!d.open) d.showModal();
+    d.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.focus();
+  }, []);
+}
+
+// The picker, once asked for, takes the focus: its choice, or its first.
+function usePickerFocus(picker: RefObject<HTMLFieldSetElement>, picking: boolean, to: string): void {
+  useEffect(() => {
+    if (!picking || !to) return;
+    const radios = picker.current?.querySelectorAll<HTMLInputElement>('input[name="to"]');
+    const radio = radios && (Array.from(radios).find((r) => r.checked) || radios[0]);
+    radio?.focus();
+  }, [picking]);
+}
+
+// Asked whether to discard the note, the focus goes to keeping it, so
+// that Enter is no slip; keeping it gives the note the focus back.
+function useKeepFocus(dialog: RefObject<HTMLDialogElement>, leaving: boolean): void {
+  useEffect(() => {
+    if (leaving) dialog.current?.querySelector<HTMLButtonElement>(".leaving .keep")?.focus();
+  }, [leaving]);
+}
+
+// On a phone the dialog takes the part of the screen the on-screen
+// keyboard leaves, which 100dvh is not: iOS Safari lays the keyboard over
+// the page, and the send button under it could not be scrolled to.
+function useSeen(dialog: RefObject<HTMLDialogElement>): void {
+  useEffect(() => {
+    const d = dialog.current;
+    const seen = window.visualViewport;
+    if (!d || !seen) return;
+    const fit = () => {
+      d.style.setProperty("--seen-top", `${seen.offsetTop}px`);
+      d.style.setProperty("--seen-height", `${seen.height}px`);
+    };
+    fit();
+    seen.addEventListener("resize", fit);
+    seen.addEventListener("scroll", fit);
+    return () => {
+      seen.removeEventListener("resize", fit);
+      seen.removeEventListener("scroll", fit);
+    };
+  }, []);
+}
+
+// The choices not listening are folded while there are some listening.
+// Until the fold is opened or closed by hand (`open`), it is open while the
+// one picked is among them, as a reply to a worker that has stopped
+// listening picks it, and while the filter has text, so that a session
+// starting to listen does not fold away a list being narrowed. With nobody
+// listening they are the whole list, and are not folded. The one picked
+// stays in sight (`held`) when its fold is closed.
+function fold(live: Pick[], idle: Pick[], open: boolean | null, filter: string, pick: string): { unfolded: boolean; shown: Pick[]; held: Pick | undefined } {
+  const unfolded = live.length === 0 || (open ?? (filter.trim() !== "" || idle.some((p) => p.key === pick)));
+  const shown = filtered(idle, filter, pick);
+  const held = unfolded ? undefined : idle.find((p) => p.key === pick);
+  return { unfolded, shown, held };
+}
+
+// What the picker draws from.
+interface Picking {
+  f: Fields;
+  set: <K extends keyof Fields>(key: K) => (value: Fields[K]) => void;
+  live: Pick[];
+  idle: Pick[];
+  unfolded: boolean;
+  shown: Pick[];
+  held: Pick | undefined;
+  filter: string;
+  setFilter: (filter: string) => void;
+  setOpen: (open: boolean) => void;
+  listeners: Listener[] | null;
+  now: number;
+  picker: RefObject<HTMLFieldSetElement>;
+}
+
+// The picker: who it goes to.
+function picker(p: Picking) {
+  return html`<fieldset class="picker" ref=${p.picker}>
+    <legend>to</legend>
+    ${p.live.length > 0 && html`<p class="section">listening now</p>`}
+    ${p.live.map((c) => html`<${Choice} key=${c.key} p=${c} checked=${p.f.pick === c.key} onPick=${p.set("pick")} now=${p.now} />`)}
+    ${p.held && html`<${Choice} key=${p.held.key} p=${p.held} checked=${true} onPick=${p.set("pick")} now=${p.now} />`}
+    ${foldButton(p)}
+    ${notListening(p)}
+    <label class="choice pick"><input type="radio" name="to" value="other" checked=${p.f.pick === "other"} onClick=${() => p.set("pick")("other")} onChange=${() => p.set("pick")("other")} /> <span>another</span></label>
+    ${another(p)}
+  </fieldset>`;
+}
+
+// The line the choices not listening fold behind, which counts them.
+function foldButton(p: Picking) {
+  return p.live.length > 0 && p.idle.length > 0 && html`<button type="button" class="fold" aria-expanded=${p.unfolded ? "true" : "false"} aria-controls=${p.unfolded ? "not-listening" : undefined} onClick=${() => p.setOpen(!p.unfolded)}>${p.idle.length - (p.held ? 1 : 0)} more, not listening</button>`;
+}
+
+// The choices not listening, with their filter, while unfolded.
+function notListening(p: Picking) {
+  return p.idle.length > 0 && p.unfolded && html`<div id="not-listening">
+      ${p.listeners && html`<p class="section">not listening now: it waits until one is</p>`}
+      <input type="text" name="filter" class="filter" autocomplete="off" aria-label="filter by name" placeholder="filter by name" value=${p.filter} onInput=${(e: Event) => p.setFilter((e.target as HTMLInputElement).value)} />
+      ${p.shown.map((c) => html`<${Choice} key=${c.key} p=${c} checked=${p.f.pick === c.key} onPick=${p.set("pick")} now=${p.now} />`)}
+      ${p.shown.length === 0 && html`<p class="context">no worker or label here has “${p.filter.trim()}” in its name</p>`}
+    </div>`;
+}
+
+// The kind and name of another, while it is picked.
+function another(p: Picking) {
+  return p.f.pick === "other" && html`<div class="other">
+      <select name="kind" value=${p.f.otherKind} onChange=${(e: Event) => p.set("otherKind")((e.target as HTMLSelectElement).value as "worker" | "label")}><option value="worker">worker</option><option value="label">label</option></select>
+      <input type="text" name="other" aria-label="its name" value=${p.f.other} onInput=${(e: Event) => p.set("other")((e.target as HTMLInputElement).value)} />
+    </div>`;
+}
+
+// The buttons under the note: send and close, or, asked whether to discard
+// the note, discard and keep writing.
+function actions(c: Leaving) {
+  return c.leaving
+    ? html`<div class="actions leaving" role="alert"><span>discard this note?</span><button type="button" class="primary" onClick=${() => c.dialog.current?.close()}>discard</button><button type="button" class="keep" onClick=${() => {
+        c.setLeaving(false);
+        c.dialog.current?.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.focus();
+      }}>keep writing</button></div>`
+    : html`<div class="actions"><button type="submit" class="primary" aria-keyshortcuts=${SEND_SHORTCUTS}>send <${Hint} keys=${SEND} /></button><button type="button" onClick=${() => leave(c)}>close</button></div>`;
+}
+
+// The line that says what case a reply is about, linked to it.
+function aboutLine(re: string, about: Case | undefined, onClick: (e: MouseEvent) => void) {
+  return re && html`<p class="re">about <a href=${about ? page(about) : pageOf(re)} onClick=${onClick}>${about ? about.title : re}</a></p>`;
+}
+
+// The setter of one field of the composer's.
+function setter(setF: (update: (was: Fields) => Fields) => void) {
+  return <K extends keyof Fields>(key: K) => (value: Fields[K]) => setF((was) => ({ ...was, [key]: value }));
+}
+
 // The composer, a dialog over the page: who it goes to, the note, and
 // send. There is no title to write, as a note slipped to someone has none:
 // the note's first line is the message's title (`title`), and the note is
@@ -354,174 +595,39 @@ export function Composer({
   const choices = kept(offered, f.pick);
   const live = choices.filter((p) => p.live);
   const idle = choices.filter((p) => !p.live);
-  // The choices not listening are folded while there are some listening.
-  // Until the fold is opened or closed by hand, it is open while the one
-  // picked is among them, as a reply to a worker that has stopped
-  // listening picks it, and while the filter has text, so that a session
-  // starting to listen does not fold away a list being narrowed. With
-  // nobody listening they are the whole list, and are not folded.
+  // Whether the fold of the choices not listening was opened or closed by
+  // hand, and the filter's text (fold).
   const [open, setOpen] = useState<boolean | null>(null);
   const [filter, setFilter] = useState("");
-  const unfolded = live.length === 0 || (open ?? (filter.trim() !== "" || idle.some((p) => p.key === f.pick)));
-  const shown = filtered(idle, filter, f.pick);
-  // The one picked stays in sight when its fold is closed.
-  const held = unfolded ? undefined : idle.find((p) => p.key === f.pick);
+  const { unfolded, shown, held } = fold(live, idle, open, filter, f.pick);
   const [refusal, setRefusal] = useState("");
   const sending = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
-  const picker = useRef<HTMLFieldSetElement>(null);
-  const set = <K extends keyof Fields>(key: K) => (value: Fields[K]) => setF((was) => ({ ...was, [key]: value }));
-
-  // Opens as a modal, with the note focused.
-  useEffect(() => {
-    const d = dialog.current;
-    if (!d) return;
-    if (!d.open) d.showModal();
-    d.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.focus();
-  }, []);
-  // The picker, once asked for, takes the focus: its choice, or its first.
-  useEffect(() => {
-    if (!picking || !to) return;
-    const radios = picker.current?.querySelectorAll<HTMLInputElement>('input[name="to"]');
-    const radio = radios && (Array.from(radios).find((r) => r.checked) || radios[0]);
-    radio?.focus();
-  }, [picking]);
-
-  // Asked whether to discard the note, the focus goes to keeping it, so
-  // that Enter is no slip; keeping it gives the note the focus back.
-  useEffect(() => {
-    if (leaving) dialog.current?.querySelector<HTMLButtonElement>(".leaving .keep")?.focus();
-  }, [leaving]);
-
-  // On a phone the dialog takes the part of the screen the on-screen
-  // keyboard leaves, which 100dvh is not: iOS Safari lays the keyboard over
-  // the page, and the send button under it could not be scrolled to.
-  useEffect(() => {
-    const d = dialog.current;
-    const seen = window.visualViewport;
-    if (!d || !seen) return;
-    const fit = () => {
-      d.style.setProperty("--seen-top", `${seen.offsetTop}px`);
-      d.style.setProperty("--seen-height", `${seen.height}px`);
-    };
-    fit();
-    seen.addEventListener("resize", fit);
-    seen.addEventListener("scroll", fit);
-    return () => {
-      seen.removeEventListener("resize", fit);
-      seen.removeEventListener("scroll", fit);
-    };
-  }, []);
-
-  // Closes the dialog, or, with a note written, asks first.
-  function leave(): void {
-    if (f.body.trim() && !leaving) {
-      setLeaving(true);
-      return;
-    }
-    dialog.current?.close();
-  }
-  // A click on the dialog itself is on the backdrop: the composer fills it,
-  // on a phone too (style.css). A press that starts inside and ends outside,
-  // as a drag does, is not.
+  const pickerRef = useRef<HTMLFieldSetElement>(null);
+  const set = setter(setF);
+  useShown(dialog);
+  usePickerFocus(pickerRef, picking, to);
+  useKeepFocus(dialog, leaving);
+  useSeen(dialog);
+  // Whether a press on the dialog started on its backdrop (dialogEvents).
   const down = useRef(false);
+  const c: Leaving = { f, leaving, setLeaving, dialog };
+  back.current = () => backed(c);
+  const send: Sending = { f, choices, re, sending, dialog, setRefusal, onSent };
 
-  // Back does what Escape does: closes the composer, or asks first when a
-  // note is written.
-  back.current = () => {
-    if (f.body.trim()) {
-      setLeaving(true);
-      return true;
-    }
-    dialog.current?.close();
-    return false;
-  };
-
-  // The case a reply is about is shown on the page behind the dialog: the
-  // app goes to it, and the composer goes, once the human says so when a
-  // note is written. One opened in another tab leaves the dialog as it is.
-  function toCase(e: MouseEvent): void {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    if (f.body.trim()) {
-      e.preventDefault();
-      setLeaving(true);
-    }
-  }
-
-  async function submit(e: Event): Promise<void> {
-    e.preventDefault();
-    if (sending.current) return;
-    const { body, problem } = drafted(f, choices, re);
-    if (problem) {
-      setRefusal(problem);
-      return;
-    }
-    sending.current = true;
-    const release = setTimeout(() => (sending.current = false), 10000);
-    let sent = false;
-    try {
-      const { after, refusal: why } = await api.sendMessage(body!);
-      if (after) {
-        sent = true;
-        setRefusal("");
-        dialog.current?.close();
-        onSent(after);
-        return;
-      }
-      setRefusal(why);
-    } finally {
-      clearTimeout(release);
-      // A message sent is not sent again: the composer goes once it is
-      // sent, and a second send before then, which no revision refuses,
-      // would be a second message.
-      if (!sent) sending.current = false;
-    }
-  }
-
-  const aboutLine = re && html`<p class="re">about <a href=${about ? page(about) : pageOf(re)} onClick=${toCase}>${about ? about.title : re}</a></p>`;
   return html`<dialog class="options compose-dialog" id="compose-dialog" aria-labelledby="compose-title" ref=${dialog}
-    onCancel=${(e: Event) => {
-      e.preventDefault();
-      leave();
-    }}
-    onClose=${onClose}
-    onPointerDown=${(e: PointerEvent) => (down.current = e.target === e.currentTarget)}
-    onClick=${(e: MouseEvent) => {
-      if (e.target === e.currentTarget && down.current) leave();
-      down.current = false;
-    }}><div id="compose">
+    ...${dialogEvents(c, down)}
+    onClose=${onClose}><div id="compose">
 <header class="case-head">
   <h1 id="compose-title">message an agent</h1>
 </header>
-<form class="respond compose" data-write="message" onSubmit=${submit} onKeyDown=${onKey}>
+<form class="respond compose" data-write="message" onSubmit=${(e: Event) => submit(send, e)} onKeyDown=${onKey}>
   ${!picking && html`<p class="to">to <strong>${named(f.pick, f)}</strong> <button type="button" class="change" onClick=${() => setPicking(true)}>change</button></p>`}
-  ${picking && html`<fieldset class="picker" ref=${picker}>
-    <legend>to</legend>
-    ${live.length > 0 && html`<p class="section">listening now</p>`}
-    ${live.map((p) => html`<${Choice} key=${p.key} p=${p} checked=${f.pick === p.key} onPick=${set("pick")} now=${now} />`)}
-    ${held && html`<${Choice} key=${held.key} p=${held} checked=${true} onPick=${set("pick")} now=${now} />`}
-    ${live.length > 0 && idle.length > 0 && html`<button type="button" class="fold" aria-expanded=${unfolded ? "true" : "false"} aria-controls=${unfolded ? "not-listening" : undefined} onClick=${() => setOpen(!unfolded)}>${idle.length - (held ? 1 : 0)} more, not listening</button>`}
-    ${idle.length > 0 && unfolded && html`<div id="not-listening">
-      ${listeners && html`<p class="section">not listening now: it waits until one is</p>`}
-      <input type="text" name="filter" class="filter" autocomplete="off" aria-label="filter by name" placeholder="filter by name" value=${filter} onInput=${(e: Event) => setFilter((e.target as HTMLInputElement).value)} />
-      ${shown.map((p) => html`<${Choice} key=${p.key} p=${p} checked=${f.pick === p.key} onPick=${set("pick")} now=${now} />`)}
-      ${shown.length === 0 && html`<p class="context">no worker or label here has “${filter.trim()}” in its name</p>`}
-    </div>`}
-    <label class="choice pick"><input type="radio" name="to" value="other" checked=${f.pick === "other"} onClick=${() => set("pick")("other")} onChange=${() => set("pick")("other")} /> <span>another</span></label>
-    ${f.pick === "other" && html`<div class="other">
-      <select name="kind" value=${f.otherKind} onChange=${(e: Event) => set("otherKind")((e.target as HTMLSelectElement).value as "worker" | "label")}><option value="worker">worker</option><option value="label">label</option></select>
-      <input type="text" name="other" aria-label="its name" value=${f.other} onInput=${(e: Event) => set("other")((e.target as HTMLInputElement).value)} />
-    </div>`}
-  </fieldset>`}
-  ${aboutLine}
+  ${picking && picker({ f, set, live, idle, unfolded, shown, held, filter, setFilter, setOpen, listeners, now, picker: pickerRef })}
+  ${aboutLine(re, about, (e) => toCase(c, e))}
   <label>note <${Text} name="body" rows="5" value=${f.body} onInput=${set("body")} autofocus /></label>
   <p class="error" role="alert" hidden=${!refusal}>${refusal}</p>
-  ${leaving
-    ? html`<div class="actions leaving" role="alert"><span>discard this note?</span><button type="button" class="primary" onClick=${() => dialog.current?.close()}>discard</button><button type="button" class="keep" onClick=${() => {
-        setLeaving(false);
-        dialog.current?.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.focus();
-      }}>keep writing</button></div>`
-    : html`<div class="actions"><button type="submit" class="primary" aria-keyshortcuts=${SEND_SHORTCUTS}>send <${Hint} keys=${SEND} /></button><button type="button" onClick=${leave}>close</button></div>`}
+  ${actions(c)}
 </form>
 </div></dialog>`;
 }
