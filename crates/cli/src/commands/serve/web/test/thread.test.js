@@ -284,11 +284,13 @@ test("answered says an answer's lines as the thread does, from the list it saw",
   assert.deepEqual(answered(c, { file: [1] }), ["file 1. the TUI"]);
   assert.deepEqual(answered({ ...c, left_out: undefined }, { file: [1] }), ["file 1."]);
   assert.deepEqual(answered({ ...c, events: undefined, left_out: undefined }, { ack: true }), ["acknowledged"]);
-  // BUG (follow-up): an earlier event with no data stops answered, which
-  // reads its fields without the guard thread has; thread says the answer.
+  // An earlier event with no data is read, as thread reads it, as one with
+  // none of its fields.
   const nodata = make("briefing", [["open", null], ["answer", { file: [1] }]]);
   assert.deepEqual(texts(nodata)[1], ["file 1."]);
-  assert.throws(() => answered(nodata, nodata.events[1].data), TypeError);
+  assert.deepEqual(answered(nodata, nodata.events[1].data), ["file 1."]);
+  const amended = make("briefing", [["open", { left_out: ["a"] }], ["amend", null], ["answer", { file: [1] }]]);
+  assert.deepEqual(answered(amended, amended.events[2].data), ["file 1. a"]);
   // An open with no left-out items gives an empty list.
   const bare = make("briefing", [["open", {}], ["answer", { file: [1] }]]);
   assert.deepEqual(answered(bare, bare.events[1].data), ["file 1."]);

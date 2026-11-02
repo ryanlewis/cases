@@ -191,8 +191,9 @@ function leftOutBefore(c: Case, seq: number): string[] {
   let items: string[] = [];
   for (const e of c.events || []) {
     if (e.seq >= seq) break;
-    if (e.event === "open") items = e.data.left_out || [];
-    else if (e.event === "amend" && (e.data.left_out || []).length) items = e.data.left_out!;
+    const data = e.data || {};
+    if (e.event === "open") items = data.left_out || [];
+    else if (e.event === "amend" && (data.left_out || []).length) items = data.left_out!;
   }
   return items;
 }
