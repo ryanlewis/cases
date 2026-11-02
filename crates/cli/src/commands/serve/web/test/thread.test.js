@@ -302,3 +302,10 @@ test("a line is trimmed and split at each newline", () => {
   // newline; the inbox keeps an empty line, and the "\r".
   assert.deepEqual(texts(question([["close", { links: ["   ", "a\r\nb"] }]]))[1], ["", "a\r", "b"]);
 });
+
+test("an event the thread does not know says nothing, whatever its name", () => {
+  for (const name of ["bogus", "toString", "constructor", "__proto__", "hasOwnProperty"]) {
+    const c = question([[name, { body: "b", outcome: "o" }]]);
+    assert.deepEqual(thread(c)[1], { event: c.events[1], lines: [], markdown: "" }, name);
+  }
+});

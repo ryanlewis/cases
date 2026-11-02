@@ -47,17 +47,7 @@ function bodyOf(c: Case, event: Event): string {
 // `{ context }` with the text the case had before, unless that was blank.
 // `markdown` is a note's body or a close's outcome.
 export function thread(c: Case): Said[] {
-  let title = "";
-  let body = "";
-  let context = "";
-  let recommend = 0;
-  // A briefing's landed and left-out items, as the open and amends set
-  // them: an answer files items by their number in the list it saw.
-  let landed = false;
-  let leftOut: string[] = [];
-  // Whether the case stands answered: the agent's next note or amend
-  // reopens it. describe.rs reads the same from each event's state before.
-  let answered = false;
+  const seen: Seen = { title: "", body: "", context: "", recommend: 0, landed: false, leftOut: [], answered: false };
   return (c.events || []).map((event): Said => {
     const data = event.data || {};
     const lines: Line[] = [];
@@ -68,83 +58,126 @@ export function thread(c: Case): Said[] {
     const name = who(event.actor);
     // A pickup whose `by` names its actor says so once.
     if (name && !(event.event === "pickup" && data.by === name)) add(`by ${name}`);
-    if (answered && (event.event === "note" || event.event === "amend")) {
-      add("reopened the case");
-      answered = false;
-    }
-    if (event.event === "answer") answered = true;
-    else if (event.event === "withdraw") answered = false;
-    let markdown = "";
-    switch (event.event) {
-      case "open":
-        title = typeof data.title === "string" ? data.title : "";
-        body = bodyOf(c, event);
-        context = data.context || "";
-        recommend = data.recommend || 0;
-        landed = !!data.landed;
-        leftOut = data.left_out || [];
-        // A message says who it went to: its worker, then its labels.
-        if (c.kind === "message") {
-          const to = [data.worker, ...(data.labels || []).map((label) => `label ${label}`)].filter(Boolean);
-          if (to.length) add(`sent to ${to.join(" or ")}`);
-        }
-        break;
-      case "amend": {
-        if (data.title && data.title !== title) {
-          add(`replaced the title: ${data.title}`);
-          title = data.title;
-        }
-        const replaced = bodyOf(c, event);
-        if (replaced && replaced !== body) {
-          add("replaced the body", body.trim() ? { body } : null);
-          body = replaced;
-        }
-        for (const option of data.options || []) add(`added option: ${option}`);
-        if (data.recommend && data.recommend !== recommend) {
-          recommend = data.recommend;
-          add(`recommended ${recommend}. ${option(c, recommend) || ""}`);
-        }
-        for (const row of data.rows || []) add(`added row [${row.id}] ${row.label}`);
-        if (typeof data.landed === "boolean" && data.landed !== landed) {
-          landed = data.landed;
-          add(landed ? "landed" : "not landed");
-        }
-        const items = data.left_out || [];
-        if (items.length && !sameList(items, leftOut)) {
-          leftOut = items;
-          add(`replaced the left-out items: ${items.join("; ")}`);
-        }
-        for (const link of data.drop_links || []) add(`dropped link: ${link}`);
-        for (const link of data.links || []) add(`added link: ${link}`);
-        for (const label of data.labels || []) add(`added label: ${label}`);
-        if (data.context && data.context !== context) {
-          add(`replaced the context: ${data.context}`, context.trim() ? { context } : null);
-          context = data.context;
-        }
-        break;
-      }
-      case "answer":
-        answer(c, data, add, leftOut);
-        break;
-      case "pickup":
-        if (data.by) add(`by ${data.by}`);
-        break;
-      case "note":
-        markdown = data.body || "";
-        break;
-      case "close":
-        markdown = data.outcome || "";
-        for (const link of data.links || []) add(link);
-        break;
-      case "withdraw":
-        if (data.reason) add(`reason: ${data.reason}`);
-        break;
-      case "park":
-        if (data.note) add(`note: ${data.note}`);
-        break;
-    }
+    reopened(event, seen, add);
+    const markdown = say.get(event.event)?.(c, event, data, seen, add) || "";
     return { event, lines, markdown };
   });
+}
+
+// What the events before the one being said had set: the open's and amends'
+// title, body, context, recommended option, and a briefing's landed and
+// left-out items, which an answer files by their number in the list it saw.
+// `answered` is whether the case stands answered: the agent's next note or
+// amend reopens it. describe.rs reads the same from each event's state
+// before.
+interface Seen {
+  title: string;
+  body: string;
+  context: string;
+  recommend: number;
+  landed: boolean;
+  leftOut: string[];
+  answered: boolean;
+}
+
+// Says a note or amend reopened an answered case, and keeps whether the
+// case stands answered after `event`.
+function reopened(event: Event, seen: Seen, add: Add): void {
+  if (seen.answered && (event.event === "note" || event.event === "amend")) {
+    add("reopened the case");
+    seen.answered = false;
+  }
+  if (event.event === "answer") seen.answered = true;
+  else if (event.event === "withdraw") seen.answered = false;
+}
+
+// Adds what each event of case `c`, with record `data`, said, and gives
+// its markdown: a note's body or a close's outcome. An event left out says
+// nothing of its own.
+type Say = (c: Case, event: Event, data: EventData, seen: Seen, add: Add) => string | void;
+const say = new Map<Event["event"], Say>([
+  ["open", opened],
+  ["amend", amended],
+  ["answer", (c, _event, data, seen, add) => answer(c, data, add, seen.leftOut)],
+  ["pickup", (_c, _event, data, _seen, add) => {
+    if (data.by) add(`by ${data.by}`);
+  }],
+  ["note", (_c, _event, data) => data.body || ""],
+  ["close", (_c, _event, data, _seen, add) => {
+    for (const link of data.links || []) add(link);
+    return data.outcome || "";
+  }],
+  ["withdraw", (_c, _event, data, _seen, add) => {
+    if (data.reason) add(`reason: ${data.reason}`);
+  }],
+  ["park", (_c, _event, data, _seen, add) => {
+    if (data.note) add(`note: ${data.note}`);
+  }],
+]);
+
+// An open: what it set, and for a message who it went to, its worker then
+// its labels.
+function opened(c: Case, event: Event, data: EventData, seen: Seen, add: Add): void {
+  seen.title = typeof data.title === "string" ? data.title : "";
+  seen.body = bodyOf(c, event);
+  seen.context = data.context || "";
+  seen.recommend = data.recommend || 0;
+  seen.landed = !!data.landed;
+  seen.leftOut = data.left_out || [];
+  if (c.kind === "message") {
+    const to = [data.worker, ...(data.labels || []).map((label) => `label ${label}`)].filter(Boolean);
+    if (to.length) add(`sent to ${to.join(" or ")}`);
+  }
+}
+
+// An amend: each change it made, in order, against what was set before.
+function amended(c: Case, event: Event, data: EventData, seen: Seen, add: Add): void {
+  amendedText(c, event, data, seen, add);
+  amendedChoices(c, data, seen, add);
+  amendedBriefing(data, seen, add);
+  for (const link of data.drop_links || []) add(`dropped link: ${link}`);
+  for (const link of data.links || []) add(`added link: ${link}`);
+  for (const label of data.labels || []) add(`added label: ${label}`);
+  if (data.context && data.context !== seen.context) {
+    add(`replaced the context: ${data.context}`, seen.context.trim() ? { context: seen.context } : null);
+    seen.context = data.context;
+  }
+}
+
+// An amend's replaced title and body, the body's line with the one before.
+function amendedText(c: Case, event: Event, data: EventData, seen: Seen, add: Add): void {
+  if (data.title && data.title !== seen.title) {
+    add(`replaced the title: ${data.title}`);
+    seen.title = data.title;
+  }
+  const replaced = bodyOf(c, event);
+  if (replaced && replaced !== seen.body) {
+    add("replaced the body", seen.body.trim() ? { body: seen.body } : null);
+    seen.body = replaced;
+  }
+}
+
+// An amend's added options, recommended option and added approval rows.
+function amendedChoices(c: Case, data: EventData, seen: Seen, add: Add): void {
+  for (const option of data.options || []) add(`added option: ${option}`);
+  if (data.recommend && data.recommend !== seen.recommend) {
+    seen.recommend = data.recommend;
+    add(`recommended ${seen.recommend}. ${option(c, seen.recommend) || ""}`);
+  }
+  for (const row of data.rows || []) add(`added row [${row.id}] ${row.label}`);
+}
+
+// An amend of a briefing: whether it landed, and its left-out items.
+function amendedBriefing(data: EventData, seen: Seen, add: Add): void {
+  if (typeof data.landed === "boolean" && data.landed !== seen.landed) {
+    seen.landed = data.landed;
+    add(seen.landed ? "landed" : "not landed");
+  }
+  const items = data.left_out || [];
+  if (items.length && !sameList(items, seen.leftOut)) {
+    seen.leftOut = items;
+    add(`replaced the left-out items: ${items.join("; ")}`);
+  }
 }
 
 // Whether lists `a` and `b` hold the same items in the same order.
@@ -178,15 +211,8 @@ export function answered(c: Case, data: EventData): string[] {
 // What an answer said. A briefing's answer files its left-out items by
 // number in `leftOut`, the list it saw; describe.rs says the same.
 function answer(c: Case, data: EventData, add: Add, leftOut: string[]): void {
-  const chosen = option(c, data.choice);
-  if (chosen !== undefined) add(`chose ${data.choice}. ${chosen}`);
-  else if (data.other) add("chose other");
-  else if (data.signoff) add(`signoff: ${data.signoff}`);
-  else if (data.briefing) add(`briefing: ${data.briefing.replace(/_/g, " ")}`);
-  else if (data.text && c.kind === "question") add(`reply: ${data.text}`);
-  else if (data.text) add(`guidance: ${data.text}`);
-  else if (data.drop) add("drop");
-  else if (data.ack) add("acknowledged");
+  const said = form(c, data);
+  if (said) add(said);
   for (const row of data.rows || []) {
     // `reject` is kept as it is, and shown to people as "don't run" (HU-01).
     const verdict = row.verdict === "reject" ? "don't run" : row.verdict;
@@ -194,4 +220,17 @@ function answer(c: Case, data: EventData, add: Add, leftOut: string[]): void {
   }
   if (data.note) add(`note: ${data.note}`);
   for (const n of data.file || []) add(`file ${n}. ${leftOut[n - 1] || ""}`);
+}
+
+// The first of an answer's forms it has, as its line, if any.
+function form(c: Case, data: EventData): string | undefined {
+  const chosen = option(c, data.choice);
+  if (chosen !== undefined) return `chose ${data.choice}. ${chosen}`;
+  if (data.other) return "chose other";
+  if (data.signoff) return `signoff: ${data.signoff}`;
+  if (data.briefing) return `briefing: ${data.briefing.replace(/_/g, " ")}`;
+  if (data.text) return c.kind === "question" ? `reply: ${data.text}` : `guidance: ${data.text}`;
+  if (data.drop) return "drop";
+  if (data.ack) return "acknowledged";
+  return undefined;
 }
