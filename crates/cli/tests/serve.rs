@@ -1193,17 +1193,24 @@ fn on_a_terminal_a_remote_stores_inbox_is_opened_unless_no_open() {
         r#"PATH="{}" CASES_SERVER=http://127.0.0.1:9 CASES_TOKEN=t "$CASES" serve"#,
         bin.display()
     );
-    let mut terminal = Terminal::start(&env, &format!(r#"{remote} --no-open; echo "exit=$?""#));
-    terminal.wait_for("http://127.0.0.1:9/");
-    terminal.wait_for("exit=0");
-    assert!(!opened.exists(), "--no-open opened the browser");
-
     let mut terminal = Terminal::start(&env, &format!(r#"{remote}; echo "exit=$?""#));
     terminal.wait_for("http://127.0.0.1:9/");
     terminal.wait_for("exit=0");
+    // The opener runs on after serve has ended.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(&opened).is_ok_and(|text| text == "http://127.0.0.1:9/\n") {
+        assert!(Instant::now() < deadline, "the browser was not opened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut terminal = Terminal::start(&env, &format!(r#"{remote} --no-open; echo "exit=$?""#));
+    terminal.wait_for("http://127.0.0.1:9/");
+    terminal.wait_for("exit=0");
+    std::thread::sleep(Duration::from_millis(500));
     assert_eq!(
         fs::read_to_string(&opened).unwrap(),
-        "http://127.0.0.1:9/\n"
+        "http://127.0.0.1:9/\n",
+        "--no-open opened the browser"
     );
 }
 
