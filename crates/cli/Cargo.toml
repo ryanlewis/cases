@@ -82,6 +82,14 @@ rustix = { version = "1.1.5", features = ["event", "process", "stdio", "system",
 # already builds it, for the window's size.
 signal-hook = "0.4.0"
 
+# crossterm, under ratatui, reads the keys in poll(2) rather than in mio:
+# mio's epoll is edge-triggered, and crossterm 0.29 drops the keys that
+# arrive with a resize, so that `q` typed as the window changes size is
+# not read until the next key. Not on macOS, where poll(2) does not take a
+# terminal.
+[target.'cfg(target_os = "linux")'.dependencies]
+crossterm = { version = "0.29.0", default-features = false, features = ["use-dev-tty"] }
+
 # The macOS login keychain, where `cases login` keeps its token (AC-03):
 # generic password items, and the switch that makes a read off a terminal
 # fail rather than show a dialog nobody sees. Pinned with `=`: it is the
