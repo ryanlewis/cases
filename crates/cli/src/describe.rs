@@ -1,6 +1,6 @@
 //! What each event of a case said, as lines of text for its thread.
 
-use cases_core::{Amend, Answer, Case, Event, Kind, Open, Record, State};
+use cases_core::{Amend, Answer, Case, Event, Kind, Open, Record, RowVerdict, State};
 
 use crate::output::Actors;
 
@@ -201,43 +201,7 @@ fn replaced(text: &str, before: &str, previous: fn(String) -> Previous) -> Vec<L
 fn describe(case: &Case, record: &Record) -> Vec<Line> {
     let mut lines = Vec::new();
     match record {
-        Record::Answer(answer) => {
-            if let Some(option) = option(case, answer.choice) {
-                add(&mut lines, &format!("chose {}. {option}", answer.choice));
-            } else if answer.other {
-                add(&mut lines, "chose other");
-            } else if !answer.signoff.is_empty() {
-                add(&mut lines, &format!("signoff: {}", answer.signoff));
-            } else if !answer.briefing.is_empty() {
-                let verdict = answer.briefing.replace('_', " ");
-                add(&mut lines, &format!("briefing: {verdict}"));
-            } else if !answer.text.is_empty() && case.kind() == Kind::Question {
-                add(&mut lines, &format!("reply: {}", answer.text));
-            } else if !answer.text.is_empty() {
-                add(&mut lines, &format!("guidance: {}", answer.text));
-            } else if answer.drop {
-                add(&mut lines, "drop");
-            } else if answer.ack {
-                add(&mut lines, "acknowledged");
-            }
-            for row in &answer.rows {
-                // `reject` is stored as it is, and shown to people as "don't
-                // run" (HU-01).
-                let verdict = if row.verdict == "reject" {
-                    "don't run"
-                } else {
-                    &row.verdict
-                };
-                if row.note.is_empty() {
-                    add(&mut lines, &format!("[{}] {verdict}", row.id));
-                } else {
-                    add(&mut lines, &format!("[{}] {verdict}: {}", row.id, row.note));
-                }
-            }
-            if !answer.note.is_empty() {
-                add(&mut lines, &format!("note: {}", answer.note));
-            }
-        }
+        Record::Answer(answer) => answered(case, answer, &mut lines),
         Record::Pickup(pickup) if !pickup.by.is_empty() => {
             add(&mut lines, &format!("by {}", pickup.by));
         }
@@ -257,6 +221,62 @@ fn describe(case: &Case, record: &Record) -> Vec<Line> {
         _ => {}
     }
     lines
+}
+
+/// Adds what an answer said: its first form, the verdict on each of its
+/// rows, then its note.
+fn answered(case: &Case, answer: &Answer, lines: &mut Vec<Line>) {
+    if let Some(form) = form(case, answer) {
+        add(lines, &form);
+    }
+    for row in &answer.rows {
+        add(lines, &row_verdict(row));
+    }
+    if !answer.note.is_empty() {
+        add(lines, &format!("note: {}", answer.note));
+    }
+}
+
+/// The first of an answer's forms it gave, as the thread says it: a
+/// choice, other, a signoff, a briefing verdict, a reply or guidance, a
+/// drop or an acknowledgement.
+fn form(case: &Case, answer: &Answer) -> Option<String> {
+    let form = if let Some(option) = option(case, answer.choice) {
+        format!("chose {}. {option}", answer.choice)
+    } else if answer.other {
+        "chose other".to_owned()
+    } else if !answer.signoff.is_empty() {
+        format!("signoff: {}", answer.signoff)
+    } else if !answer.briefing.is_empty() {
+        format!("briefing: {}", answer.briefing.replace('_', " "))
+    } else if !answer.text.is_empty() && case.kind() == Kind::Question {
+        format!("reply: {}", answer.text)
+    } else if !answer.text.is_empty() {
+        format!("guidance: {}", answer.text)
+    } else if answer.drop {
+        "drop".to_owned()
+    } else if answer.ack {
+        "acknowledged".to_owned()
+    } else {
+        return None;
+    };
+    Some(form)
+}
+
+/// A row's verdict, and its note when it has one.
+fn row_verdict(row: &RowVerdict) -> String {
+    // `reject` is stored as it is, and shown to people as "don't run"
+    // (HU-01).
+    let verdict = if row.verdict == "reject" {
+        "don't run"
+    } else {
+        &row.verdict
+    };
+    if row.note.is_empty() {
+        format!("[{}] {verdict}", row.id)
+    } else {
+        format!("[{}] {verdict}: {}", row.id, row.note)
+    }
 }
 
 /// The case's option numbered `n` from 1, as a choice or a recommend names

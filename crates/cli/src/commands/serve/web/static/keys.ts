@@ -112,58 +112,76 @@ export function keys(dialog: () => HTMLDialogElement | null): void {
   document.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.isComposing) return;
     const open = document.querySelector("dialog[open]");
-
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-      const form = answerForm();
-      if (!form || open || e.repeat) return;
-      // A field in some other form keeps the key to itself, and so does a
-      // link, which the browser opens in a new tab on Cmd or Ctrl+Enter.
-      if ((e.target as HTMLInputElement).form && (e.target as HTMLInputElement).form !== form) return;
-      if ((e.target as Element).closest && (e.target as Element).closest("a[href]")) return;
-      e.preventDefault();
-      form.requestSubmit(form.querySelector("#respond-send"));
-      return;
-    }
-
-    if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target as HTMLElement | null) || open) return;
-
-    if (e.key === "?") {
-      const keys = dialog();
-      if (keys && keys.showModal) {
-        e.preventDefault();
-        keys.showModal();
-      }
-      return;
-    }
-    if (e.key === "n") {
-      const form = answerForm();
-      const note = form && form.querySelector<HTMLTextAreaElement>('textarea[name="note"]');
-      if (!note) return;
-      // Kept from the field, which takes the focus before the key is typed.
-      e.preventDefault();
-      note.focus();
-      return;
-    }
-    if (e.key === "j" || e.key === "k") {
-      e.preventDefault();
-      step(e.key === "j" ? 1 : -1);
-      return;
-    }
-    if (/^[1-9]$/.test(e.key)) {
-      const form = answerForm();
-      // An approval's rows have a set of choices each.
-      // A held key repeats, and each repeat would give the next row its
-      // verdict too, so only the first press counts.
-      if (form && form.querySelector("fieldset.row")) {
-        if (!e.repeat && verdict(form, Number(e.key))) e.preventDefault();
-        return;
-      }
-      const radio = form && choices(form)[Number(e.key) - 1];
-      if (!radio) return;
-      e.preventDefault();
-      // As a click would, so the form hears the choice.
-      radio.click();
-      radio.focus();
-    }
+    if (sending(e)) send(e, open);
+    else if (!(e.metaKey || e.ctrlKey || e.altKey || typing(e.target as HTMLElement | null) || open)) plain(e, dialog);
   });
+}
+
+// Whether `e` is Cmd or Ctrl+Enter, with neither Alt nor Shift.
+function sending(e: KeyboardEvent): boolean {
+  return e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+}
+
+// Sends the open case's answer, as its send button does, unless no form is
+// shown, a dialog is open, the key is held, or `e` is not the form's.
+function send(e: KeyboardEvent, open: Element | null): void {
+  const form = answerForm();
+  if (!form || open || e.repeat || elsewhere(e.target, form)) return;
+  e.preventDefault();
+  form.requestSubmit(form.querySelector("#respond-send"));
+}
+
+// Whether `target` keeps Cmd or Ctrl+Enter to itself: a field in some other
+// form than `form`, or a link, which the browser opens in a new tab.
+function elsewhere(target: EventTarget | null, form: HTMLFormElement): boolean {
+  const field = target as HTMLInputElement;
+  if (field.form && field.form !== form) return true;
+  return !!((target as Element).closest && (target as Element).closest("a[href]"));
+}
+
+// A key pressed with no modifier, outside a text field and a dialog.
+function plain(e: KeyboardEvent, dialog: () => HTMLDialogElement | null): void {
+  if (e.key === "?") showKeys(e, dialog());
+  else if (e.key === "n") toNote(e);
+  else if (e.key === "j" || e.key === "k") {
+    e.preventDefault();
+    step(e.key === "j" ? 1 : -1);
+  } else if (/^[1-9]$/.test(e.key)) choose(e, Number(e.key));
+}
+
+// Shows the keys dialog, if there is one to show.
+function showKeys(e: KeyboardEvent, keys: HTMLDialogElement | null): void {
+  if (keys && keys.showModal) {
+    e.preventDefault();
+    keys.showModal();
+  }
+}
+
+// Goes to the open case's note to the agent, if its form has one.
+function toNote(e: KeyboardEvent): void {
+  const form = answerForm();
+  const note = form && form.querySelector<HTMLTextAreaElement>('textarea[name="note"]');
+  if (!note) return;
+  // Kept from the field, which takes the focus before the key is typed.
+  e.preventDefault();
+  note.focus();
+}
+
+// Chooses option `n` of the open case's one set of choices, or on an
+// approval gives its current row verdict `n`.
+function choose(e: KeyboardEvent, n: number): void {
+  const form = answerForm();
+  // An approval's rows have a set of choices each. A held key repeats, and
+  // each repeat would give the next row its verdict too, so only the first
+  // press counts.
+  if (form && form.querySelector("fieldset.row")) {
+    if (!e.repeat && verdict(form, n)) e.preventDefault();
+    return;
+  }
+  const radio = form && choices(form)[n - 1];
+  if (!radio) return;
+  e.preventDefault();
+  // As a click would, so the form hears the choice.
+  radio.click();
+  radio.focus();
 }

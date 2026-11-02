@@ -1162,3 +1162,86 @@ fn serve_leaves_briefings_when_the_setting_is_off() {
     serve.stop();
     assert_eq!(env.case(&id).state(), cases_core::State::PickedUp);
 }
+
+/// A store-tokens-file that is only white space counts as not given: serve
+/// starts, with no tokens, rather than reading a file named by nothing.
+#[test]
+fn a_blank_store_tokens_file_is_not_read() {
+    let env = Env::new();
+    env.config("store-tokens-file = \"  \"\n");
+    let serve = env.serve(&[]);
+    assert_eq!(serve.get("/v1").status, 200);
+    assert_eq!(serve.stop().code, 0);
+}
+
+/// Against a remote store serve starts nothing, says where its inbox is,
+/// and on a terminal opens it, unless `--no-open` says not to.
+#[cfg(feature = "remote")]
+#[test]
+fn on_a_terminal_a_remote_stores_inbox_is_opened_unless_no_open() {
+    let env = Env::new();
+    let bin = env.path("bin");
+    let opened = env.path("opened.log");
+    for opener in ["open", "xdg-open"] {
+        write_file(
+            &bin.join(opener),
+            &format!("#!/bin/sh\necho \"$@\" >> {}\n", opened.display()),
+        );
+        fs::set_permissions(bin.join(opener), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let remote = format!(
+        r#"PATH="{}" CASES_SERVER=http://127.0.0.1:9 CASES_TOKEN=t "$CASES" serve"#,
+        bin.display()
+    );
+    let mut terminal = Terminal::start(
+        &env,
+        &format!(r#"{remote}; code=$?; sleep 1; echo "exit=$code""#),
+    );
+    terminal.wait_for("http://127.0.0.1:9/");
+    terminal.wait_for("exit=0");
+    // The opener runs on after serve has ended; the shell stays up a
+    // moment so that the terminal's hangup does not end it first.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(&opened).is_ok_and(|text| text == "http://127.0.0.1:9/\n") {
+        assert!(Instant::now() < deadline, "the browser was not opened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut terminal = Terminal::start(
+        &env,
+        &format!(r#"{remote} --no-open; code=$?; sleep 1; echo "exit=$code""#),
+    );
+    terminal.wait_for("http://127.0.0.1:9/");
+    terminal.wait_for("exit=0");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        fs::read_to_string(&opened).unwrap(),
+        "http://127.0.0.1:9/\n",
+        "--no-open opened the browser"
+    );
+}
+
+/// On a terminal whose stderr goes elsewhere, the log still goes to stderr
+/// as well as to the status screen.
+#[test]
+fn on_a_terminal_with_stderr_redirected_the_log_goes_to_stderr() {
+    let env = Env::new();
+    env.config("allow-hosts = [\"inbox.example\"]\n");
+    let err = env.path("err.log");
+    let run = format!(
+        r#"XDG_CONFIG_HOME="{}" "$CASES" --store "$STORE" serve --listen 127.0.0.1:0 --no-open 2>"{}""#,
+        env.path("config").display(),
+        err.display()
+    );
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (_, pid) = running(&env);
+    let _reap = Reap(pid);
+    terminal.type_keys("q");
+    assert!(ends_within(pid, Duration::from_secs(5)));
+    let log = fs::read_to_string(&err).unwrap();
+    assert!(
+        log.contains("also serving https://inbox.example/ through a proxy"),
+        "{log}"
+    );
+}
