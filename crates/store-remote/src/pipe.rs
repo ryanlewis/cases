@@ -422,10 +422,9 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
     Ok(Some((status, got[start..start + length].to_vec())))
 }
 
-/// The status and the body's length the answer's `head` gives, read as
-/// strictly as `cases dial-stdio` reads a request's: the version 1.0 or
-/// 1.1, each header's name a token, and one length, of digits alone; or
-/// why it gives none.
+/// The status and the body's length the answer's `head` gives, read
+/// strictly: the version 1.0 or 1.1, each header's name a token, and one
+/// length, of digits alone; or why it gives none.
 fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
     let mut lines = head.split("\r\n");
     let status = lines
@@ -662,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_s_head_is_read_as_strictly_as_dial_stdio_reads_a_request_s() {
+    fn an_answer_s_head_is_read_strictly() {
         for bad in [
             // The version is 1.0 or 1.1, as it is written.
             &b"HTTP/1.x 200 OK\r\nContent-Length: 0\r\n\r\n"[..],
