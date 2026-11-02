@@ -990,9 +990,8 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
     starts_within(&f, Duration::from_secs(10));
     let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
     let (exited, let_go) = pr.join().unwrap();
-    eprintln!(
-        "PROBE kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}"
-    );
+    let _ = std::io::stderr().write_all(format!("PROBE {} kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}
+", line!()).as_bytes());
     lapsed(&waited);
     assert!(
         kept_as_it_ended,
@@ -1530,9 +1529,8 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
     starts_within(&f, Duration::from_secs(15));
     let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
     let (exited, let_go) = pr.join().unwrap();
-    eprintln!(
-        "PROBE kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}"
-    );
+    let _ = std::io::stderr().write_all(format!("PROBE {} kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}
+", line!()).as_bytes());
     lapsed(&waited);
     assert!(
         kept_as_it_ended,
