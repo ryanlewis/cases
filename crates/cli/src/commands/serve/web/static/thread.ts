@@ -59,7 +59,7 @@ export function thread(c: Case): Said[] {
     // A pickup whose `by` names its actor says so once.
     if (name && !(event.event === "pickup" && data.by === name)) add(`by ${name}`);
     reopened(event, seen, add);
-    const markdown = said(c, event, data, seen, add);
+    const markdown = say[event.event]?.(c, event, data, seen, add) || "";
     return { event, lines, markdown };
   });
 }
@@ -91,36 +91,29 @@ function reopened(event: Event, seen: Seen, add: Add): void {
   else if (event.event === "withdraw") seen.answered = false;
 }
 
-// Adds what `event` of case `c`, with record `data`, said, and gives its
-// markdown: a note's body or a close's outcome.
-function said(c: Case, event: Event, data: EventData, seen: Seen, add: Add): string {
-  switch (event.event) {
-    case "open":
-      opened(c, event, data, seen, add);
-      break;
-    case "amend":
-      amended(c, event, data, seen, add);
-      break;
-    case "answer":
-      answer(c, data, add, seen.leftOut);
-      break;
-    case "pickup":
-      if (data.by) add(`by ${data.by}`);
-      break;
-    case "note":
-      return data.body || "";
-    case "close":
-      for (const link of data.links || []) add(link);
-      return data.outcome || "";
-    case "withdraw":
-      if (data.reason) add(`reason: ${data.reason}`);
-      break;
-    case "park":
-      if (data.note) add(`note: ${data.note}`);
-      break;
-  }
-  return "";
-}
+// Adds what each event of case `c`, with record `data`, said, and gives
+// its markdown: a note's body or a close's outcome. An event left out says
+// nothing of its own.
+type Say = (c: Case, event: Event, data: EventData, seen: Seen, add: Add) => string | void;
+const say: Partial<Record<Event["event"], Say>> = {
+  open: opened,
+  amend: amended,
+  answer: (c, _event, data, seen, add) => answer(c, data, add, seen.leftOut),
+  pickup: (_c, _event, data, _seen, add) => {
+    if (data.by) add(`by ${data.by}`);
+  },
+  note: (_c, _event, data) => data.body || "",
+  close: (_c, _event, data, _seen, add) => {
+    for (const link of data.links || []) add(link);
+    return data.outcome || "";
+  },
+  withdraw: (_c, _event, data, _seen, add) => {
+    if (data.reason) add(`reason: ${data.reason}`);
+  },
+  park: (_c, _event, data, _seen, add) => {
+    if (data.note) add(`note: ${data.note}`);
+  },
+};
 
 // An open: what it set, and for a message who it went to, its worker then
 // its labels.
@@ -139,15 +132,7 @@ function opened(c: Case, event: Event, data: EventData, seen: Seen, add: Add): v
 
 // An amend: each change it made, in order, against what was set before.
 function amended(c: Case, event: Event, data: EventData, seen: Seen, add: Add): void {
-  if (data.title && data.title !== seen.title) {
-    add(`replaced the title: ${data.title}`);
-    seen.title = data.title;
-  }
-  const replaced = bodyOf(c, event);
-  if (replaced && replaced !== seen.body) {
-    add("replaced the body", seen.body.trim() ? { body: seen.body } : null);
-    seen.body = replaced;
-  }
+  amendedText(c, event, data, seen, add);
   amendedChoices(c, data, seen, add);
   amendedBriefing(data, seen, add);
   for (const link of data.drop_links || []) add(`dropped link: ${link}`);
@@ -156,6 +141,19 @@ function amended(c: Case, event: Event, data: EventData, seen: Seen, add: Add): 
   if (data.context && data.context !== seen.context) {
     add(`replaced the context: ${data.context}`, seen.context.trim() ? { context: seen.context } : null);
     seen.context = data.context;
+  }
+}
+
+// An amend's replaced title and body, the body's line with the one before.
+function amendedText(c: Case, event: Event, data: EventData, seen: Seen, add: Add): void {
+  if (data.title && data.title !== seen.title) {
+    add(`replaced the title: ${data.title}`);
+    seen.title = data.title;
+  }
+  const replaced = bodyOf(c, event);
+  if (replaced && replaced !== seen.body) {
+    add("replaced the body", seen.body.trim() ? { body: seen.body } : null);
+    seen.body = replaced;
   }
 }
 
