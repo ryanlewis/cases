@@ -1088,6 +1088,69 @@ mod tests {
         assert!(!same(b"", b"abc"));
     }
 
+    /// The status and the JSON body of `method path` with `body` through
+    /// the inbox's router, to the loopback address, as a forwarding cases
+    /// sends it.
+    async fn through(
+        app: &Arc<App>,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> (u16, serde_json::Value) {
+        use hyper::service::Service as _;
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, "127.0.0.1:7337")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_owned()))
+            .unwrap();
+        let service = hyper_util::service::TowerToHyperService::new(router(Arc::clone(app)));
+        let response = service.call(request).await.unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|error| panic!("{status}: {error}: {bytes:?}"));
+        (status, body)
+    }
+
+    /// A lock renewal that went well is left out of the log, as a read is;
+    /// one refused 409 `lapsed`, as a hold the far side no longer has is,
+    /// is logged.
+    #[tokio::test]
+    async fn only_a_renewal_that_went_well_is_left_out_of_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = Arc::new(App {
+            log: Arc::new(Log::new(false, 16)),
+            ..app(&dir, &[], &[])
+        });
+        let lock = format!("/v1/stores/{}/store/lock", cases_store_remote::DIAL_STORE);
+        let (status, taken) = through(
+            &app,
+            "POST",
+            &lock,
+            r#"{"locks": [{"on": "label", "text": "deploy"}], "lease": true, "release": true}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "{taken}");
+        let hold = taken["hold"].as_str().unwrap();
+        let (status, renewed) = through(&app, "POST", &format!("{lock}/{hold}/renew"), "").await;
+        assert_eq!(status, 200, "{renewed}");
+        let (status, lapsed) = through(&app, "POST", &format!("{lock}/0000/renew"), "").await;
+        assert_eq!(status, 409, "{lapsed}");
+        assert_eq!(lapsed["error"]["category"], "lapsed", "{lapsed}");
+        let lines = app.log.last();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains(&format!("POST {lock} 200 ")), "{lines:?}");
+        assert!(
+            lines[1].contains(&format!("POST {lock}/0000/renew 409 ")),
+            "{lines:?}"
+        );
+        assert_eq!(app.requests.load(Ordering::Relaxed), 2);
+    }
+
     /// A renewal is a store route's lock renewal, as `Client::hold` sends
     /// it over HTTP, and nothing that has only some of its parts.
     #[test]
