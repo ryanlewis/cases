@@ -1262,6 +1262,11 @@ fn pick_up(ctx: &Ctx, by: &str, turn: &mut Turn) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use cases_store_sqlite::Db;
+
     use super::*;
 
     #[test]
@@ -1297,5 +1302,197 @@ mod tests {
         assert_eq!(mood("steady").unwrap(), Mood::Steady);
         assert!(mood("Steady").is_err());
         assert!(mood("sleepy").is_err());
+    }
+
+    /// A local store at `path` whose clock reads `clock`, in seconds since
+    /// the epoch, so that a test sees which beats wrote.
+    fn clocked(path: &std::path::Path, clock: &Arc<AtomicI64>) -> AnyStore {
+        let clock = Arc::clone(clock);
+        let db = Db::new(path)
+            .with_clock(move || Time::from_unix(clock.load(Ordering::SeqCst), 0).unwrap());
+        AnyStore::Local(db)
+    }
+
+    /// Makes the store `db` by opening a case in it.
+    fn make(db: &AnyStore) {
+        let open = cases_core::Append {
+            author: "agent".into(),
+            event: "open".into(),
+            data: r#"{"kind": "fyi", "urgency": "today", "title": "T"}"#.into(),
+        };
+        db.create(&open, &Writer::new(None)).unwrap();
+    }
+
+    fn listening<'a>(
+        workers: &'a [String],
+        labels: &'a [String],
+        doing: Option<&'a str>,
+    ) -> Listening<'a> {
+        Listening {
+            id: None,
+            workers,
+            labels,
+            kinds: vec!["message".into()],
+            by: &workers[0],
+            doing,
+            due: None,
+        }
+    }
+
+    /// The time `secs` seconds after the epoch.
+    fn at(secs: i64) -> Time {
+        Time::from_unix(secs, 0).unwrap()
+    }
+
+    /// (worker, wait id, heard) of each wait recorded in `db`.
+    fn heard(db: &AnyStore) -> Vec<(String, String, Time)> {
+        let mut waits: Vec<_> = db
+            .waits()
+            .unwrap()
+            .into_iter()
+            .map(|wait| (wait.worker, wait.id, wait.heard))
+            .collect();
+        waits.sort();
+        waits
+    }
+
+    /// The doing line of `worker` in `db`.
+    fn doing_of(db: &AnyStore, worker: &str) -> Option<String> {
+        let AnyStore::Local(local) = db else {
+            unreachable!()
+        };
+        let listeners = local.listeners().unwrap();
+        let listening = listeners.iter().find(|l| l.worker == worker).unwrap();
+        listening.doing.clone()
+    }
+
+    /// The first beat records each worker, with its labels, kinds and doing
+    /// line, under one wait id. Until the heartbeat is due no beat writes;
+    /// once it is, the beat refreshes each record under the same id, and
+    /// does not put back a doing line cleared since (ST-16, AG-17).
+    #[test]
+    fn a_listening_wait_records_its_workers_again_only_once_a_heartbeat_is_due() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(AtomicI64::new(100));
+        let db = clocked(&dir.path().join("cases.db"), &clock);
+        make(&db);
+        let workers = ["ada".to_owned(), "bo".to_owned()];
+        let labels = ["ops".to_owned()];
+        let mut listening = listening(&workers, &labels, Some("reading"));
+        let mut warned = HashSet::new();
+
+        listening.beat(&db, &mut warned);
+        let id = listening.id.clone().expect("the first beat makes an id");
+        let ada = ("ada".to_owned(), id.clone());
+        let bo = ("bo".to_owned(), id.clone());
+        assert_eq!(
+            heard(&db),
+            [
+                (ada.0.clone(), ada.1.clone(), at(100)),
+                (bo.0.clone(), bo.1.clone(), at(100))
+            ]
+        );
+        let waits = db.waits().unwrap();
+        assert!(waits.iter().all(|wait| wait.labels == labels));
+        assert!(waits.iter().all(|wait| wait.kinds == ["message"]));
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+        assert_eq!(listening.doing, None);
+        let due = listening.due.expect("a beat that wrote sets the next");
+        assert!(due > Instant::now() + HEARTBEAT / 2, "{due:?}");
+        assert!(warned.is_empty(), "{warned:?}");
+
+        // `cases doing` clears the line; a beat before the heartbeat is due
+        // writes nothing.
+        let AnyStore::Local(local) = &db else {
+            unreachable!()
+        };
+        local.set_doing("ada", "").unwrap();
+        clock.store(105, Ordering::SeqCst);
+        listening.beat(&db, &mut warned);
+        assert_eq!(listening.due, Some(due));
+        assert!(heard(&db).iter().all(|(.., heard)| *heard == at(100)));
+
+        // Once it is due, the beat refreshes both, and the line stays clear.
+        listening.due = Some(Instant::now());
+        clock.store(110, Ordering::SeqCst);
+        listening.beat(&db, &mut warned);
+        assert_eq!(heard(&db), [(ada.0, ada.1, at(110)), (bo.0, bo.1, at(110))]);
+        assert_eq!(listening.id.as_deref(), Some(id.as_str()));
+        assert_eq!(doing_of(&db, "ada"), None);
+        assert!(listening.due.unwrap() > Instant::now() + HEARTBEAT / 2);
+        assert!(warned.is_empty(), "{warned:?}");
+    }
+
+    /// A beat on a store not there yet makes nothing and warns of nothing,
+    /// and the next beat tries again: once the store is there, it records
+    /// the wait under the id the first beat made (ST-08).
+    #[test]
+    fn a_wait_on_a_store_not_there_yet_records_itself_once_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let clock = Arc::new(AtomicI64::new(100));
+        let db = clocked(&path, &clock);
+        let workers = ["ada".to_owned()];
+        let mut listening = listening(&workers, &[], Some("reading"));
+        let mut warned = HashSet::new();
+
+        listening.beat(&db, &mut warned);
+        assert!(!path.exists());
+        assert!(warned.is_empty(), "{warned:?}");
+        assert_eq!(listening.due, None);
+        assert_eq!(listening.doing, Some("reading"));
+        let id = listening
+            .id
+            .clone()
+            .expect("the id is made before the write");
+
+        make(&db);
+        listening.beat(&db, &mut warned);
+        assert_eq!(heard(&db), [("ada".to_owned(), id, at(100))]);
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+        assert!(listening.due.is_some());
+        assert!(warned.is_empty(), "{warned:?}");
+    }
+
+    /// A write that fails is warned about once, however many beats meet
+    /// it, and leaves the heartbeat due, so the next beat tries again. The
+    /// beat stops at the worker that failed. A blank worker stands in for
+    /// a failing write: `--pickup` refuses one, and the store refuses to
+    /// record it.
+    #[test]
+    fn a_write_that_fails_is_warned_about_once_and_tried_again_at_each_beat() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(AtomicI64::new(100));
+        let db = clocked(&dir.path().join("cases.db"), &clock);
+        make(&db);
+        let workers = ["ada".to_owned(), " ".to_owned(), "bo".to_owned()];
+        let mut listening = listening(&workers, &[], Some("reading"));
+        let mut warned = HashSet::new();
+
+        listening.beat(&db, &mut warned);
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        let warning = warned.iter().next().unwrap().clone();
+        assert!(
+            warning.starts_with("  is not recorded as listening: "),
+            "{warning}"
+        );
+        assert_eq!(listening.due, None);
+        assert_eq!(listening.doing, Some("reading"));
+        let id = listening.id.clone().unwrap();
+        assert_eq!(heard(&db), [("ada".to_owned(), id.clone(), at(100))]);
+
+        // BUG, pinned and not fixed here: the failed beat keeps its doing
+        // line, so the next beat puts back a line that `cases doing` has
+        // cleared on a worker it did record (AG-17).
+        let AnyStore::Local(local) = &db else {
+            unreachable!()
+        };
+        local.set_doing("ada", "").unwrap();
+        clock.store(105, Ordering::SeqCst);
+        listening.beat(&db, &mut warned);
+        assert_eq!(warned, HashSet::from([warning]));
+        assert_eq!(listening.due, None);
+        assert_eq!(heard(&db), [("ada".to_owned(), id, at(105))]);
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
     }
 }
