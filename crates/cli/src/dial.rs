@@ -669,97 +669,149 @@ fn key(text: &str) -> Result<Key, Answer> {
 /// The answer to a store route, `rest` being the path after `store/`.
 fn route(db: &Db, request: &Request, rest: &[&str], holds: Holds<'_>) -> Answer {
     let result = match (request.method.as_str(), rest) {
-        ("GET", ["cases"]) => Ok(list(db, request.query("since"))),
-        ("GET", ["cases", k]) => key(k).map(|k| match db.rows(&k) {
-            Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
-            Ok(None) => Answer::refuse(404, "nocase", "no such case"),
-            Err(error) => Answer::failed(&error),
-        }),
-        ("POST", ["cases"]) => body(request).and_then(|b| {
-            let (writer, append) = writer_append(&b)?;
-            Ok(match db.create_rows(&append, &writer) {
-                Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, "events"]) => key(k).and_then(|k| {
-            let b = body(request)?;
-            let (writer, append) = writer_append(&b)?;
-            let at = revision(&b)?;
-            Ok(match db.append_rows(&k, &append, &writer, at) {
-                Ok(rows) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, what @ ("archive" | "delete")]) => key(k).and_then(|k| {
-            let at = revision(&body(request)?)?;
-            let done = if *what == "archive" {
-                db.archive(&k, at)
-            } else {
-                db.delete(&k, at)
-            };
-            Ok(match done {
-                Ok(()) => Answer::ok(json!({})),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("GET", ["actors"]) => Ok(match db.actors() {
-            Ok(actors) => Answer::ok(json!({"list": actors
-                .iter()
-                .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        (method, ["cases", rest @ ..]) => cases_route(db, request, method, rest),
+        ("GET", ["actors"]) => Ok(actors(db)),
         ("GET", ["changes"]) => Ok(changes(db, request)),
-        ("GET", ["waits"]) => Ok(match db.waits() {
-            Ok(waits) => {
-                Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()}))
-            }
-            Err(error) => Answer::failed(&error),
-        }),
-        ("GET", ["listeners"]) => Ok(match db.listeners() {
-            Ok(listeners) => Answer::ok(json!({"list": listeners
-                .iter()
-                .map(listener_json)
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        ("GET", ["waits"]) => Ok(waits(db)),
+        ("GET", ["listeners"]) => Ok(listeners(db)),
         ("GET", ["inbox"]) => Ok(inbox(db)),
         ("POST", ["listen"]) => body(request).and_then(|b| listen(db, &b)),
-        ("POST", ["lock"]) => body(request).and_then(|b| match holds {
-            Holds::Connection(locks) => take_locks(db, &b, locks),
-            Holds::Leases(leases) => leases.take(db, &b),
-        }),
-        ("POST", ["lock", "renew"]) => Ok(match holds {
-            Holds::Connection(locks) => renew(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", "release"]) => Ok(match holds {
-            Holds::Connection(locks) => release(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", id, "renew"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.renew(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("POST", ["lock", id, "release"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.release(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("PUT", ["doing", worker]) => body(request).and_then(|b| {
-            let text = text(&b, "text")?;
-            Ok(match db.set_doing(&decode(worker), text) {
-                Ok(()) => Answer::ok(json!({})),
-                Err(DbError::NotListening { .. }) => {
-                    Answer::refuse(404, "not-listening", "the worker is not listening")
-                }
-                Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
-                Err(error) => Answer::failed(&error),
-            })
-        }),
-        _ => Ok(Answer::refuse(404, "request", "no such route")),
+        ("POST", ["lock", rest @ ..]) => lock_route(db, request, rest, holds),
+        ("PUT", ["doing", worker]) => body(request).and_then(|b| doing(db, worker, &b)),
+        _ => Ok(no_route()),
     };
     result.unwrap_or_else(|answer| answer)
+}
+
+/// The refusal of a path that is not one of the store routes.
+fn no_route() -> Answer {
+    Answer::refuse(404, "request", "no such route")
+}
+
+/// `store/cases…`, `rest` being the path after `cases`: the cases read,
+/// a case read or made, and a case's event, archive or delete.
+fn cases_route(db: &Db, request: &Request, method: &str, rest: &[&str]) -> Result<Answer, Answer> {
+    match (method, rest) {
+        ("GET", []) => Ok(list(db, request.query("since"))),
+        ("GET", [k]) => key(k).map(|k| case(db, k)),
+        ("POST", []) => body(request).and_then(|b| create(db, &b)),
+        ("POST", [k, "events"]) => key(k).and_then(|k| append(db, request, k)),
+        ("POST", [k, what @ ("archive" | "delete")]) => {
+            key(k).and_then(|k| remove(db, request, k, *what == "archive"))
+        }
+        _ => Ok(no_route()),
+    }
+}
+
+/// `GET store/cases/<k>`: the case's rows.
+fn case(db: &Db, k: Key) -> Answer {
+    match db.rows(&k) {
+        Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
+        Ok(None) => Answer::refuse(404, "nocase", "no such case"),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/cases` `{writer, append}`: a new case, with its rows.
+fn create(db: &Db, body: &Value) -> Result<Answer, Answer> {
+    let (writer, append) = writer_append(body)?;
+    Ok(match db.create_rows(&append, &writer) {
+        Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/events` `{writer, append, revision}`: the case's
+/// rows with the event appended.
+fn append(db: &Db, request: &Request, k: Key) -> Result<Answer, Answer> {
+    let b = body(request)?;
+    let (writer, append) = writer_append(&b)?;
+    let at = revision(&b)?;
+    Ok(match db.append_rows(&k, &append, &writer, at) {
+        Ok(rows) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/archive` or `…/delete` `{revision}`: the case
+/// moved into the archive, or removed.
+fn remove(db: &Db, request: &Request, k: Key, archive: bool) -> Result<Answer, Answer> {
+    let at = revision(&body(request)?)?;
+    let done = if archive {
+        db.archive(&k, at)
+    } else {
+        db.delete(&k, at)
+    };
+    Ok(match done {
+        Ok(()) => Answer::ok(json!({})),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `GET store/actors`: `{list}`, the store's actors.
+fn actors(db: &Db) -> Answer {
+    match db.actors() {
+        Ok(actors) => Answer::ok(json!({"list": actors
+            .iter()
+            .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/waits`: `{list}`, the waits listening now.
+fn waits(db: &Db) -> Answer {
+    match db.waits() {
+        Ok(waits) => Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/listeners`: `{list}`, the workers listening now.
+fn listeners(db: &Db) -> Answer {
+    match db.listeners() {
+        Ok(listeners) => Answer::ok(json!({"list": listeners
+            .iter()
+            .map(listener_json)
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/lock…`, `rest` being the path after `lock`: a pickup
+/// wait's locks taken, renewed or let go, on the connection over a pipe
+/// and by id over HTTP. A route of the other is no route, or refused.
+fn lock_route(
+    db: &Db,
+    request: &Request,
+    rest: &[&str],
+    holds: Holds<'_>,
+) -> Result<Answer, Answer> {
+    Ok(match (rest, holds) {
+        ([], Holds::Connection(locks)) => {
+            return body(request).and_then(|b| take_locks(db, &b, locks));
+        }
+        ([], Holds::Leases(leases)) => return body(request).and_then(|b| leases.take(db, &b)),
+        (["renew"], Holds::Connection(locks)) => renew(locks),
+        (["release"], Holds::Connection(locks)) => release(locks),
+        (["renew" | "release"], Holds::Leases(_)) => no_connection(),
+        ([id, "renew"], Holds::Leases(leases)) => leases.renew(id),
+        ([id, "release"], Holds::Leases(leases)) => leases.release(id),
+        _ => no_route(),
+    })
+}
+
+/// `PUT store/doing/<worker>` `{text}`: the worker's doing line set.
+fn doing(db: &Db, worker: &str, body: &Value) -> Result<Answer, Answer> {
+    let text = text(body, "text")?;
+    Ok(match db.set_doing(&decode(worker), text) {
+        Ok(()) => Answer::ok(json!({})),
+        Err(DbError::NotListening { .. }) => {
+            Answer::refuse(404, "not-listening", "the worker is not listening")
+        }
+        Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
+        Err(error) => Answer::failed(&error),
+    })
 }
 
 /// `GET store/inbox`: `{link}`, the link of the inbox a serve on this
@@ -1559,6 +1611,9 @@ mod tests {
         let first = Locks::new(lease);
         let second = Locks::new(lease);
         thread::scope(|scope| {
+            // The watches stop as the scope's body ends, a failed assert's
+            // panic too, so that the test fails and does not hang.
+            let _ending = (Ending(&first), Ending(&second));
             scope.spawn(|| first.watch());
             scope.spawn(|| second.watch());
             assert_eq!(
@@ -1588,8 +1643,6 @@ mod tests {
                 lock_freed(&db, deploy, &second),
                 Answer::ok(json!({"lease_ms": 300}))
             );
-            first.end();
-            second.end();
         });
         // A connection with no lease has none to renew, and one that took
         // its locks without a lease keeps them however long it waits.
@@ -1600,12 +1653,12 @@ mod tests {
             (409, json!("lapsed"))
         );
         thread::scope(|scope| {
+            let _ending = Ending(&unleased);
             scope.spawn(|| unleased.watch());
             let plain = r#"{"locks": [{"on": "label", "text": "deploy"}]}"#;
             assert_eq!(lock_freed(&db, plain, &unleased), Answer::ok(json!({})));
             thread::sleep(Duration::from_millis(200));
             assert_eq!(held_count(&unleased), 1);
-            unleased.end();
         });
     }
 
@@ -1756,5 +1809,210 @@ mod tests {
             skew(other, Some("cases/9.9.9")),
             Answer::refuse(409, "stale", "why")
         );
+    }
+
+    /// `method` on `store/<route>`, with `body` as JSON when there is one,
+    /// its locks held as `holds` says.
+    fn ask(db: &Db, method: &str, route: &str, body: Option<&str>, holds: Holds<'_>) -> Answer {
+        let request = Request::new(
+            method,
+            &format!("/v1/stores/{DIAL_STORE}/store/{route}"),
+            "",
+            body.map(|_| "application/json"),
+            None,
+            body.unwrap_or_default().as_bytes().to_vec(),
+        );
+        handle_with(db, &request, holds)
+    }
+
+    /// An answer's status and, for a refusal, its category.
+    fn said(answer: &Answer) -> (u16, Value) {
+        (answer.status, refusal(answer))
+    }
+
+    #[test]
+    fn a_store_not_made_yet_is_missing_on_each_route_that_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let locks = Locks::new(LEASE);
+        let pipe = Holds::Connection(&locks);
+        for (method, route, body) in [
+            ("GET", "cases/1", None),
+            ("GET", "actors", None),
+            ("GET", "waits", None),
+            ("GET", "listeners", None),
+            ("PUT", "doing/lead", Some(r#"{"text": "busy"}"#)),
+        ] {
+            let answer = ask(&db, method, route, body, pipe);
+            assert_eq!(
+                said(&answer),
+                (404, json!("missing")),
+                "{route}: {answer:?}"
+            );
+        }
+        // A doing line that is not one is refused before the store is read.
+        let bad = ask(&db, "PUT", "doing/lead", Some(r#"{"text": "a\nb"}"#), pipe);
+        assert_eq!(said(&bad), (400, json!("request")), "{bad:?}");
+    }
+
+    #[test]
+    fn each_store_route_is_answered_by_its_own_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let locks = Locks::new(LEASE);
+        let pipe = Holds::Connection(&locks);
+        let open = r#"{"writer": null, "append": {"author": "agent", "event": "open",
+            "data": "{\"kind\":\"fyi\",\"urgency\":\"today\",\"title\":\"x\"}"}}"#;
+        let opened = ask(&db, "POST", "cases", Some(open), pipe);
+        assert_eq!(opened.status, 200, "{opened:?}");
+        let key = opened.body["key"].as_u64().unwrap();
+        let k = Key::new(key).unwrap();
+
+        let got = ask(&db, "GET", &format!("cases/{key}"), None, pipe);
+        assert_eq!(
+            got,
+            Answer::ok(case_json(k, &db.rows(&k).unwrap().unwrap()))
+        );
+        let none = ask(&db, "GET", "cases/999", None, pipe);
+        assert_eq!(
+            none,
+            Answer::refuse(404, "nocase", "no such case"),
+            "{none:?}"
+        );
+        let not_a_key = ask(&db, "GET", "cases/x", None, pipe);
+        assert_eq!(not_a_key, Answer::refuse(404, "request", "not a key"));
+        // A path under cases that is none of its routes is no route.
+        for (method, route) in [("PUT", "cases"), ("POST", &format!("cases/{key}/x"))] {
+            let answer = ask(&db, method, route, Some("{}"), pipe);
+            assert_eq!(
+                answer,
+                Answer::refuse(404, "request", "no such route"),
+                "{route}"
+            );
+        }
+
+        let actors = ask(&db, "GET", "actors", None, pipe);
+        assert_eq!(actors.status, 200, "{actors:?}");
+        assert!(actors.body["list"].is_array(), "{actors:?}");
+        assert_eq!(
+            ask(&db, "GET", "waits", None, pipe),
+            Answer::ok(json!({"list": []}))
+        );
+        assert_eq!(
+            ask(&db, "GET", "listeners", None, pipe),
+            Answer::ok(json!({"list": []}))
+        );
+        assert_eq!(
+            ask(&db, "GET", "inbox", None, pipe),
+            Answer::ok(json!({"link": null}))
+        );
+
+        // A doing line: refused for a worker not listening, and for text
+        // that is not one; set for one listening.
+        let doing = |worker: &str, text: &str| {
+            let body = json!({ "text": text }).to_string();
+            ask(&db, "PUT", &format!("doing/{worker}"), Some(&body), pipe)
+        };
+        assert_eq!(said(&doing("lead", "busy")), (404, json!("not-listening")));
+        let listen = r#"{"wait": "w1", "worker": "lead", "labels": [], "kinds": []}"#;
+        assert_eq!(
+            ask(&db, "POST", "listen", Some(listen), pipe),
+            Answer::ok(json!({}))
+        );
+        let bad = doing("lead", "a\nb");
+        assert_eq!(
+            bad,
+            Answer::refuse(
+                400,
+                "request",
+                "a doing line is one line, with no control characters"
+            )
+        );
+        assert_eq!(doing("lead", "busy"), Answer::ok(json!({})));
+        let listeners = ask(&db, "GET", "listeners", None, pipe);
+        assert_eq!(listeners.body["list"][0]["doing"], "busy", "{listeners:?}");
+        let waits = ask(&db, "GET", "waits", None, pipe);
+        assert_eq!(waits.body["list"][0]["id"], "w1", "{waits:?}");
+
+        // Archive keeps the case in the archive; delete does not.
+        let second = ask(&db, "POST", "cases", Some(open), pipe);
+        let other = second.body["key"].as_u64().unwrap();
+        for (what, key) in [("archive", key), ("delete", other)] {
+            let done = ask(
+                &db,
+                "POST",
+                &format!("cases/{key}/{what}"),
+                Some("{}"),
+                pipe,
+            );
+            assert_eq!(done, Answer::ok(json!({})), "{what}");
+            let gone = ask(&db, "GET", &format!("cases/{key}"), None, pipe);
+            assert_eq!(said(&gone), (404, json!("nocase")), "{what}");
+        }
+        let archived: Vec<i64> = rusqlite::Connection::open(db.path())
+            .unwrap()
+            .prepare("SELECT key FROM archive_cases")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(archived, [i64::try_from(key).unwrap()]);
+    }
+
+    #[test]
+    fn a_connection_s_lock_routes_and_a_hold_s_are_each_refused_on_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let locks = Locks::new(LEASE);
+        let pipe = Holds::Connection(&locks);
+        let leases = Leases::new(LEASE);
+        let http = Holds::Leases(&leases);
+        // Over a pipe, the locks are the connection's: a hold's id is no
+        // route, and letting go of none is nothing.
+        for route in ["lock/abc/renew", "lock/abc/release"] {
+            let answer = ask(&db, "POST", route, None, pipe);
+            assert_eq!(
+                answer,
+                Answer::refuse(404, "request", "no such route"),
+                "{route}"
+            );
+        }
+        assert_eq!(
+            ask(&db, "POST", "lock/release", None, pipe),
+            Answer::ok(json!({}))
+        );
+        assert_eq!(
+            said(&ask(&db, "POST", "lock/renew", None, pipe)),
+            (409, json!("lapsed"))
+        );
+        // Over HTTP, they are held by id: the connection's routes are
+        // refused, and a hold not taken is let go as nothing.
+        for route in ["lock/renew", "lock/release"] {
+            let answer = ask(&db, "POST", route, None, http);
+            assert_eq!(answer, no_connection(), "{route}");
+        }
+        assert_eq!(
+            ask(&db, "POST", "lock/abc/release", None, http),
+            Answer::ok(json!({}))
+        );
+        assert_eq!(
+            said(&ask(&db, "POST", "lock/abc/renew", None, http)),
+            (409, json!("lapsed"))
+        );
+    }
+
+    #[test]
+    fn a_body_that_fails_to_read_is_an_error() {
+        struct Failing;
+        impl io::Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("gone"))
+            }
+        }
+        let head: &[u8] = b"POST /x HTTP/1.1\r\nContent-Length: 2\r\n\r\n";
+        let mut input = io::BufReader::new(io::Read::chain(head, Failing));
+        let error = read(&mut input).unwrap_err();
+        assert_eq!(error.to_string(), "gone");
     }
 }

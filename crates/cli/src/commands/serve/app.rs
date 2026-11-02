@@ -26,7 +26,7 @@ use super::stream;
 use super::watch::Watch;
 use crate::dial;
 use crate::output;
-use crate::tokens::Tokens;
+use crate::tokens::{Tokens, same};
 
 /// The header every write carries its CSRF token in.
 pub(crate) const CSRF_HEADER: &str = "x-cases-csrf";
@@ -369,12 +369,6 @@ fn text<'a>(headers: &'a HeaderMap, name: &HeaderName) -> &'a str {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
-}
-
-/// Whether `a` and `b` are the same, in a time that depends only on their
-/// lengths.
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 /// Logs one line for each page load, write and failed request, with the
@@ -1094,11 +1088,8 @@ mod tests {
         assert!(!same(b"", b"abc"));
     }
 
-    /// A renewal is any path under the store routes that has `/store/lock/`
-    /// in it and ends in `/renew`, whatever the method: a lock renewal, as
-    /// `Client::hold` sends it over HTTP, and the connection's
-    /// `store/lock/renew` too. A path that lacks one of the three parts is
-    /// not one.
+    /// A renewal is a store route's lock renewal, as `Client::hold` sends
+    /// it over HTTP, and nothing that has only some of its parts.
     #[test]
     fn a_renewal_is_a_store_route_s_lock_renewal() {
         assert!(is_renewal("/v1/stores/main/store/lock/h1/renew"));
