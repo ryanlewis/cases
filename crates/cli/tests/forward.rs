@@ -972,24 +972,59 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
     // Renewed a second at most before the kill, the lease runs out two
     // seconds after it at the soonest: a second in, it is held still.
     let early = kept_at(&lock, &holder, Instant::now() + Duration::from_secs(1));
+    let t0 = Instant::now();
+    let pr = probe(first.id(), lock.clone(), holder.clone(), t0);
     signal("KILL", relay);
     let ended = thread::spawn({
         let (lock, holder) = (lock.clone(), holder.clone());
         move || {
             let waited: Output = first.wait_with_output().unwrap().into();
-            (kept(&lock, &holder), waited)
+            let back = t0.elapsed();
+            let k = kept(&lock, &holder);
+            (k, waited, back, t0.elapsed())
         }
     });
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(again.stderr.contains("already picking up"), "{again:?}");
     assert!(early.join().unwrap(), "let go within 1 s of the kill");
     starts_within(&f, Duration::from_secs(10));
-    let (kept_as_it_ended, waited) = ended.join().unwrap();
+    let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
+    let (exited, let_go) = pr.join().unwrap();
+    eprintln!(
+        "PROBE kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}"
+    );
     lapsed(&waited);
     assert!(
         kept_as_it_ended,
         "the first ended after its locks were let go"
     );
+}
+
+/// TEMP instrumentation.
+fn probe(
+    pid: u32,
+    lock: PathBuf,
+    holder: String,
+    t0: Instant,
+) -> thread::JoinHandle<(Option<Duration>, Option<Duration>)> {
+    thread::spawn(move || {
+        let (mut exited, mut let_go) = (None, None);
+        let until = Instant::now() + Duration::from_secs(20);
+        while (exited.is_none() || let_go.is_none()) && Instant::now() < until {
+            if exited.is_none() {
+                let st = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+                let state = st.rsplit(") ").next().and_then(|r| r.chars().next());
+                if state != Some('S') && state != Some('R') && state != Some('D') {
+                    exited = Some(t0.elapsed());
+                }
+            }
+            if let_go.is_none() && !kept(&lock, &holder) {
+                let_go = Some(t0.elapsed());
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        (exited, let_go)
+    })
 }
 
 /// The far side's lock file whose name starts with `prefix`, and the line
@@ -1478,6 +1513,8 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         .trim()
         .parse()
         .unwrap();
+    let t0 = Instant::now();
+    let pr = probe(first.id(), lock.clone(), holder.clone(), t0);
     signal("STOP", relay);
     // Read off the lock, as a second wait is started some time before it
     // takes it.
@@ -1485,11 +1522,17 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         let (lock, holder) = (lock.clone(), holder.clone());
         move || {
             let waited: Output = first.wait_with_output().unwrap().into();
-            (kept(&lock, &holder), waited)
+            let back = t0.elapsed();
+            let k = kept(&lock, &holder);
+            (k, waited, back, t0.elapsed())
         }
     });
     starts_within(&f, Duration::from_secs(15));
-    let (kept_as_it_ended, waited) = ended.join().unwrap();
+    let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
+    let (exited, let_go) = pr.join().unwrap();
+    eprintln!(
+        "PROBE kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}"
+    );
     lapsed(&waited);
     assert!(
         kept_as_it_ended,
