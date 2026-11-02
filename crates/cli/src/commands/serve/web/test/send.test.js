@@ -94,7 +94,8 @@ test("a slow refusal does not roll the form back past the case a later write lef
   answer(0, 409, { error: { category: "stale", message: "stale", case: kase(4) } });
   await a;
   assert.equal(state.drawn.revision, 5);
-  // The refusal is still said, and the case it gave handed on.
+  // The refusal is still said, and the case it gave handed on: the page
+  // keeps the newer case it shows (withRefused, page.test.js).
   assert.match(state.refusal, /changed after it was drawn/);
   assert.deepEqual(state.cases, [4]);
 });
