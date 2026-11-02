@@ -1,6 +1,6 @@
 //! What each event of a case said, as lines of text for its thread.
 
-use cases_core::{Case, Event, Kind, Record, State};
+use cases_core::{Amend, Answer, Case, Event, Kind, Open, Record, State};
 
 use crate::output::Actors;
 
@@ -23,12 +23,7 @@ pub(crate) enum Previous {
 /// What each of the case's events said, in order: who wrote it, when the
 /// actor is named, then what it did.
 pub(crate) fn thread<'a>(case: &'a Case, actors: &Actors) -> Vec<(&'a Event, Vec<Line>)> {
-    let mut title = "";
-    let mut body = "";
-    let mut context = "";
-    let mut recommend = 0;
-    let mut landed = false;
-    let mut left_out: &[String] = &[];
+    let mut last = Last::default();
     let mut thread = Vec::new();
     for event in case.events() {
         let mut lines = actor_line(event, actors);
@@ -40,84 +35,137 @@ pub(crate) fn thread<'a>(case: &'a Case, actors: &Actors) -> Vec<(&'a Event, Vec
         }
         match &event.record {
             Record::Open(open) => {
-                title = &open.title;
-                body = &open.body;
-                context = &open.context;
-                recommend = open.recommend;
-                landed = open.landed;
-                left_out = &open.left_out;
-                // A message says who it went to.
-                if case.kind() == Kind::Message {
-                    let to = crate::ctx::addressee(&open.worker, &open.labels);
-                    if !to.is_empty() {
-                        add(&mut lines, &format!("sent to {to}"));
-                    }
-                }
+                last = Last::open(open);
+                lines.extend(sent_to(case, open));
             }
-            Record::Amend(amend) => {
-                if !amend.title.is_empty() && amend.title != title {
-                    add(&mut lines, &format!("replaced the title: {}", amend.title));
-                    title = &amend.title;
-                }
-                if !amend.body.is_empty() && amend.body != body {
-                    lines.extend(replaced("replaced the body", body, Previous::Body));
-                    body = &amend.body;
-                }
-                for option in &amend.options {
-                    add(&mut lines, &format!("added option: {option}"));
-                }
-                if amend.recommend != 0 && amend.recommend != recommend {
-                    recommend = amend.recommend;
-                    let option = option(case, recommend).unwrap_or_default();
-                    add(&mut lines, &format!("recommended {recommend}. {option}"));
-                }
-                for row in &amend.rows {
-                    add(&mut lines, &format!("added row [{}] {}", row.id, row.label));
-                }
-                if let Some(now) = amend.landed
-                    && now != landed
-                {
-                    landed = now;
-                    add(&mut lines, if now { "landed" } else { "not landed" });
-                }
-                if !amend.left_out.is_empty() && amend.left_out != left_out {
-                    left_out = &amend.left_out;
-                    let items = left_out.join("; ");
-                    add(&mut lines, &format!("replaced the left-out items: {items}"));
-                }
-                for link in &amend.drop_links {
-                    add(&mut lines, &format!("dropped link: {link}"));
-                }
-                for link in &amend.links {
-                    add(&mut lines, &format!("added link: {link}"));
-                }
-                for label in &amend.labels {
-                    add(&mut lines, &format!("added label: {label}"));
-                }
-                if !amend.context.is_empty() && amend.context != context {
-                    let text = format!("replaced the context: {}", amend.context);
-                    lines.extend(replaced(&text, context, Previous::Context));
-                    context = &amend.context;
-                }
-            }
+            Record::Amend(amend) => lines.extend(last.amend(case, amend)),
             record => {
                 lines.extend(describe(case, record));
-                // An answer files a briefing's items by their number in the
-                // list it saw, which a later amend may have replaced.
                 if let Record::Answer(answer) = record {
-                    for n in &answer.file {
-                        let item = usize::try_from(*n)
-                            .ok()
-                            .and_then(|n| left_out.get(n.checked_sub(1)?))
-                            .map_or("", String::as_str);
-                        add(&mut lines, &format!("file {n}. {item}"));
-                    }
+                    lines.extend(filed(answer, last.left_out));
                 }
             }
         }
         thread.push((event, lines));
     }
     thread
+}
+
+/// What the case said last, as its open and the amends since set it: an
+/// amend says only what it changed from this.
+#[derive(Default)]
+struct Last<'a> {
+    title: &'a str,
+    body: &'a str,
+    context: &'a str,
+    recommend: i64,
+    landed: bool,
+    left_out: &'a [String],
+}
+
+impl<'a> Last<'a> {
+    fn open(open: &'a Open) -> Self {
+        Self {
+            title: &open.title,
+            body: &open.body,
+            context: &open.context,
+            recommend: open.recommend,
+            landed: open.landed,
+            left_out: &open.left_out,
+        }
+    }
+
+    /// What `amend` changed, in the order of its fields, keeping what it set.
+    fn amend(&mut self, case: &Case, amend: &'a Amend) -> Vec<Line> {
+        let mut lines = self.amend_text(case, amend);
+        lines.extend(self.amend_briefing(amend));
+        for link in &amend.drop_links {
+            add(&mut lines, &format!("dropped link: {link}"));
+        }
+        for link in &amend.links {
+            add(&mut lines, &format!("added link: {link}"));
+        }
+        for label in &amend.labels {
+            add(&mut lines, &format!("added label: {label}"));
+        }
+        if !amend.context.is_empty() && amend.context != self.context {
+            let text = format!("replaced the context: {}", amend.context);
+            lines.extend(replaced(&text, self.context, Previous::Context));
+            self.context = &amend.context;
+        }
+        lines
+    }
+
+    /// What `amend` changed of the title, the body, the options, the
+    /// recommended option and the rows.
+    fn amend_text(&mut self, case: &Case, amend: &'a Amend) -> Vec<Line> {
+        let mut lines = Vec::new();
+        if !amend.title.is_empty() && amend.title != self.title {
+            add(&mut lines, &format!("replaced the title: {}", amend.title));
+            self.title = &amend.title;
+        }
+        if !amend.body.is_empty() && amend.body != self.body {
+            lines.extend(replaced("replaced the body", self.body, Previous::Body));
+            self.body = &amend.body;
+        }
+        for option in &amend.options {
+            add(&mut lines, &format!("added option: {option}"));
+        }
+        if amend.recommend != 0 && amend.recommend != self.recommend {
+            let recommend = amend.recommend;
+            self.recommend = recommend;
+            let option = option(case, recommend).unwrap_or_default();
+            add(&mut lines, &format!("recommended {recommend}. {option}"));
+        }
+        for row in &amend.rows {
+            add(&mut lines, &format!("added row [{}] {}", row.id, row.label));
+        }
+        lines
+    }
+
+    /// What `amend` changed of a briefing: whether it landed, and the items
+    /// it left out.
+    fn amend_briefing(&mut self, amend: &'a Amend) -> Vec<Line> {
+        let mut lines = Vec::new();
+        if let Some(now) = amend.landed
+            && now != self.landed
+        {
+            self.landed = now;
+            add(&mut lines, if now { "landed" } else { "not landed" });
+        }
+        if !amend.left_out.is_empty() && amend.left_out != self.left_out {
+            self.left_out = &amend.left_out;
+            let items = self.left_out.join("; ");
+            add(&mut lines, &format!("replaced the left-out items: {items}"));
+        }
+        lines
+    }
+}
+
+/// Who a message went to. Other kinds of case say nothing.
+fn sent_to(case: &Case, open: &Open) -> Vec<Line> {
+    let mut lines = Vec::new();
+    if case.kind() == Kind::Message {
+        let to = crate::ctx::addressee(&open.worker, &open.labels);
+        if !to.is_empty() {
+            add(&mut lines, &format!("sent to {to}"));
+        }
+    }
+    lines
+}
+
+/// The items an answer filed. An answer files a briefing's items by their
+/// number in the list it saw, `left_out`, which a later amend may replace.
+fn filed(answer: &Answer, left_out: &[String]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for n in &answer.file {
+        let item = usize::try_from(*n)
+            .ok()
+            .and_then(|n| left_out.get(n.checked_sub(1)?))
+            .map_or("", String::as_str);
+        add(&mut lines, &format!("file {n}. {item}"));
+    }
+    lines
 }
 
 /// "by" and the actor's name, when the event has a named actor. A pickup
@@ -662,6 +710,28 @@ mod tests {
         assert_eq!(
             thread_texts(&case, &Actors::default())[1],
             strs(&["added label: l"])
+        );
+    }
+
+    #[test]
+    fn an_amend_of_a_briefing_says_only_left_out_items_that_differ() {
+        let case = fold(&[
+            (
+                "agent",
+                "open",
+                r#"{"kind":"briefing","title":"B","body":"x","left_out":["a","b"]}"#,
+            ),
+            // The same items: nothing to say of them.
+            ("agent", "amend", r#"{"left_out":["a","b"],"labels":["l"]}"#),
+            ("agent", "amend", r#"{"left_out":["b","c"]}"#),
+        ]);
+        assert_eq!(
+            thread_texts(&case, &Actors::default()),
+            vec![
+                vec![],
+                strs(&["added label: l"]),
+                strs(&["replaced the left-out items: b; c"]),
+            ]
         );
     }
 
