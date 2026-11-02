@@ -720,6 +720,84 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_forward_says_why() {
+        let tail = "; it is ssh://[user@]host[:port], exec:<command> for a command that runs \
+                    cases dial-stdio on the far side, or http://host[:port] for a cases serve \
+                    there";
+        for (text, why) in [
+            ("devbox", "the scheme is not ssh, exec, http or https"),
+            ("ftp://devbox", "the scheme is not ssh, exec, http or https"),
+            ("exec:", "exec: has no command"),
+            ("EXEC:   ", "exec: has no command"),
+            (
+                "ssh://devbox/path",
+                "it may not have a path, a query or a fragment",
+            ),
+            (
+                "ssh://devbox?x",
+                "it may not have a path, a query or a fragment",
+            ),
+            (
+                "ssh://devbox#x",
+                "it may not have a path, a query or a fragment",
+            ),
+            ("ssh://@devbox", "the user is not one"),
+            ("ssh://-l@devbox", "the user is not one"),
+            ("ssh://devbox:0", "the port is not one"),
+            ("ssh://devbox:65536", "the port is not one"),
+            ("ssh://devbox:", "the port is not one"),
+            ("ssh://", "the host is not one"),
+            ("ssh://.devbox", "the host is not one"),
+            ("ssh://[zz]", "the host is not one"),
+        ] {
+            let error = text.parse::<Forward>().unwrap_err().to_string();
+            assert_eq!(error, format!("{text:?} is not a forward: {why}{tail}"));
+        }
+        // An http forward's refusal carries the address parser's reason.
+        let error = "http://devbox/path"
+            .parse::<Forward>()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("\"http://devbox/path\" is not a forward: ") && error.ends_with(tail),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn what_is_taken_for_a_user_and_a_port() {
+        // The last `@` and the last `:` split the user and the port off.
+        assert_eq!(
+            forward("ssh://a.b-c_d@host:65535"),
+            Forward::Ssh {
+                user: Some("a.b-c_d".to_owned()),
+                host: "host".to_owned(),
+                port: Some(65535),
+            }
+        );
+        assert_eq!(
+            forward("ssh://host:1"),
+            Forward::Ssh {
+                user: None,
+                host: "host".to_owned(),
+                port: Some(1),
+            }
+        );
+        // A bare address in brackets keeps its colons; only a port after
+        // the closing bracket is one.
+        assert_eq!(
+            forward("ssh://[fe80::1]:2200"),
+            Forward::Ssh {
+                user: None,
+                host: "[fe80::1]".to_owned(),
+                port: Some(2200),
+            }
+        );
+        assert!("ssh://[fe80::1".parse::<Forward>().is_err());
+        assert!("ssh://fe80::1".parse::<Forward>().is_err());
+    }
+
+    #[test]
     fn a_forward_is_known_by_its_scheme_alone() {
         assert!(Forward::is_forward("ssh://devbox"));
         assert!(Forward::is_forward("SSH://devbox"));
