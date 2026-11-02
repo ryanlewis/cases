@@ -340,10 +340,13 @@ fn check_store(app: &App, headers: &HeaderMap) -> Result<(), Refusal> {
         );
     }
     if let Some(bearer) = headers.get(header::AUTHORIZATION) {
+        // The scheme is case-insensitive, as RFC 7235 has it: `bearer` is
+        // taken too. One space follows it, as before.
         let sent = bearer
             .as_bytes()
-            .strip_prefix(b"Bearer ")
-            .unwrap_or_default();
+            .split_at_checked(b"Bearer ".len())
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case(b"Bearer "))
+            .map_or(&[][..], |(_, token)| token);
         if !sent.is_empty() && app.store_tokens.has(sent) {
             return Ok(());
         }
@@ -964,7 +967,7 @@ mod tests {
     }
 
     /// Through a proxy, the bearer must be one of the tokens, whole, after
-    /// `Bearer ` as spelt. An Authorization header that is not one is
+    /// `Bearer ` in any case. An Authorization header that is not one is
     /// refused even with a listed login.
     #[test]
     fn a_proxied_store_route_lets_in_only_a_whole_token() {
@@ -977,18 +980,29 @@ mod tests {
             }
             store_refused(&app, &pairs)
         };
-        assert_eq!(route(&format!("Bearer {STORE_TOKEN}"), None), None);
+        // The scheme is case-insensitive (RFC 7235).
+        for scheme in ["Bearer", "bearer", "BEARER", "bEaReR"] {
+            for login in [None, Some("ryan@github")] {
+                assert_eq!(
+                    route(&format!("{scheme} {STORE_TOKEN}"), login),
+                    None,
+                    "{scheme} {login:?}"
+                );
+            }
+        }
         let wrong = "f".repeat(32);
         for authorization in [
             format!("Bearer {wrong}"),
+            format!("bearer {wrong}"),
             format!("Bearer {}", &STORE_TOKEN[1..]),
             format!("Bearer {STORE_TOKEN}x"),
-            // Pins current behaviour, possibly a bug: RFC 7235 makes the
-            // scheme case-insensitive, but only `Bearer ` is taken.
-            format!("bearer {STORE_TOKEN}"),
             format!("Bearer  {STORE_TOKEN}"),
+            format!("Basic {STORE_TOKEN}"),
+            format!("Bearer{STORE_TOKEN}"),
+            format!("Bearers {STORE_TOKEN}"),
             STORE_TOKEN.to_owned(),
             "Bearer ".to_owned(),
+            "bearer ".to_owned(),
             "Bearer".to_owned(),
             String::new(),
         ] {
@@ -1080,8 +1094,11 @@ mod tests {
         assert!(!same(b"", b"abc"));
     }
 
-    /// A renewal is a store route's lock renewal, as `Client::hold` sends
-    /// it over HTTP, and nothing that has only some of its parts.
+    /// A renewal is any path under the store routes that has `/store/lock/`
+    /// in it and ends in `/renew`, whatever the method: a lock renewal, as
+    /// `Client::hold` sends it over HTTP, and the connection's
+    /// `store/lock/renew` too. A path that lacks one of the three parts is
+    /// not one.
     #[test]
     fn a_renewal_is_a_store_route_s_lock_renewal() {
         assert!(is_renewal("/v1/stores/main/store/lock/h1/renew"));
