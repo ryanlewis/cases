@@ -298,56 +298,41 @@ enum Action<'a> {
 impl Step {
     /// The step's one action, or why it is not a step.
     fn action(&self) -> Result<Action<'_>, String> {
-        let mut found = Vec::new();
-        if let Some(t) = &self.clock {
-            found.push(Action::Clock(t));
-        }
-        if let Some(open) = &self.open {
-            found.push(Action::Open(open));
-        }
-        if let Some(case) = &self.append {
-            found.push(Action::Append(case));
-        }
-        if let Some(case) = &self.archive {
-            found.push(Action::Archive(case));
-        }
-        if let Some(case) = &self.delete {
-            found.push(Action::Delete(case));
-        }
-        if let Some(listen) = &self.listen {
-            found.push(Action::Listen(listen));
-        }
-        if let Some(set) = &self.set_doing {
-            found.push(Action::SetDoing(set));
-        }
-        if let Some(name) = &self.version {
-            found.push(Action::Version(name));
-        }
-        match &self.rows_since {
-            None => {}
-            Some(Value::Null) => found.push(Action::RowsSince(None)),
-            Some(Value::String(name)) => found.push(Action::RowsSince(Some(name))),
-            Some(_) => return Err("rows_since is a version's name or null".into()),
-        }
-        if let Some(actors) = &self.actors {
-            found.push(Action::Actors(actors));
-        }
-        if let Some(listeners) = &self.listeners {
-            found.push(Action::Listeners(listeners));
-        }
+        let found: Vec<Action> = [
+            self.clock.as_deref().map(Action::Clock),
+            self.open.as_ref().map(Action::Open),
+            self.append.as_deref().map(Action::Append),
+            self.archive.as_deref().map(Action::Archive),
+            self.delete.as_deref().map(Action::Delete),
+            self.listen.as_ref().map(Action::Listen),
+            self.set_doing.as_ref().map(Action::SetDoing),
+            self.version.as_deref().map(Action::Version),
+            self.rows_since()?,
+            self.actors.as_deref().map(Action::Actors),
+            self.listeners.as_deref().map(Action::Listeners),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let [action] = <[Action; 1]>::try_from(found)
             .map_err(|found| format!("{} actions, not one", found.len()))?;
-        match action {
-            Action::Clock(text) => drop(time(text)?),
-            Action::Listeners(want) => {
-                for w in want {
-                    for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
-                        time(text)?;
-                    }
-                }
-            }
-            _ => {}
+        check_times(&action)?;
+        self.check_takes(&action)?;
+        self.check_needs(action)
+    }
+
+    /// The step's `rows_since` action, if it has one.
+    fn rows_since(&self) -> Result<Option<Action<'_>>, String> {
+        match &self.rows_since {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(Action::RowsSince(None))),
+            Some(Value::String(name)) => Ok(Some(Action::RowsSince(Some(name)))),
+            Some(_) => Err("rows_since is a version's name or null".into()),
         }
+    }
+
+    /// Checks that the step gives no field `action` does not take.
+    fn check_takes(&self, action: &Action) -> Result<(), String> {
         let writes = matches!(
             action,
             Action::Open(_) | Action::Append(_) | Action::Archive(_) | Action::Delete(_)
@@ -406,6 +391,11 @@ impl Step {
         if let Some((key, ..)) = takes.iter().find(|(_, given, allowed)| *given && !allowed) {
             return Err(format!("{key} does not go with this action"));
         }
+        Ok(())
+    }
+
+    /// `action`, if the step gives every field it needs.
+    fn check_needs<'a>(&self, action: Action<'a>) -> Result<Action<'a>, String> {
         match action {
             Action::Open(_) if self.name.is_none() && self.expect_error.is_none() => {
                 Err("an open that is taken names its case with as".into())
@@ -419,6 +409,22 @@ impl Step {
             action => Ok(action),
         }
     }
+}
+
+/// Checks that each time an action gives is one.
+fn check_times(action: &Action) -> Result<(), String> {
+    match action {
+        Action::Clock(text) => drop(time(text)?),
+        Action::Listeners(want) => {
+            for w in *want {
+                for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
+                    time(text)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// What one vector's run has named so far.
