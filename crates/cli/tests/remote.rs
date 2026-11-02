@@ -1234,6 +1234,119 @@ fn a_steady_remote_wait_prints_at_the_end_of_its_quiet_time() {
     assert!(holds[before..].iter().all(|&secs| secs <= 10), "{holds:?}");
 }
 
+/// A steady wait whose server fails, in a way it rides out, at the read
+/// after its timeout still prints what it collected, exit 0 (AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_read_at_its_timeout_prints_what_it_has() {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    // The first read and held poll, the read the answer wakes it to and
+    // the held poll to its timeout; then every read fails.
+    for _ in 0..4 {
+        r.fake.fault(PASS);
+    }
+    for _ in 0..20 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let wait = r.wait(&[
+        "--id",
+        &answered,
+        "--id",
+        &left,
+        "--mood",
+        "steady",
+        "--timeout",
+        "4s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+}
+
+/// A steady wait that took a message, and whose server then fails until its
+/// timeout, still prints the message it took, exit 0: no later wait takes
+/// it again (AG-16, AG-18).
+#[test]
+fn a_steady_remote_wait_that_took_a_message_prints_it_when_it_cannot_read_at_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].as_str();
+    // A case it waits on still open, so that it lingers after the message.
+    r.ok(&[
+        "--store",
+        store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        "6s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = r.ok(&[
+        "--store",
+        store,
+        "message",
+        "--as",
+        "Ryan",
+        "--title",
+        "Rebase onto main",
+        "--to",
+        "w9",
+        "--body",
+        "Then run the tests.",
+    ]);
+    let sent = sent.trim();
+    // Its send, then the wait's pickup.
+    let taken = || {
+        let rows = r.fake.db(store).rows(&common::key(sent)).unwrap();
+        rows.is_some_and(|rows| rows.len() == 2)
+    };
+    assert!(soon(Duration::from_secs(10), taken));
+    // Every request from here on fails, until well past its timeout.
+    for _ in 0..50 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], sent, "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+}
+
 /// A steady wait on a remote store holds the poll while it collects, and
 /// prints what it has at its timeout, exit 0 (AG-18).
 #[test]
