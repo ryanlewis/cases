@@ -331,7 +331,7 @@ function About({ id, cases, of }: { id: string; cases: Case[]; of?: Case }) {
 function Withdrawn({ c, now }: { c: Case; now: number }) {
   const withdraw = (c.events || []).filter((e) => e.event === "withdraw").pop();
   const by = withdraw && who(withdraw.actor);
-  const reason = withdraw && withdraw.data.reason;
+  const reason = withdraw && (withdraw.data || {}).reason;
   return html`<p class="taken withdrawn">withdrawn${by ? html` by <strong>${by}</strong>` : ""}${withdraw && withdraw.at ? `, ${old(withdraw.at, now)}` : ""}${reason ? html`: <span class="reason">${reason}</span>` : ""}</p>`;
 }
 
@@ -392,11 +392,11 @@ function Edit({
 // folded.
 function FollowUpFirst({ c, fu, now }: { c: Case; fu: FollowUp; now: number }) {
   const pickup = (c.events || []).find((e) => e.seq > fu.answer.seq && e.event === "pickup");
-  const by = pickup && (pickup.data.by || who(pickup.actor));
+  const by = pickup && ((pickup.data || {}).by || who(pickup.actor));
   return html`<section class="follow-up" aria-label="follow-up">
   ${[...fu.notes].reverse().map((note) => html`<div key=${note.seq} class="follow-up-note">
     <div class="meta"><span class="badge">new since your answer</span><span>${who(note.actor) || note.author} followed up</span>${note.at && html`<span class="age">${stamp(note.at)}, ${old(note.at, now)}</span>`}</div>
-    <${Markdown} text=${note.data.body} />
+    <${Markdown} text=${(note.data || {}).body} />
   </div>`)}
   <div class="previous-answer">
     <div class="meta"><span>your previous answer</span>${fu.answer.at && html`<span class="age">${stamp(fu.answer.at)}, ${old(fu.answer.at, now)}</span>`}</div>
