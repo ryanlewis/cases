@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { Hint, keys, rowAfter, rowFor } from "../static/keys.ts";
@@ -56,6 +56,12 @@ class El {
 }
 
 let page;
+// The tests stand in for the document that hooks.js set up for
+// markdown.ts; it is put back once they are done.
+const original = globalThis.document;
+after(() => {
+  globalThis.document = original;
+});
 // Sets the page up with `form` as the open case's answer form (shown unless
 // `hidden`), `cards` in the list, a dialog open if `open`, and `dialog` as
 // the keys dialog, and listens on it. Gives a function that presses a key
@@ -155,6 +161,12 @@ test("no key does anything once the page or the browser has taken it", () => {
 });
 
 test("the other keys do nothing with a modifier held, in a text field, or with a dialog open", () => {
+  // A page on which each key would do something: a form with choices and a
+  // note, a list with a case on either side of the one shown, and a keys dialog.
+  const busy = (open = false) => {
+    const cards = ["c0", "c1", "c2"].map((id, i) => Object.assign(new El(id, { tagName: "A" }), { getAttribute: (name) => (name === "aria-current" && i === 1 ? "page" : null) }));
+    return setup({ form: choiceForm(), cards, open, dialog: { showModal: () => log.push("shown") } });
+  };
   const typed = [
     new El("t", { tagName: "TEXTAREA" }),
     new El("s", { tagName: "SELECT" }),
@@ -162,12 +174,17 @@ test("the other keys do nothing with a modifier held, in a text field, or with a
     new El("i", { tagName: "INPUT", type: "text" }),
     new El("i", { tagName: "INPUT", type: "" }),
   ];
-  for (const init of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }, ...typed.map((target) => ({ target }))]) {
-    const press = setup({ form: choiceForm() });
-    assert.equal(press("1", init), false);
-    assert.deepEqual(log, []);
+  for (const key of ["1", "n", "j", "k", "?"]) {
+    for (const init of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }, ...typed.map((target) => ({ target }))]) {
+      assert.equal(busy()(key, init), false, key);
+      assert.deepEqual(log, [], key);
+    }
+    assert.equal(busy(true)(key), false, key);
+    assert.deepEqual(log, [], key);
+    // Without any of those, the key does what it does.
+    assert.equal(busy()(key), true, key);
+    assert.notDeepEqual(log, [], key);
   }
-  assert.equal(setup({ form: choiceForm(), open: true })("1"), false);
   // A choice, a button and other inputs typed into are not text fields; nor
   // is a target that is not an element, or none.
   for (const target of [radio("x"), new El("c", { tagName: "INPUT", type: "checkbox" }), new El("b", { tagName: "INPUT", type: "submit" }), new El("b", { tagName: "BUTTON" }), {}, null]) {
