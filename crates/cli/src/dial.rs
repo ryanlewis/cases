@@ -317,6 +317,40 @@ enum Read {
 
 /// Reads one request.
 fn read(input: &mut impl BufRead) -> io::Result<Read> {
+    let head = match read_head(input)? {
+        Ok(head) => head,
+        Err(read) => return Ok(read),
+    };
+    let Ok(head) = String::from_utf8(head) else {
+        return Ok(Read::Bad("the request's head is not UTF-8"));
+    };
+    let mut lines = head.lines();
+    let Some((method, target, version)) = request_line(lines.next().unwrap_or_default()) else {
+        return Ok(Read::Bad("the request line is not one"));
+    };
+    let headers = match headers(lines, version == "HTTP/1.0") {
+        Ok(headers) => headers,
+        Err(why) => return Ok(Read::Bad(why)),
+    };
+    let Some(body) = read_body(input, headers.length)? else {
+        return Ok(Read::End);
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    Ok(Read::Request(Request {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query: pairs(query),
+        content_type: headers.content_type,
+        body,
+        close: headers.close,
+        agent: headers.agent,
+    }))
+}
+
+/// Reads a request's head, its request line and headers to the blank line
+/// that ends them, or what reading gave instead: the end of the input, or
+/// a head over [`HEAD_LIMIT`].
+fn read_head(input: &mut impl BufRead) -> io::Result<Result<Vec<u8>, Read>> {
     let mut head = Vec::new();
     loop {
         let mut line = Vec::new();
@@ -324,13 +358,13 @@ fn read(input: &mut impl BufRead) -> io::Result<Read> {
         let n = io::Read::take(&mut *input, u64::try_from(left).unwrap_or(u64::MAX))
             .read_until(b'\n', &mut line)?;
         if n == 0 {
-            return Ok(Read::End);
+            return Ok(Err(Read::End));
         }
         if !line.ends_with(b"\n") {
             if head.len() + line.len() > HEAD_LIMIT {
-                return Ok(Read::Bad("the request's head is over 64 KiB"));
+                return Ok(Err(Read::Bad("the request's head is over 64 KiB")));
             }
-            return Ok(Read::End);
+            return Ok(Err(Read::End));
         }
         // A blank line before the request line is skipped (RFC 9112, 2.2).
         if head.is_empty() && (line == b"\r\n" || line == b"\n") {
@@ -339,66 +373,83 @@ fn read(input: &mut impl BufRead) -> io::Result<Read> {
         let end = line == b"\r\n" || line == b"\n";
         head.extend_from_slice(&line);
         if end {
-            break;
+            return Ok(Ok(head));
         }
     }
-    let Ok(head) = String::from_utf8(head) else {
-        return Ok(Read::Bad("the request's head is not UTF-8"));
-    };
-    let mut lines = head.lines();
-    let mut first = lines.next().unwrap_or_default().split(' ');
+}
+
+/// The method, target and version of a request line, when it is one.
+fn request_line(line: &str) -> Option<(&str, &str, &str)> {
+    let mut first = line.split(' ');
     let (Some(method), Some(target), Some(version), None) =
         (first.next(), first.next(), first.next(), first.next())
     else {
-        return Ok(Read::Bad("the request line is not one"));
+        return None;
     };
     if method.is_empty() || !target.starts_with('/') || !version.starts_with("HTTP/1.") {
-        return Ok(Read::Bad("the request line is not one"));
+        return None;
     }
-    let mut length = 0;
-    let mut content_type = None;
-    let mut close = version == "HTTP/1.0";
-    let mut agent = None;
+    Some((method, target, version))
+}
+
+/// What a request's headers say of it.
+struct Headers {
+    length: usize,
+    content_type: Option<String>,
+    /// Whether the connection ends after the answer.
+    close: bool,
+    agent: Option<String>,
+}
+
+/// What the header `lines` say, the connection closing after the answer
+/// unless they say otherwise when `close`, or why they cannot be read.
+fn headers<'a>(lines: impl Iterator<Item = &'a str>, close: bool) -> Result<Headers, &'static str> {
+    let mut headers = Headers {
+        length: 0,
+        content_type: None,
+        close,
+        agent: None,
+    };
     for line in lines.filter(|line| !line.is_empty()) {
         let Some((name, value)) = line.split_once(':') else {
-            return Ok(Read::Bad("a header is not one"));
+            return Err("a header is not one");
         };
         let value = value.trim();
         if name.eq_ignore_ascii_case("content-length") {
-            match value.parse::<usize>() {
-                Ok(n) if n <= BODY_LIMIT => length = n,
-                Ok(_) => return Ok(Read::Bad("the body is over 1 MiB")),
-                Err(_) => return Ok(Read::Bad("the body's length is not one")),
-            }
+            headers.length = content_length(value)?;
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Ok(Read::Bad("a body is sent with its length"));
+            return Err("a body is sent with its length");
         } else if name.eq_ignore_ascii_case("content-type") {
-            content_type = Some(value.to_owned());
+            headers.content_type = Some(value.to_owned());
         } else if name.eq_ignore_ascii_case("user-agent") {
-            agent = Some(value.to_owned());
+            headers.agent = Some(value.to_owned());
         } else if name.eq_ignore_ascii_case("connection") {
-            close = value
+            headers.close = value
                 .split(',')
                 .any(|token| token.trim().eq_ignore_ascii_case("close"));
         }
     }
-    let mut body = vec![0; length];
-    if let Err(error) = input.read_exact(&mut body) {
-        return match error.kind() {
-            io::ErrorKind::UnexpectedEof => Ok(Read::End),
-            _ => Err(error),
-        };
+    Ok(headers)
+}
+
+/// The length a `Content-Length` header's `value` gives, at most
+/// [`BODY_LIMIT`], or why it gives none.
+fn content_length(value: &str) -> Result<usize, &'static str> {
+    match value.parse::<usize>() {
+        Ok(n) if n <= BODY_LIMIT => Ok(n),
+        Ok(_) => Err("the body is over 1 MiB"),
+        Err(_) => Err("the body's length is not one"),
     }
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    Ok(Read::Request(Request {
-        method: method.to_owned(),
-        path: path.to_owned(),
-        query: pairs(query),
-        content_type,
-        body,
-        close,
-        agent,
-    }))
+}
+
+/// The body of `length` bytes, or `None` when the input ends first.
+fn read_body(input: &mut impl BufRead, length: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut body = vec![0; length];
+    match input.read_exact(&mut body) {
+        Ok(()) => Ok(Some(body)),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// The pairs of a query, decoded.
@@ -878,31 +929,9 @@ fn listener_json(l: &cases_core::Listening) -> Value {
 /// takes none, as a local one does not. One that another wait holds is
 /// refused, 409 `held`, naming that wait.
 fn take_locks(db: &Db, body: &Value, locks: &Locks) -> Result<Answer, Answer> {
-    let not_locks = || Answer::refuse(400, "request", "the body is not a list of locks");
-    let scopes = body["locks"]
-        .as_array()
-        .ok_or_else(not_locks)?
-        .iter()
-        .map(|item| {
-            let on = item["on"]
-                .as_str()
-                .and_then(lock::what)
-                .ok_or_else(not_locks)?;
-            let text = item["text"].as_str().ok_or_else(not_locks)?;
-            Ok((on, text.to_owned()))
-        })
-        .collect::<Result<Vec<lock::Scope>, Answer>>()?;
-    let flag = |name: &str| match &body[name] {
-        Value::Null => Ok(false),
-        Value::Bool(flag) => Ok(*flag),
-        _ => Err(Answer::refuse(
-            400,
-            "request",
-            &format!("the {name} is not true or false"),
-        )),
-    };
-    let lease = flag("lease")?;
-    let releases = flag("release")?;
+    let scopes = lock_scopes(body)?;
+    let lease = flag(body, "lease")?;
+    let releases = flag(body, "release")?;
     let answer = |taken: &mut Taken| {
         if !lease {
             return Answer::ok(json!({}));
@@ -925,6 +954,39 @@ fn take_locks(db: &Db, body: &Value, locks: &Locks) -> Result<Answer, Answer> {
         Err(lock::Refusal::Held(error)) => Answer::refuse(409, "held", &error.to_string()),
         Err(lock::Refusal::Failed(error)) => Answer::refuse(500, "store", &error.to_string()),
     })
+}
+
+/// The locks of a `POST store/lock` body, `{locks: [{on, text}]}`, or the
+/// refusal of one that is not a list of them.
+fn lock_scopes(body: &Value) -> Result<Vec<lock::Scope>, Answer> {
+    let not_locks = || Answer::refuse(400, "request", "the body is not a list of locks");
+    body["locks"]
+        .as_array()
+        .ok_or_else(not_locks)?
+        .iter()
+        .map(|item| {
+            let on = item["on"]
+                .as_str()
+                .and_then(lock::what)
+                .ok_or_else(not_locks)?;
+            let text = item["text"].as_str().ok_or_else(not_locks)?;
+            Ok((on, text.to_owned()))
+        })
+        .collect()
+}
+
+/// A true-or-false field of `body`, false when it is not there, or the
+/// refusal of one that is neither.
+fn flag(body: &Value, name: &str) -> Result<bool, Answer> {
+    match &body[name] {
+        Value::Null => Ok(false),
+        Value::Bool(flag) => Ok(*flag),
+        _ => Err(Answer::refuse(
+            400,
+            "request",
+            &format!("the {name} is not true or false"),
+        )),
+    }
 }
 
 /// `POST store/lock/renew`: renews the lease of the locks this connection
