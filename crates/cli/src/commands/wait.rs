@@ -904,10 +904,8 @@ fn failed(
     taken: Vec<Turn>,
 ) -> Result<Vec<Turn>, Error> {
     if collecting && error.status() == Status::Timeout {
-        // A message taken and then withdrawn while collecting is given
-        // withdrawn, as [`Found::give`] gives it.
-        let keys: HashSet<Key> = collected.iter().map(|turn| turn.key).collect();
-        let taken = taken.into_iter().filter(|turn| !keys.contains(&turn.key));
+        // What it collected holds no message it took: a withdraw of one
+        // is urgent, and ended the wait at that read.
         return Ok(collected.into_iter().chain(taken).collect());
     }
     if taken.is_empty() {
