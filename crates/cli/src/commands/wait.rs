@@ -888,7 +888,8 @@ fn listens(args: &Args) -> bool {
 /// A wait that listens for messages (AG-16): the id it records itself by,
 /// made at its first record, the workers it records as listening, the
 /// labels and kinds it waits on, the name it picks messages up as, the doing
-/// line it gives on its first record, and when its next heartbeat is due.
+/// line it gives on each worker's first record, how many of its workers,
+/// from the first, have had that record, and when its next heartbeat is due.
 #[derive(Debug)]
 struct Listening<'a> {
     id: Option<String>,
@@ -897,6 +898,7 @@ struct Listening<'a> {
     kinds: Vec<String>,
     by: &'a str,
     doing: Option<&'a str>,
+    given: usize,
     due: Option<Instant>,
 }
 
@@ -922,6 +924,7 @@ impl<'a> Listening<'a> {
                 .filter(|by| !by.trim().is_empty())
                 .unwrap_or(worker),
             doing: args.doing.as_deref(),
+            given: 0,
             due: None,
         })
     }
@@ -949,9 +952,13 @@ impl<'a> Listening<'a> {
                 }
             },
         };
-        for worker in self.workers {
-            match db.listen(&id, worker, self.labels, &self.kinds, self.doing) {
-                Ok(()) => {}
+        for (i, worker) in self.workers.iter().enumerate() {
+            // The doing line goes on each worker's first record alone, so
+            // that a later `cases doing` is not put back, even by a beat
+            // that tries again after a write for a later worker failed.
+            let doing = self.doing.filter(|_| i >= self.given);
+            match db.listen(&id, worker, self.labels, &self.kinds, doing) {
+                Ok(()) => self.given = self.given.max(i + 1),
                 Err(error) if error.is_missing() => return,
                 Err(error) => {
                     let message = format!("{worker} is not recorded as listening: {error}");
@@ -962,8 +969,6 @@ impl<'a> Listening<'a> {
                 }
             }
         }
-        // The doing line goes on the first record alone, so that a later
-        // `cases doing` is not put back.
         self.doing = None;
         self.due = Some(Instant::now() + HEARTBEAT);
     }
@@ -1335,6 +1340,7 @@ mod tests {
             kinds: vec!["message".into()],
             by: &workers[0],
             doing,
+            given: 0,
             due: None,
         }
     }
@@ -1481,9 +1487,8 @@ mod tests {
         let id = listening.id.clone().unwrap();
         assert_eq!(heard(&db), [("ada".to_owned(), id.clone(), at(100))]);
 
-        // BUG, pinned and not fixed here: the failed beat keeps its doing
-        // line, so the next beat puts back a line that `cases doing` has
-        // cleared on a worker it did record (AG-17).
+        // The line went on ada's record, so a later `cases doing` that
+        // clears it is not put back by the beat that tries again (AG-17).
         let AnyStore::Local(local) = &db else {
             unreachable!()
         };
@@ -1493,6 +1498,6 @@ mod tests {
         assert_eq!(warned, HashSet::from([warning]));
         assert_eq!(listening.due, None);
         assert_eq!(heard(&db), [("ada".to_owned(), id, at(105))]);
-        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+        assert_eq!(doing_of(&db, "ada"), None);
     }
 }

@@ -26,7 +26,7 @@ use super::stream;
 use super::watch::Watch;
 use crate::dial;
 use crate::output;
-use crate::tokens::Tokens;
+use crate::tokens::{Tokens, same};
 
 /// The header every write carries its CSRF token in.
 pub(crate) const CSRF_HEADER: &str = "x-cases-csrf";
@@ -340,10 +340,13 @@ fn check_store(app: &App, headers: &HeaderMap) -> Result<(), Refusal> {
         );
     }
     if let Some(bearer) = headers.get(header::AUTHORIZATION) {
+        // The scheme is case-insensitive, as RFC 7235 has it: `bearer` is
+        // taken too. One space follows it, as before.
         let sent = bearer
             .as_bytes()
-            .strip_prefix(b"Bearer ")
-            .unwrap_or_default();
+            .split_at_checked(b"Bearer ".len())
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case(b"Bearer "))
+            .map_or(&[][..], |(_, token)| token);
         if !sent.is_empty() && app.store_tokens.has(sent) {
             return Ok(());
         }
@@ -366,12 +369,6 @@ fn text<'a>(headers: &'a HeaderMap, name: &HeaderName) -> &'a str {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
-}
-
-/// Whether `a` and `b` are the same, in a time that depends only on their
-/// lengths.
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 /// Logs one line for each page load, write and failed request, with the
@@ -964,7 +961,7 @@ mod tests {
     }
 
     /// Through a proxy, the bearer must be one of the tokens, whole, after
-    /// `Bearer ` as spelt. An Authorization header that is not one is
+    /// `Bearer ` in any case. An Authorization header that is not one is
     /// refused even with a listed login.
     #[test]
     fn a_proxied_store_route_lets_in_only_a_whole_token() {
@@ -977,18 +974,29 @@ mod tests {
             }
             store_refused(&app, &pairs)
         };
-        assert_eq!(route(&format!("Bearer {STORE_TOKEN}"), None), None);
+        // The scheme is case-insensitive (RFC 7235).
+        for scheme in ["Bearer", "bearer", "BEARER", "bEaReR"] {
+            for login in [None, Some("ryan@github")] {
+                assert_eq!(
+                    route(&format!("{scheme} {STORE_TOKEN}"), login),
+                    None,
+                    "{scheme} {login:?}"
+                );
+            }
+        }
         let wrong = "f".repeat(32);
         for authorization in [
             format!("Bearer {wrong}"),
+            format!("bearer {wrong}"),
             format!("Bearer {}", &STORE_TOKEN[1..]),
             format!("Bearer {STORE_TOKEN}x"),
-            // Pins current behaviour, possibly a bug: RFC 7235 makes the
-            // scheme case-insensitive, but only `Bearer ` is taken.
-            format!("bearer {STORE_TOKEN}"),
             format!("Bearer  {STORE_TOKEN}"),
+            format!("Basic {STORE_TOKEN}"),
+            format!("Bearer{STORE_TOKEN}"),
+            format!("Bearers {STORE_TOKEN}"),
             STORE_TOKEN.to_owned(),
             "Bearer ".to_owned(),
+            "bearer ".to_owned(),
             "Bearer".to_owned(),
             String::new(),
         ] {
@@ -1141,6 +1149,27 @@ mod tests {
             "{lines:?}"
         );
         assert_eq!(app.requests.load(Ordering::Relaxed), 2);
+    }
+
+    /// A renewal is a store route's lock renewal, as `Client::hold` sends
+    /// it over HTTP, and nothing that has only some of its parts.
+    #[test]
+    fn a_renewal_is_a_store_route_s_lock_renewal() {
+        assert!(is_renewal("/v1/stores/main/store/lock/h1/renew"));
+        for path in [
+            // Not a store route.
+            "/v1/cases/store/lock/h1/renew",
+            "/store/lock/h1/renew",
+            // Not a lock.
+            "/v1/stores/main/store/h1/renew",
+            "/v1/cases/UkLWZ/renew",
+            // Not a renewal.
+            "/v1/stores/main/store/lock/h1/release",
+            "/v1/stores/main/store/lock/h1/renew/x",
+            "/v1/stores/main/store/lock",
+        ] {
+            assert!(!is_renewal(path), "{path}");
+        }
     }
 
     #[test]
