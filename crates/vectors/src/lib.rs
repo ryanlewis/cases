@@ -113,37 +113,9 @@ pub fn load_all() -> Result<Vec<(String, Vec<Vector>)>, Vec<String>> {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let read = fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| serde_json::from_str::<Vec<Vector>>(&text).map_err(|e| e.to_string()));
-        match read {
+        match read(&path) {
             Ok(vectors) => {
-                let mut seen = BTreeSet::new();
-                for vector in &vectors {
-                    if !seen.insert(vector.description.clone()) {
-                        errors.push(format!("{name}.json: {:?} twice", vector.description));
-                    }
-                    // A case or a version is named once in a vector.
-                    let mut named = BTreeSet::new();
-                    for (i, step) in vector.steps.iter().enumerate() {
-                        let names = [
-                            step.name.as_ref().map(|n| ("case", n)),
-                            step.version.as_ref().map(|n| ("version", n)),
-                        ];
-                        let twice = names.into_iter().flatten().find(|n| !named.insert(*n));
-                        let checked = match twice {
-                            Some((what, n)) => Err(format!("the {what} {n:?} is named twice")),
-                            None => step.action().map(drop),
-                        };
-                        if let Err(why) = checked {
-                            errors.push(format!(
-                                "{name}.json: {:?}, step {}: {why}",
-                                vector.description,
-                                i + 1
-                            ));
-                        }
-                    }
-                }
+                errors.extend(check_file(&name, &vectors));
                 files.push((name, vectors));
             }
             Err(why) => errors.push(format!("{name}.json: {why}")),
@@ -154,6 +126,54 @@ pub fn load_all() -> Result<Vec<(String, Vec<Vector>)>, Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+/// The vectors in the file at `path`, or why they do not read.
+fn read(path: &Path) -> Result<Vec<Vector>, String> {
+    fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str::<Vec<Vector>>(&text).map_err(|e| e.to_string()))
+}
+
+/// What is wrong with the vectors of the file `name`, in order: a
+/// description given twice, then what is wrong with each vector's steps.
+fn check_file(name: &str, vectors: &[Vector]) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut seen = BTreeSet::new();
+    for vector in vectors {
+        if !seen.insert(vector.description.clone()) {
+            errors.push(format!("{name}.json: {:?} twice", vector.description));
+        }
+        errors.extend(check_steps(name, vector));
+    }
+    errors
+}
+
+/// What is wrong with a vector's steps: a case or a version named twice,
+/// or a step that is not one.
+fn check_steps(name: &str, vector: &Vector) -> Vec<String> {
+    let mut errors = Vec::new();
+    // A case or a version is named once in a vector.
+    let mut named = BTreeSet::new();
+    for (i, step) in vector.steps.iter().enumerate() {
+        let names = [
+            step.name.as_ref().map(|n| ("case", n)),
+            step.version.as_ref().map(|n| ("version", n)),
+        ];
+        let twice = names.into_iter().flatten().find(|n| !named.insert(*n));
+        let checked = match twice {
+            Some((what, n)) => Err(format!("the {what} {n:?} is named twice")),
+            None => step.action().map(drop),
+        };
+        if let Err(why) = checked {
+            errors.push(format!(
+                "{name}.json: {:?}, step {}: {why}",
+                vector.description,
+                i + 1
+            ));
+        }
+    }
+    errors
 }
 
 /// A store vector: steps run in order against one new store.
@@ -298,56 +318,41 @@ enum Action<'a> {
 impl Step {
     /// The step's one action, or why it is not a step.
     fn action(&self) -> Result<Action<'_>, String> {
-        let mut found = Vec::new();
-        if let Some(t) = &self.clock {
-            found.push(Action::Clock(t));
-        }
-        if let Some(open) = &self.open {
-            found.push(Action::Open(open));
-        }
-        if let Some(case) = &self.append {
-            found.push(Action::Append(case));
-        }
-        if let Some(case) = &self.archive {
-            found.push(Action::Archive(case));
-        }
-        if let Some(case) = &self.delete {
-            found.push(Action::Delete(case));
-        }
-        if let Some(listen) = &self.listen {
-            found.push(Action::Listen(listen));
-        }
-        if let Some(set) = &self.set_doing {
-            found.push(Action::SetDoing(set));
-        }
-        if let Some(name) = &self.version {
-            found.push(Action::Version(name));
-        }
-        match &self.rows_since {
-            None => {}
-            Some(Value::Null) => found.push(Action::RowsSince(None)),
-            Some(Value::String(name)) => found.push(Action::RowsSince(Some(name))),
-            Some(_) => return Err("rows_since is a version's name or null".into()),
-        }
-        if let Some(actors) = &self.actors {
-            found.push(Action::Actors(actors));
-        }
-        if let Some(listeners) = &self.listeners {
-            found.push(Action::Listeners(listeners));
-        }
+        let found: Vec<Action> = [
+            self.clock.as_deref().map(Action::Clock),
+            self.open.as_ref().map(Action::Open),
+            self.append.as_deref().map(Action::Append),
+            self.archive.as_deref().map(Action::Archive),
+            self.delete.as_deref().map(Action::Delete),
+            self.listen.as_ref().map(Action::Listen),
+            self.set_doing.as_ref().map(Action::SetDoing),
+            self.version.as_deref().map(Action::Version),
+            self.rows_since()?,
+            self.actors.as_deref().map(Action::Actors),
+            self.listeners.as_deref().map(Action::Listeners),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let [action] = <[Action; 1]>::try_from(found)
             .map_err(|found| format!("{} actions, not one", found.len()))?;
-        match action {
-            Action::Clock(text) => drop(time(text)?),
-            Action::Listeners(want) => {
-                for w in want {
-                    for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
-                        time(text)?;
-                    }
-                }
-            }
-            _ => {}
+        check_times(&action)?;
+        self.check_takes(&action)?;
+        self.check_needs(action)
+    }
+
+    /// The step's `rows_since` action, if it has one.
+    fn rows_since(&self) -> Result<Option<Action<'_>>, String> {
+        match &self.rows_since {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(Action::RowsSince(None))),
+            Some(Value::String(name)) => Ok(Some(Action::RowsSince(Some(name)))),
+            Some(_) => Err("rows_since is a version's name or null".into()),
         }
+    }
+
+    /// Checks that the step gives no field `action` does not take.
+    fn check_takes(&self, action: &Action) -> Result<(), String> {
         let writes = matches!(
             action,
             Action::Open(_) | Action::Append(_) | Action::Archive(_) | Action::Delete(_)
@@ -406,6 +411,11 @@ impl Step {
         if let Some((key, ..)) = takes.iter().find(|(_, given, allowed)| *given && !allowed) {
             return Err(format!("{key} does not go with this action"));
         }
+        Ok(())
+    }
+
+    /// `action`, if the step gives every field it needs.
+    fn check_needs<'a>(&self, action: Action<'a>) -> Result<Action<'a>, String> {
         match action {
             Action::Open(_) if self.name.is_none() && self.expect_error.is_none() => {
                 Err("an open that is taken names its case with as".into())
@@ -419,6 +429,22 @@ impl Step {
             action => Ok(action),
         }
     }
+}
+
+/// Checks that each time an action gives is one.
+fn check_times(action: &Action) -> Result<(), String> {
+    match action {
+        Action::Clock(text) => drop(time(text)?),
+        Action::Listeners(want) => {
+            for w in *want {
+                for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
+                    time(text)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// What one vector's run has named so far.
@@ -440,6 +466,11 @@ impl Names {
         self.versions
             .get(name)
             .ok_or_else(|| format!("no version named {name:?}").into())
+    }
+
+    /// The names of `cases`, in order.
+    fn of(&self, cases: &[(Key, Vec<cases_core::Row>)]) -> Vec<String> {
+        cases.iter().map(|(key, _)| self.name_of(*key)).collect()
     }
 
     /// The name of the case `key`.
@@ -511,136 +542,216 @@ fn outcome(step: &Step, got: Result<(), String>) -> Result<(), Failed> {
     }
 }
 
+/// Runs one step: its action, checked against what it expects.
 fn run_step<H>(harness: &H, names: &mut Names, step: &Step) -> Result<(), Failed>
 where
     H: Harness,
     <H::Store as Store>::Error: Display,
 {
     let store = harness.store();
-    let writer = || Writer::new(step.writer.as_deref());
-    let category = |error: StoreError<_>| write_category(harness, &error);
     match step.action().map_err(Failed::from)? {
         Action::Clock(text) => {
             harness.set_clock(time(text)?);
             Ok(())
         }
-        Action::Open(record) => {
-            let append = Append {
-                author: step.author.clone().unwrap_or_else(|| "agent".into()),
-                event: "open".into(),
-                data: Value::Object(record.clone()).to_string(),
-            };
-            let got = match store.create(&append, &writer()) {
-                Ok((key, _)) => {
-                    if let Some(name) = &step.name {
-                        names.cases.insert(name.clone(), key);
-                    }
-                    check_actor(store, key, &append.author, &writer())?;
-                    Ok(())
-                }
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Append(name) => {
-            let key = names.case(name)?;
-            let append = Append {
-                author: step.author.clone().unwrap_or_default(),
-                event: step.event.clone().unwrap_or_default(),
-                data: Value::Object(step.data.clone().unwrap_or_default()).to_string(),
-            };
-            let got = match store.append(&key, &append, &writer(), step.at_revision) {
-                Ok(_) => {
-                    check_actor(store, key, &append.author, &writer())?;
-                    Ok(())
-                }
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Archive(name) | Action::Delete(name) => {
-            let key = names.case(name)?;
-            let removed = if step.archive.is_some() {
-                store.archive(&key, step.at_revision)
-            } else {
-                store.delete(&key, step.at_revision)
-            };
-            let got = match removed {
-                Ok(()) => Ok(()),
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
+        Action::Open(record) => run_open(harness, names, step, record),
+        Action::Append(name) => run_append(harness, names, step, name),
+        Action::Archive(name) | Action::Delete(name) => run_remove(harness, names, step, name),
         Action::Listen(listen) => {
-            let got = match store.listen(
+            let listened = store.listen(
                 &listen.wait,
                 &listen.worker,
                 &listen.labels,
                 &listen.kinds,
                 listen.doing.as_deref(),
-            ) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(store_category(harness, &error)?),
-            };
-            outcome(step, got)
+            );
+            stored(harness, step, listened)
         }
-        Action::SetDoing(set) => {
-            let got = match store.set_doing(&set.worker, &set.text) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(store_category(harness, &error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Version(name) => {
-            let version = store
-                .version()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            if let Some(same) = &step.same_as
-                && *names.version(same)? != version
-            {
-                return Err(format!("the version moved from {same}: {version}").into());
+        Action::SetDoing(set) => stored(harness, step, store.set_doing(&set.worker, &set.text)),
+        Action::Version(name) => run_version(store, names, step, name),
+        Action::RowsSince(since) => run_rows_since(store, names, step, since),
+        Action::Actors(want) => check_actors(store, want),
+        Action::Listeners(want) => run_listeners(store, want),
+    }
+}
+
+/// Compares what a call other than a write gave, taken or refused with
+/// the category of the store's error, with what the step expects.
+fn stored<H>(
+    harness: &H,
+    step: &Step,
+    result: Result<(), <H::Store as Store>::Error>,
+) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let got = match result {
+        Ok(()) => Ok(()),
+        Err(error) => Err(store_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Opens the case `record`, naming it as the step says.
+fn run_open<H>(
+    harness: &H,
+    names: &mut Names,
+    step: &Step,
+    record: &Map<String, Value>,
+) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let writer = || Writer::new(step.writer.as_deref());
+    let append = Append {
+        author: step.author.clone().unwrap_or_else(|| "agent".into()),
+        event: "open".into(),
+        data: Value::Object(record.clone()).to_string(),
+    };
+    let got = match store.create(&append, &writer()) {
+        Ok((key, _)) => {
+            if let Some(name) = &step.name {
+                names.cases.insert(name.clone(), key);
             }
-            for other in step.differs_from.iter().flatten() {
-                if *names.version(other)? == version {
-                    return Err(format!("the version is still {other}'s: {version}").into());
-                }
-            }
-            names.versions.insert(name.to_owned(), version);
+            check_actor(store, key, &append.author, &writer())?;
             Ok(())
         }
-        Action::RowsSince(since) => {
-            let since = since.map(|name| names.version(name)).transpose()?.cloned();
-            let want = step.expect.as_ref().ok_or("no expect")?;
-            let changes = store
-                .rows_since(since.as_ref())
-                .map_err(|e| format!("the store failed: {e}"))?;
-            check_changes(store, names, since.as_ref(), &changes, want)
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Appends the step's event to the case named `name`.
+fn run_append<H>(harness: &H, names: &Names, step: &Step, name: &str) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let writer = || Writer::new(step.writer.as_deref());
+    let key = names.case(name)?;
+    let append = Append {
+        author: step.author.clone().unwrap_or_default(),
+        event: step.event.clone().unwrap_or_default(),
+        data: Value::Object(step.data.clone().unwrap_or_default()).to_string(),
+    };
+    let got = match store.append(&key, &append, &writer(), step.at_revision) {
+        Ok(_) => {
+            check_actor(store, key, &append.author, &writer())?;
+            Ok(())
         }
-        Action::Actors(want) => {
-            let actors = store
-                .actors()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            let got: Vec<(String, Option<String>)> =
-                actors.into_iter().map(|a| (a.kind, a.name)).collect();
-            let want: Vec<(String, Option<String>)> = want
-                .iter()
-                .map(|a| (a.kind.clone(), a.name.clone()))
-                .collect();
-            if got == want {
-                Ok(())
-            } else {
-                Err(format!("the actors are {got:?}, want {want:?}").into())
-            }
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Archives or deletes the case named `name`, as the step says.
+fn run_remove<H>(harness: &H, names: &Names, step: &Step, name: &str) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let key = names.case(name)?;
+    let removed = if step.archive.is_some() {
+        store.archive(&key, step.at_revision)
+    } else {
+        store.delete(&key, step.at_revision)
+    };
+    let got = match removed {
+        Ok(()) => Ok(()),
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Names the store's version `name`, after checking it against the
+/// versions the step says it is the same as or differs from.
+fn run_version<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &mut Names,
+    step: &Step,
+    name: &str,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let version = store
+        .version()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    if let Some(same) = &step.same_as
+        && *names.version(same)? != version
+    {
+        return Err(format!("the version moved from {same}: {version}").into());
+    }
+    for other in step.differs_from.iter().flatten() {
+        if *names.version(other)? == version {
+            return Err(format!("the version is still {other}'s: {version}").into());
         }
-        Action::Listeners(want) => {
-            let listeners = store
-                .listeners()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            let waits = store
-                .waits()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            check_listeners(&listeners, &waits, want)
-        }
+    }
+    names.versions.insert(name.to_owned(), version);
+    Ok(())
+}
+
+/// Checks what changed since the version named `since`, or since the
+/// start, against what the step expects.
+fn run_rows_since<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &Names,
+    step: &Step,
+    since: Option<&str>,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let since = since.map(|name| names.version(name)).transpose()?.cloned();
+    let want = step.expect.as_ref().ok_or("no expect")?;
+    let changes = store
+        .rows_since(since.as_ref())
+        .map_err(|e| format!("the store failed: {e}"))?;
+    check_changes(store, names, since.as_ref(), &changes, want)
+}
+
+/// Checks the store's listeners and their waits against `want`.
+fn run_listeners<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    want: &[ListenerWant],
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let listeners = store
+        .listeners()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    let waits = store
+        .waits()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    check_listeners(&listeners, &waits, want)
+}
+
+/// Checks the store's actors, by kind and name, against `want`.
+fn check_actors<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    want: &[ActorWant],
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let actors = store
+        .actors()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    let got: Vec<(String, Option<String>)> = actors.into_iter().map(|a| (a.kind, a.name)).collect();
+    let want: Vec<(String, Option<String>)> = want
+        .iter()
+        .map(|a| (a.kind.clone(), a.name.clone()))
+        .collect();
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!("the actors are {got:?}, want {want:?}").into())
     }
 }
 
@@ -696,18 +807,7 @@ fn check_changes<S: Store<Key = Key, Writer = Writer>>(
 where
     S::Error: Display,
 {
-    let named = |cases: &[(Key, Vec<cases_core::Row>)]| -> Vec<String> {
-        cases.iter().map(|(key, _)| names.name_of(*key)).collect()
-    };
-    // Every case given is as the store gives it now.
-    for (key, rows) in changes.cases() {
-        let now = store
-            .rows(key)
-            .map_err(|e| format!("the store failed: {e}"))?;
-        if now.as_ref() != Some(rows) {
-            return Err(format!("{}'s rows are not the store's", names.name_of(*key)).into());
-        }
-    }
+    check_rows(store, names, changes)?;
     let version = store
         .version()
         .map_err(|e| format!("the store failed: {e}"))?;
@@ -722,53 +822,92 @@ where
         return Err("with no version, the answer is every case".into());
     }
     match changes {
-        // Nothing changed only when the store is still at the version asked
-        // about.
-        Changes::Unchanged { .. } if since != Some(&version) => {
-            Err(format!("nothing changed, but the version moved to {version}").into())
-        }
-        Changes::Unchanged { .. } if !want.changed.is_empty() || !want.removed.is_empty() => {
-            Err(format!(
-                "nothing changed, want {:?} changed and {:?} removed",
-                want.changed, want.removed
-            )
-            .into())
-        }
-        Changes::Since { cases, removed, .. } => {
-            let got = named(cases);
-            if got != want.changed {
-                return Err(format!("{got:?} changed, want {:?}", want.changed).into());
-            }
-            // A store never gives a key twice.
-            let keys: BTreeSet<Key> = removed.iter().copied().collect();
-            if keys.len() != removed.len() || cases.iter().any(|(key, _)| keys.contains(key)) {
-                return Err("a key is given twice".into());
-            }
-            let removed: BTreeSet<String> = removed.iter().map(|k| names.name_of(*k)).collect();
-            let must: BTreeSet<String> = want.removed.iter().cloned().collect();
-            let may: BTreeSet<String> = must
-                .union(&want.removed_may.iter().cloned().collect())
-                .cloned()
-                .collect();
-            if !must.is_subset(&removed) || !removed.is_subset(&may) {
-                return Err(format!(
-                    "{removed:?} removed, want {must:?}, with {:?} allowed",
-                    want.removed_may
-                )
-                .into());
-            }
-            Ok(())
-        }
+        Changes::Unchanged { .. } => check_unchanged(since, &version, want),
+        Changes::Since { cases, removed, .. } => check_since(names, cases, removed, want),
         Changes::All { cases, .. } => {
-            let got = named(cases);
+            let got = names.of(cases);
             if got == want.live {
                 Ok(())
             } else {
                 Err(format!("every case is {got:?}, want {:?}", want.live).into())
             }
         }
-        Changes::Unchanged { .. } => Ok(()),
     }
+}
+
+/// Checks an answer that nothing changed since the version `since`.
+fn check_unchanged(
+    since: Option<&Version>,
+    version: &Version,
+    want: &ChangesWant,
+) -> Result<(), Failed> {
+    // Nothing changed only when the store is still at the version asked
+    // about.
+    if since != Some(version) {
+        Err(format!("nothing changed, but the version moved to {version}").into())
+    } else if !want.changed.is_empty() || !want.removed.is_empty() {
+        Err(format!(
+            "nothing changed, want {:?} changed and {:?} removed",
+            want.changed, want.removed
+        )
+        .into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Checks that every case an answer of `rows_since` gives is as the store
+/// gives it now.
+fn check_rows<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &Names,
+    changes: &Changes<Key>,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    for (key, rows) in changes.cases() {
+        let now = store
+            .rows(key)
+            .map_err(|e| format!("the store failed: {e}"))?;
+        if now.as_ref() != Some(rows) {
+            return Err(format!("{}'s rows are not the store's", names.name_of(*key)).into());
+        }
+    }
+    Ok(())
+}
+
+/// Checks the cases an answer of what changed gives as changed and as
+/// removed against what the step expects.
+fn check_since(
+    names: &Names,
+    cases: &[(Key, Vec<cases_core::Row>)],
+    removed: &[Key],
+    want: &ChangesWant,
+) -> Result<(), Failed> {
+    let got = names.of(cases);
+    if got != want.changed {
+        return Err(format!("{got:?} changed, want {:?}", want.changed).into());
+    }
+    // A store never gives a key twice.
+    let keys: BTreeSet<Key> = removed.iter().copied().collect();
+    if keys.len() != removed.len() || cases.iter().any(|(key, _)| keys.contains(key)) {
+        return Err("a key is given twice".into());
+    }
+    let removed: BTreeSet<String> = removed.iter().map(|k| names.name_of(*k)).collect();
+    let must: BTreeSet<String> = want.removed.iter().cloned().collect();
+    let may: BTreeSet<String> = must
+        .union(&want.removed_may.iter().cloned().collect())
+        .cloned()
+        .collect();
+    if !must.is_subset(&removed) || !removed.is_subset(&may) {
+        return Err(format!(
+            "{removed:?} removed, want {must:?}, with {:?} allowed",
+            want.removed_may
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Checks the workers listening now, and that the waits listening now are
@@ -789,53 +928,79 @@ fn check_listeners(
     if waits.iter().collect::<Vec<_>>() != theirs {
         return Err(format!("the waits {waits:?} are not the listeners' {theirs:?}").into());
     }
-    let same = |want: &Option<String>, got: Option<Time>| -> Result<bool, Failed> {
-        Ok(match want {
-            Some(text) => Some(time(text)?) == got,
-            None => true,
-        })
-    };
     for (l, w) in got.iter().zip(want) {
-        let labels: BTreeSet<&String> = l.waits.iter().flat_map(|wait| &wait.labels).collect();
-        let whole = !l.waits.is_empty()
-            && l.waits.iter().all(|wait| wait.worker == l.worker)
-            && l.labels.iter().collect::<BTreeSet<_>>() == labels
-            && l.waits.iter().map(|wait| wait.since).min() == Some(l.since)
-            && l.waits.iter().map(|wait| wait.heard).max() == Some(l.heard)
-            && l.doing.is_some() == l.doing_at.is_some();
-        if !whole {
-            return Err(format!(
-                "{}: its labels, times and doing line are not those of its waits: {l:?}",
-                l.worker
-            )
-            .into());
-        }
-        let got_waits: Vec<(&str, &[String], &[String])> = l
-            .waits
-            .iter()
-            .map(|wait| (wait.id.as_str(), &wait.labels[..], &wait.kinds[..]))
-            .collect();
-        let waits_match = w.waits.as_ref().is_none_or(|want| {
-            let want: Vec<(&str, &[String], &[String])> = want
-                .iter()
-                .map(|wait| (wait.wait.as_str(), &wait.labels[..], &wait.kinds[..]))
-                .collect();
-            want == got_waits
-        });
-        let mismatch = l.worker != w.worker
-            || l.labels != w.labels
-            || l.doing != w.doing
-            || !same(&w.since, Some(l.since))?
-            || !same(&w.heard, Some(l.heard))?
-            || !same(&w.doing_at, l.doing_at)?
-            || !waits_match;
-        if mismatch {
-            return Err(format!(
-                "listening: {got_summary:?} (since {}, heard {}, doing at {:?}, waits {got_waits:?}), want {w:?}",
-                l.since, l.heard, l.doing_at
-            )
-            .into());
-        }
+        check_whole(l)?;
+        check_listener(l, w, &got_summary)?;
+    }
+    Ok(())
+}
+
+/// Checks that a listener's labels, times and doing line are those of its
+/// waits.
+fn check_whole(l: &cases_core::Listening) -> Result<(), Failed> {
+    let labels: BTreeSet<&String> = l.waits.iter().flat_map(|wait| &wait.labels).collect();
+    let whole = !l.waits.is_empty()
+        && l.waits.iter().all(|wait| wait.worker == l.worker)
+        && l.labels.iter().collect::<BTreeSet<_>>() == labels
+        && l.waits.iter().map(|wait| wait.since).min() == Some(l.since)
+        && l.waits.iter().map(|wait| wait.heard).max() == Some(l.heard)
+        && l.doing.is_some() == l.doing_at.is_some();
+    if whole {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: its labels, times and doing line are not those of its waits: {l:?}",
+            l.worker
+        )
+        .into())
+    }
+}
+
+/// Whether the time `got` is the time `want` names, when it names one.
+fn same_time(want: Option<&str>, got: Option<Time>) -> Result<bool, Failed> {
+    Ok(match want {
+        Some(text) => Some(time(text)?) == got,
+        None => true,
+    })
+}
+
+/// Whether the waits `got`, by id, labels and kinds, are the waits `want`.
+fn waits_are(want: &[WaitWant], got: &[(&str, &[String], &[String])]) -> bool {
+    let want: Vec<(&str, &[String], &[String])> = want
+        .iter()
+        .map(|wait| (wait.wait.as_str(), &wait.labels[..], &wait.kinds[..]))
+        .collect();
+    want == got
+}
+
+/// Checks one listener against what the step expects of it.
+fn check_listener(
+    l: &cases_core::Listening,
+    w: &ListenerWant,
+    got_summary: &[String],
+) -> Result<(), Failed> {
+    let got_waits: Vec<(&str, &[String], &[String])> = l
+        .waits
+        .iter()
+        .map(|wait| (wait.id.as_str(), &wait.labels[..], &wait.kinds[..]))
+        .collect();
+    let waits_match = w
+        .waits
+        .as_ref()
+        .is_none_or(|want| waits_are(want, &got_waits));
+    let mismatch = l.worker != w.worker
+        || l.labels != w.labels
+        || l.doing != w.doing
+        || !same_time(w.since.as_deref(), Some(l.since))?
+        || !same_time(w.heard.as_deref(), Some(l.heard))?
+        || !same_time(w.doing_at.as_deref(), l.doing_at)?
+        || !waits_match;
+    if mismatch {
+        return Err(format!(
+            "listening: {got_summary:?} (since {}, heard {}, doing at {:?}, waits {got_waits:?}), want {w:?}",
+            l.since, l.heard, l.doing_at
+        )
+        .into());
     }
     Ok(())
 }

@@ -863,4 +863,28 @@ mod tests {
             assert_eq!(forward.dial().unwrap().to_string(), shown);
         }
     }
+
+    #[test]
+    fn a_deadline_is_kept_on_the_store_until_it_is_taken_away() {
+        let forward = forward("exec:true");
+        let forwarded = Forwarded::new(&forward, None);
+        let shown = |f: &Forwarded| format!("{:?}", f.store().client());
+        assert!(shown(&forwarded).contains("deadline: None"));
+        forwarded.until(Some(Instant::now() + Duration::from_secs(60)));
+        assert!(shown(&forwarded).contains("deadline: Some("));
+        forwarded.until(None);
+        assert!(shown(&forwarded).contains("deadline: None"));
+    }
+
+    /// The signals a process started with ignored are left alone. Rust's
+    /// runtime starts every process, a test's too, with SIGPIPE ignored.
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn a_signal_the_process_started_ignoring_is_left_alone() {
+        use signal_hook::consts::{SIGPIPE, SIGSYS, SIGUSR2};
+        assert!(left_alone(SIGPIPE));
+        assert!(!left_alone(SIGUSR2));
+        // Above every signal that is ignored, nothing is left to shift in.
+        assert!(!left_alone(SIGSYS));
+    }
 }
