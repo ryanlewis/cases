@@ -254,6 +254,26 @@ fn remove_store(env: &Env) {
     }
 }
 
+/// Puts a file that is not a store at `env`'s store path, so that the next
+/// read fails, and not in a way a wait rides out. The file is renamed over
+/// the store, so no read finds the path empty, which is a store not there
+/// yet.
+fn spoil_store(env: &Env) {
+    let spoilt = env.store.with_extension("spoilt");
+    fs::write(&spoilt, "not a database, but a file of text").unwrap();
+    fs::rename(&spoilt, &env.store).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let mut file = env.store.clone().into_os_string();
+        file.push(suffix);
+        let file = PathBuf::from(file);
+        if let Err(error) = fs::remove_file(&file)
+            && error.kind() != ErrorKind::NotFound
+        {
+            panic!("{}: {error}", file.display());
+        }
+    }
+}
+
 #[test]
 fn wait_returns_an_answer_that_lands() {
     let env = Env::new();
@@ -1830,6 +1850,91 @@ fn a_listening_wait_that_cannot_print_names_each_message_it_took() {
         assert!(out.stderr.contains(&lost), "{id}: {out:?}");
     }
     assert_eq!(out.stderr.lines().count(), 2, "{out:?}");
+}
+
+/// Waits until the case `id` is picked up, as a wait that takes it does.
+fn until_picked_up(env: &Env, id: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    while env.case(id).state().as_str() != "pickedup" {
+        assert!(Instant::now() < deadline, "{id} was not picked up");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A steady wait that took a message and then fails to read the store, as
+/// it collects, still prints the message it took, and says the failure on
+/// stderr: no later wait takes it again (AG-16).
+#[test]
+fn a_steady_wait_that_fails_after_taking_a_message_prints_it() {
+    let env = Env::new();
+    // A case it waits on still open, so that it lingers after the message.
+    env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+    until_picked_up(&env, &sent);
+
+    spoil_store(&env);
+    let out = waiting.finish();
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [sent.as_str()], "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(
+        without(&out.stderr, &marker),
+        "warning: file is not a database\n",
+        "{out:?}"
+    );
+}
+
+/// A steady wait that collected an answer, took a message and then fails
+/// to read the store prints both: printing the message alone would move
+/// its `next_since` past the answer, which a later wait would then miss.
+#[test]
+fn a_steady_wait_that_fails_after_taking_a_message_prints_what_it_collected() {
+    let env = Env::new();
+    let open = |title: &str| {
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            title,
+            "--worker",
+            "w9",
+        ])
+    };
+    let answered = open("Answered");
+    let _left = open("Left open");
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    run(&env, "answer", &answered, &["--ack"]);
+    thread::sleep(Duration::from_millis(1500));
+    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+    until_picked_up(&env, &sent);
+
+    spoil_store(&env);
+    let out = waiting.finish();
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [answered.as_str(), sent.as_str()], "{out:?}");
+    // The store cannot take the answer's pickup: it is printed as read.
+    assert_eq!(lines[0]["state"], "answered", "{out:?}");
+    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
+    assert!(
+        without(&out.stderr, &marker).starts_with("warning: file is not a database\n"),
+        "{out:?}"
+    );
 }
 
 /// A message waits until a wait takes it: one sent before the wait began is
