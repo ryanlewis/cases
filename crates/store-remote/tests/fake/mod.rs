@@ -713,9 +713,13 @@ fn handle(state: &State, addr: SocketAddr, request: &Request) -> Answer {
         }
         _ => {}
     }
+    // The scheme is case-insensitive, as RFC 7235 has it and as `serve`
+    // takes it: `bearer` is taken too. One space follows it.
     let bearer = request
         .header("authorization")
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.split_at_checked("Bearer ".len()))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer "))
+        .map(|(_, token)| token);
     let token = bearer.and_then(|bearer| {
         lock(&state.tokens)
             .iter()
