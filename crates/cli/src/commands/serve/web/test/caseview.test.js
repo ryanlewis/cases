@@ -109,6 +109,12 @@ function serve(t, reply) {
   return posts;
 }
 
+// Waits for `done` to be true, for at most a second.
+async function until(done) {
+  for (let i = 0; i < 1000 && !done(); i++) await new Promise((r) => setTimeout(r, 1));
+  assert.ok(done(), "waited a second");
+}
+
 // The `send` CaseView gives its forms for case `c`, with what it told
 // `onSent` and `onCase` logged in `told`.
 function sender(c) {
@@ -123,11 +129,18 @@ test("an answer is sent with the revision and amend seq it was drawn at, and the
   await send("answer", { answer: { choice: 1 } });
   assert.deepEqual(posts, [["/v1/cases/c1Ab2/answer", { revision: 3, answer: { choice: 1, amend_seq: 2 } }]]);
   assert.deepEqual(told, [["sent", "answer", 4]]);
-  // Another write takes no amend seq.
+  // Another write takes no amend seq. Which revision it takes is not
+  // pinned: the case after the first write sets it, and a drawing to a
+  // string is never drawn again.
   await send("withdraw", { reason: "r" });
-  assert.deepEqual(posts[1], ["/v1/cases/c1Ab2/withdraw", { revision: 3, reason: "r" }]);
+  assert.equal(posts[1][0], "/v1/cases/c1Ab2/withdraw");
+  assert.equal(posts[1][1].reason, "r");
+  assert.ok(!("answer" in posts[1][1]));
 });
 
+// The refusal a send shows, and the revision it takes from the case as it
+// is now, are the view's state, which a drawing to a string never draws
+// again: what is pinned is what it hands on.
 test("a refused send hands on the case as it is now, when serve gives it, and nothing else", async (t) => {
   const stale = { error: { category: "stale", message: "stale", case: { ...make("decision", "open"), revision: 7 } } };
   let reply = stale;
@@ -149,7 +162,7 @@ test("a send while one is out does nothing, and the next after it is sent", asyn
   const { send } = sender(make("decision", "open"));
   const first = send("park", {});
   await send("park", {});
-  while (!answer) await new Promise((r) => setTimeout(r, 1));
+  await until(() => answer);
   assert.equal(posts.length, 1);
   answer(parked());
   await first;
@@ -181,10 +194,13 @@ test("a send that cannot reach serve hands nothing on, and the next is sent", as
 
 test("a parked case's resume form sends a resume", async (t) => {
   const posts = serve(t, () => new Response(JSON.stringify(make("decision", "open")), { status: 200 }));
-  const [form] = drawn((p) => p["data-write"] === "resume", () => draw(make("decision", "parked")));
+  const told = [];
+  const [form] = drawn((p) => p["data-write"] === "resume", () => draw(make("decision", "parked"), { onSent: (what) => told.push(what) }));
   let prevented = false;
   form.onSubmit({ preventDefault: () => (prevented = true) });
-  while (!posts.length) await new Promise((r) => setTimeout(r, 1));
+  // The send is done once it hands on the case after it.
+  await until(() => told.length);
   assert.ok(prevented);
+  assert.deepEqual(told, ["resume"]);
   assert.deepEqual(posts, [["/v1/cases/c1Ab2/resume", { revision: 3 }]]);
 });
