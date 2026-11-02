@@ -455,6 +455,7 @@ fn a_pickup_wait_over_http_takes_renews_and_lets_go_of_its_lease() {
     h.send_token(TOKEN);
     let locks = h.far.store.with_file_name("cases.db-waits");
     let first = picking_up(&h, &locks);
+    let (lock, first_holder) = taken(&locks, "worker-lead-");
     let again = h.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(again.stderr.contains("already picking up"), "{again:?}");
     thread::sleep(Duration::from_millis(3500));
@@ -467,9 +468,17 @@ fn a_pickup_wait_over_http_takes_renews_and_lets_go_of_its_lease() {
         Some(15),
         "{waited:?}"
     );
+    // Read off the lock, as a second wait is started some time before it
+    // takes it.
     let ended = Instant::now();
+    while kept(&lock, &first_holder) {
+        assert!(
+            ended.elapsed() < Duration::from_millis(1500),
+            "not let go at once"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
     starts_within(&h, Duration::from_secs(10));
-    assert!(ended.elapsed() < Duration::from_millis(1500));
 
     // The lock file names the last wait until another takes it.
     let before = holder(&locks, "worker-lead-");
@@ -479,15 +488,18 @@ fn a_pickup_wait_over_http_takes_renews_and_lets_go_of_its_lease() {
         assert!(Instant::now() < until, "the wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
+    let (lock, killed_holder) = taken(&locks, "worker-lead-");
+    // Renewed a second at most before it was killed, the lease runs out two
+    // seconds after at the soonest: a second in, it is held still.
+    let early = kept_at(
+        &lock,
+        &killed_holder,
+        Instant::now() + Duration::from_secs(1),
+    );
     killed.kill().unwrap();
     killed.wait().unwrap();
-    let at = Instant::now();
-    let started = starts_within(&h, Duration::from_secs(10));
-    assert!(
-        started - at > Duration::from_millis(1500),
-        "{:?}",
-        started - at
-    );
+    assert!(early.join().unwrap(), "let go within 1 s of the kill");
+    starts_within(&h, Duration::from_secs(10));
     // Renewals that went well are not logged; the locks are.
     let log = h.serve.stderr();
     assert!(!log.contains("/renew"), "{log}");
@@ -528,6 +540,52 @@ fn holder(dir: &std::path::Path, prefix: &str) -> Option<String> {
         let text = fs::read_to_string(entry.path()).ok()?;
         (!text.trim().is_empty()).then_some(text)
     })
+}
+
+/// The lock file in `dir` whose name starts with `prefix`, and the line its
+/// holder's take wrote in it, once all of it is there: a take writes it in
+/// parts. As `tests/forward.rs` has it.
+fn taken(dir: &std::path::Path, prefix: &str) -> (std::path::PathBuf, String) {
+    let lock = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .find(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+        .unwrap()
+        .path();
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let holder = fs::read_to_string(&lock).unwrap();
+        if holder.ends_with('\n') {
+            return (lock, holder);
+        }
+        assert!(
+            Instant::now() < until,
+            "its holder is not written: {holder:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Whether, at `at`, the lock `lock` is held still by the wait whose take
+/// wrote `holder` in it, read on a thread of its own so that nothing the
+/// test does meanwhile makes it late.
+fn kept_at(lock: &std::path::Path, holder: &str, at: Instant) -> thread::JoinHandle<bool> {
+    let (lock, holder) = (lock.to_owned(), holder.to_owned());
+    thread::spawn(move || {
+        thread::sleep(at.saturating_duration_since(Instant::now()));
+        kept(&lock, &holder)
+    })
+}
+
+/// Whether the lock `lock` is held still by the wait whose take wrote
+/// `holder` in it: another's take writes its own. When it is free, taking
+/// it to see lets it go again at once. A take that has just locked it and
+/// not yet written is taken as the holder still, for those few
+/// microseconds.
+fn kept(lock: &std::path::Path, holder: &str) -> bool {
+    let file = fs::File::open(lock).unwrap();
+    let busy = matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock));
+    busy && fs::read_to_string(lock).unwrap() == holder
 }
 
 /// Tries a pickup wait on worker lead every 100 ms, for up to `within`,
