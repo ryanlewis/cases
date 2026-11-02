@@ -30,6 +30,12 @@ use crate::store::{AnyStore, Failure, HOLD_MAX};
 
 pub(crate) mod lock;
 
+/// How long after a listening write that failed a wait tries it again: a
+/// heartbeat, so that a fault that lasts costs the store no more writes
+/// than a wait that works, rather than one at every read, while a worker
+/// it could not record is tried again well inside the time a record lasts.
+const RETRY: Duration = HEARTBEAT;
+
 /// How long wait sleeps between reads of a local store. A remote store is
 /// followed by the held poll instead.
 const POLL: Duration = Duration::from_secs(1);
@@ -888,8 +894,8 @@ fn listens(args: &Args) -> bool {
 /// A wait that listens for messages (AG-16): the id it records itself by,
 /// made at its first record, the workers it records as listening, the
 /// labels and kinds it waits on, the name it picks messages up as, the doing
-/// line it gives on each worker's first record, how many of its workers,
-/// from the first, have had that record, and when its next heartbeat is due.
+/// line it gives on each worker's first record, the workers whose record has
+/// had it, and when its next heartbeat is due.
 #[derive(Debug)]
 struct Listening<'a> {
     id: Option<String>,
@@ -898,7 +904,7 @@ struct Listening<'a> {
     kinds: Vec<String>,
     by: &'a str,
     doing: Option<&'a str>,
-    given: usize,
+    given: HashSet<&'a str>,
     due: Option<Instant>,
 }
 
@@ -924,15 +930,16 @@ impl<'a> Listening<'a> {
                 .filter(|by| !by.trim().is_empty())
                 .unwrap_or(worker),
             doing: args.doing.as_deref(),
-            given: 0,
+            given: HashSet::new(),
             due: None,
         })
     }
 
     /// Records the wait's workers as listening, when a heartbeat is due: at
     /// the first read of a store that is there, and every [`HEARTBEAT`]
-    /// after (ST-16). A store not there yet is tried again at the next read,
-    /// and so is a write that fails, which is warned about once. The record
+    /// after (ST-16). A store not there yet is tried again at the next read.
+    /// A worker whose write fails is warned about once, the workers after it
+    /// are recorded still, and the next beat is a [`RETRY`] later. The record
     /// lapses when the wait stops refreshing it, whether it stops cleanly or
     /// not, so nothing is written when it ends.
     fn beat(&mut self, db: &AnyStore, warned: &mut HashSet<String>) {
@@ -952,25 +959,28 @@ impl<'a> Listening<'a> {
                 }
             },
         };
-        for (i, worker) in self.workers.iter().enumerate() {
+        let mut failed = false;
+        for worker in self.workers {
             // The doing line goes on each worker's first record alone, so
             // that a later `cases doing` is not put back, even by a beat
-            // that tries again after a write for a later worker failed.
-            let doing = self.doing.filter(|_| i >= self.given);
+            // that tries again after another worker's write failed.
+            let doing = self.doing.filter(|_| !self.given.contains(worker.as_str()));
             match db.listen(&id, worker, self.labels, &self.kinds, doing) {
-                Ok(()) => self.given = self.given.max(i + 1),
+                Ok(()) => {
+                    self.given.insert(worker);
+                }
                 Err(error) if error.is_missing() => return,
                 Err(error) => {
                     let message = format!("{worker} is not recorded as listening: {error}");
                     if warned.insert(message.clone()) {
                         ctx::warn(message);
                     }
-                    return;
+                    failed = true;
                 }
             }
         }
-        self.doing = None;
-        self.due = Some(Instant::now() + HEARTBEAT);
+        let next = if failed { RETRY } else { HEARTBEAT };
+        self.due = Some(Instant::now() + next);
     }
 
     /// The turn `case`, a message, gives this wait, if any: a sent message
@@ -1340,7 +1350,7 @@ mod tests {
             kinds: vec!["message".into()],
             by: &workers[0],
             doing,
-            given: 0,
+            given: HashSet::new(),
             due: None,
         }
     }
@@ -1402,7 +1412,7 @@ mod tests {
         assert!(waits.iter().all(|wait| wait.labels == labels));
         assert!(waits.iter().all(|wait| wait.kinds == ["message"]));
         assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
-        assert_eq!(listening.doing, None);
+        assert_eq!(doing_of(&db, "bo").as_deref(), Some("reading"));
         let due = listening.due.expect("a beat that wrote sets the next");
         assert!(due > Instant::now() + HEARTBEAT / 2, "{due:?}");
         assert!(warned.is_empty(), "{warned:?}");
@@ -1446,7 +1456,6 @@ mod tests {
         assert!(!path.exists());
         assert!(warned.is_empty(), "{warned:?}");
         assert_eq!(listening.due, None);
-        assert_eq!(listening.doing, Some("reading"));
         let id = listening
             .id
             .clone()
@@ -1460,13 +1469,14 @@ mod tests {
         assert!(warned.is_empty(), "{warned:?}");
     }
 
-    /// A write that fails is warned about once, however many beats meet
-    /// it, and leaves the heartbeat due, so the next beat tries again. The
-    /// beat stops at the worker that failed. A blank worker stands in for
-    /// a failing write: `--pickup` refuses one, and the store refuses to
-    /// record it.
+    /// A worker whose write fails is warned about once, however many beats
+    /// meet it, and the workers after it are still recorded. The beat that
+    /// met it tries again a [`RETRY`] later, not at the next read; a doing
+    /// line that went on a worker's record, and was cleared since, is not
+    /// put back by it (AG-17). A blank worker stands in for a failing
+    /// write: `--pickup` refuses one, and the store refuses to record it.
     #[test]
-    fn a_write_that_fails_is_warned_about_once_and_tried_again_at_each_beat() {
+    fn a_worker_whose_write_fails_is_warned_about_once_and_the_rest_are_recorded() {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(AtomicI64::new(100));
         let db = clocked(&dir.path().join("cases.db"), &clock);
@@ -1482,22 +1492,39 @@ mod tests {
             warning.starts_with("  is not recorded as listening: "),
             "{warning}"
         );
-        assert_eq!(listening.due, None);
-        assert_eq!(listening.doing, Some("reading"));
         let id = listening.id.clone().unwrap();
-        assert_eq!(heard(&db), [("ada".to_owned(), id.clone(), at(100))]);
+        let recorded = |secs| {
+            [
+                ("ada".to_owned(), id.clone(), at(secs)),
+                ("bo".to_owned(), id.clone(), at(secs)),
+            ]
+        };
+        assert_eq!(heard(&db), recorded(100));
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+        assert_eq!(doing_of(&db, "bo").as_deref(), Some("reading"));
+        let due = listening.due.expect("a beat that failed sets the next");
+        assert!(due > Instant::now() + RETRY / 2, "{due:?}");
 
-        // The line went on ada's record, so a later `cases doing` that
-        // clears it is not put back by the beat that tries again (AG-17).
+        // Until the retry is due, no beat writes.
+        clock.store(105, Ordering::SeqCst);
+        listening.beat(&db, &mut warned);
+        assert_eq!(listening.due, Some(due));
+        assert_eq!(heard(&db), recorded(100));
+
+        // Once it is, the beat writes each worker again, warns no more, and
+        // leaves the lines `cases doing` cleared as they are.
         let AnyStore::Local(local) = &db else {
             unreachable!()
         };
         local.set_doing("ada", "").unwrap();
-        clock.store(105, Ordering::SeqCst);
+        local.set_doing("bo", "").unwrap();
+        listening.due = Some(Instant::now());
+        clock.store(110, Ordering::SeqCst);
         listening.beat(&db, &mut warned);
         assert_eq!(warned, HashSet::from([warning]));
-        assert_eq!(listening.due, None);
-        assert_eq!(heard(&db), [("ada".to_owned(), id, at(105))]);
+        assert_eq!(heard(&db), recorded(110));
         assert_eq!(doing_of(&db, "ada"), None);
+        assert_eq!(doing_of(&db, "bo"), None);
+        assert!(listening.due.unwrap() > Instant::now() + RETRY / 2);
     }
 }
