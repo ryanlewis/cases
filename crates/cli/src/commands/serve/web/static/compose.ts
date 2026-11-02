@@ -351,6 +351,8 @@ function toCase(c: Leaving, e: MouseEvent): void {
 // ten seconds (IN-09), and for good once a message is sent.
 interface Guard {
   held: boolean;
+  // Whether its send was taken: a message sent.
+  sent?: boolean;
 }
 
 // What a send reads and changes besides: the choices, the case it is about,
@@ -368,8 +370,10 @@ interface Sending {
 // Sends the message the fields give, once, and closes the composer when it
 // is sent; else says why not. Each send has a guard of its own, and lets go
 // of only that one: a send slower than ten seconds does not, when it comes
-// back, let go of the send that went after it, and its answer, which that
-// send's has replaced, changes nothing.
+// back, let go of the send that went after it. A message sent counts, from
+// whichever send it came: the composer goes, and its guard holds for good,
+// so the answer of a send after it changes nothing; a refusal counts only
+// from the send that went last.
 async function submit(s: Sending, e: Event): Promise<void> {
   e.preventDefault();
   if (s.sending.current?.held) return;
@@ -381,13 +385,13 @@ async function submit(s: Sending, e: Event): Promise<void> {
   const guard: Guard = { held: true };
   s.sending.current = guard;
   const release = setTimeout(() => (guard.held = false), 10000);
-  let sent = false;
   try {
     const { after, refusal: why } = await api.sendMessage(body!);
+    if (after && !s.sending.current?.sent) s.sending.current = guard;
     if (s.sending.current !== guard) return;
     if (after) {
       // Held for good, though ten seconds have let it go.
-      sent = guard.held = true;
+      guard.sent = guard.held = true;
       s.setRefusal("");
       s.dialog.current?.close();
       s.onSent(after);
@@ -399,7 +403,7 @@ async function submit(s: Sending, e: Event): Promise<void> {
     // A message sent is not sent again: the composer goes once it is
     // sent, and a second send before then, which no revision refuses,
     // would be a second message.
-    if (!sent) guard.held = false;
+    if (!guard.sent) guard.held = false;
   }
 }
 

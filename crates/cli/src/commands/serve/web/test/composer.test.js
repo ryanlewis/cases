@@ -359,7 +359,7 @@ test("a send taken after ten seconds holds the guard for good", async (t) => {
   assert.equal(posted.length, 1);
 });
 
-test("a send answered after a later send went changes nothing: the later send's answer counts", async (t) => {
+test("a send taken after a later send went counts, and the later send's answer changes nothing", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const answers = [];
   const posted = serve([
@@ -376,22 +376,19 @@ test("a send answered after a later send went changes nothing: the later send's 
   const second = form.onSubmit(event());
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(posted.length, 2);
-  // The first is taken while the second is out: the composer stays, and
-  // the second still holds the guard.
+  // The first is taken while the second is out: the message is sent, so
+  // the composer goes, and sends nothing more.
   answers[0](new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
   await first;
   c.act(() => {});
-  assert.deepEqual([c.sent, c.log.includes("close")], [[], false]);
-  await form.onSubmit(event());
-  assert.equal(posted.length, 2);
-  // The second is refused: that is what the composer says, and a send
-  // goes again.
+  assert.deepEqual([c.sent, c.log.at(-1)], [[{ id: "m1" }], "close"]);
+  // The second's refusal, come after, changes nothing.
   answers[1](new Response(JSON.stringify({ error: { category: "request", message: "no" } }), { status: 400 }));
   await second;
   c.act(() => {});
-  assert.ok(c.page().includes('<p class="error" role="alert">no</p>'), c.page());
+  assert.ok(!c.page().includes('role="alert">no<'), c.page());
   await form.onSubmit(event());
-  assert.equal(posted.length, 3);
+  assert.equal(posted.length, 2);
 });
 
 test("a send refused stops its ten seconds, so they do not cut short the next send's", async (t) => {
