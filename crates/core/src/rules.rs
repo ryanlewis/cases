@@ -531,3 +531,6 @@ fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
