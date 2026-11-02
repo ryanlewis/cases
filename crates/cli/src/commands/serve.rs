@@ -97,10 +97,8 @@ pub(crate) struct Args {
 
 /// Serves the inbox until it is told to stop.
 pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
-    // A remote store's inbox is the hosted one: serve starts nothing, says
-    // where it is, and on a terminal opens it (ST-11).
-    let store = match &ctx.target {
-        Target::Local { path } => path.clone(),
+    let named = match ctx.target.clone() {
+        Target::Local { path } => path,
         // A forwarded store's inbox is served where the store is.
         Target::Forward { forward } => {
             return Err(Error::new(format!(
@@ -109,107 +107,38 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
             )));
         }
         Target::Remote { server, .. } | Target::Server { server } => {
-            let url = store::inbox_url(server);
-            writeln!(ctx.out, "{url}")?;
-            if io::stdout().is_terminal() && !no_open(args.no_open, ctx.config.get("no-open")) {
-                browser::open(&url)?;
-            }
-            return Ok(());
+            return hosted(args, ctx, &server);
         }
     };
     // On a terminal the status screen owns stdout, and shows the log
     // rather than let it scroll the screen away.
     let terminal = io::stdout().is_terminal();
-    let mut log = if terminal {
-        Log::new(!io::stderr().is_terminal(), LOG_LINES)
-    } else {
-        Log::new(true, 0)
-    };
-    // The log file comes first, so that an error that stops serve from
-    // here on goes to it with stderr.
-    if let Some(path) = &args.log {
-        match Rotating::open(path, !io::stderr().is_terminal()) {
-            Ok(file) => log = log.with_file(file),
-            Err(error) => log.line(format!(
-                "could not open the log file {}: {error}",
-                path.display()
-            )),
-        }
-    }
-    let log = Arc::new(log);
-    let listen = args
-        .listen
-        .clone()
-        .or_else(|| ctx.config.get("listen").map(str::to_owned))
-        .unwrap_or_else(|| config::DEFAULT_LISTEN.to_owned());
-    listen::check_loopback(&listen)?;
+    let log = Arc::new(open_log(args, terminal));
+    let listen = listen_address(args, ctx)?;
     let no_open = no_open(args.no_open, ctx.config.get("no-open"));
     let close_after = crate::briefings::close_after(&ctx.config)?;
-    let store_tokens = match ctx.config.get("store-tokens-file") {
-        Some(path) if !path.trim().is_empty() => Tokens::new(tokens::read(
-            path.trim(),
-            "the config file's store-tokens-file",
-        )?),
-        _ => Tokens::default(),
-    };
-    let named = store;
+    let store_tokens = store_tokens(ctx)?;
     let store = std::path::absolute(&named)?;
-    // A file that cannot be read counts as a serve that is not running, and
-    // is replaced.
-    if let Ok(Some(running)) = instance::running(&store) {
-        return Err(Error::new(format!(
-            "cases serve is already running for {} at {} (pid {})",
-            running.store, running.url, running.pid
-        )));
-    }
-    let listener = TcpListener::bind(&listen)
-        .map_err(|error| Error::new(format!("listen on {listen}: {error}")))?;
-    let port = listener.local_addr()?.port();
-    // The host as given, so localhost stays localhost, with the port bound,
-    // which differs from the one asked for when that is 0.
-    let (host, _) = listen::split(&listen).unwrap_or_default();
-    let addr = if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
+    refuse_if_running(&store)?;
+    let (listener, host, port, addr) = bind(&listen)?;
     let url = format!("http://{addr}/");
     let proxied = ctx.config.list("allow-hosts").to_vec();
     let link = instance::link(&url, &proxied);
 
     let started = output::now()?;
-    let db = Db::new(&store);
-    #[cfg(debug_assertions)]
-    let db = crate::dial::test_clock(&db);
-    let db = Arc::new(db);
-    let watch = Watch::new(Arc::clone(&db), token(8)?, link.clone(), Arc::clone(&log))?;
-    // The first read is the notifications' baseline: the cases in the store
-    // when serve started (IN-08). It comes before serve says it is up, in its
-    // instance file and its address line, so that a case opened once it is
-    // up is new. A read that fails leaves the baseline to the next one.
-    let _ = watch.read();
+    let (db, watch) = follow(&store, &link, &log)?;
     let pid = i32::try_from(std::process::id()).unwrap_or_default();
     let info = Info {
         pid,
         url: url.clone(),
         link: link.clone(),
-        addr: addr.clone(),
+        addr,
         // Absolute and with each `..` taken off, for status to show.
         store: instance::clean(&store).display().to_string(),
         started_at: output::stamp(Some(started)),
         version: env!("CARGO_PKG_VERSION").into(),
     };
-    // serve runs without the file, as when the state directory cannot be
-    // written; status then does not find it.
-    let recorded = match instance::write(&store, &info) {
-        Ok(()) => true,
-        Err(error) => {
-            log.line(format!(
-                "could not record the instance for cases status: {error}"
-            ));
-            false
-        }
-    };
+    let recorded = record(&store, &info, &log);
     let serving = Serving {
         store: &named,
         db,
@@ -237,6 +166,120 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         let _ = instance::remove(&store, pid);
     }
     result
+}
+
+/// A remote store's inbox is the hosted one: serve starts nothing, says
+/// where it is, and on a terminal opens it (ST-11).
+fn hosted(args: &Args, ctx: &mut Ctx, server: &store::Server) -> Result<(), Error> {
+    let url = store::inbox_url(server);
+    writeln!(ctx.out, "{url}")?;
+    if io::stdout().is_terminal() && !no_open(args.no_open, ctx.config.get("no-open")) {
+        browser::open(&url)?;
+    }
+    Ok(())
+}
+
+/// The log: on a terminal it is kept for the status screen, and goes to
+/// stderr only when that is not the terminal too. The log file comes first,
+/// so that an error that stops serve from here on goes to it with stderr.
+fn open_log(args: &Args, terminal: bool) -> Log {
+    let mut log = if terminal {
+        Log::new(!io::stderr().is_terminal(), LOG_LINES)
+    } else {
+        Log::new(true, 0)
+    };
+    if let Some(path) = &args.log {
+        match Rotating::open(path, !io::stderr().is_terminal()) {
+            Ok(file) => log = log.with_file(file),
+            Err(error) => log.line(format!(
+                "could not open the log file {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    log
+}
+
+/// The address to listen on: the flag, else the config file's `listen`,
+/// else the default, which must be a loopback one.
+fn listen_address(args: &Args, ctx: &Ctx) -> Result<String, Error> {
+    let listen = args
+        .listen
+        .clone()
+        .or_else(|| ctx.config.get("listen").map(str::to_owned))
+        .unwrap_or_else(|| config::DEFAULT_LISTEN.to_owned());
+    listen::check_loopback(&listen)?;
+    Ok(listen)
+}
+
+/// Refuses to start beside a serve that runs on `store`. A file that cannot
+/// be read counts as a serve that is not running, and is replaced.
+fn refuse_if_running(store: &Path) -> Result<(), Error> {
+    if let Ok(Some(running)) = instance::running(store) {
+        return Err(Error::new(format!(
+            "cases serve is already running for {} at {} (pid {})",
+            running.store, running.url, running.pid
+        )));
+    }
+    Ok(())
+}
+
+/// The tokens of the config file's `store-tokens-file`, none when it is
+/// not given or blank.
+fn store_tokens(ctx: &Ctx) -> Result<Tokens, Error> {
+    match ctx.config.get("store-tokens-file") {
+        Some(path) if !path.trim().is_empty() => Ok(Tokens::new(tokens::read(
+            path.trim(),
+            "the config file's store-tokens-file",
+        )?)),
+        _ => Ok(Tokens::default()),
+    }
+}
+
+/// Binds `listen`, and gives the listener, the host as given (so localhost
+/// stays localhost), the port bound (which differs from the one asked for
+/// when that is 0) and the address with the two.
+fn bind(listen: &str) -> Result<(TcpListener, &str, u16, String), Error> {
+    let listener = TcpListener::bind(listen)
+        .map_err(|error| Error::new(format!("listen on {listen}: {error}")))?;
+    let port = listener.local_addr()?.port();
+    let (host, _) = listen::split(listen).unwrap_or_default();
+    let addr = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    Ok((listener, host, port, addr))
+}
+
+/// Opens the store and follows it, read once already.
+fn follow(store: &Path, link: &str, log: &Arc<Log>) -> Result<(Arc<Db>, Watch), Error> {
+    let db = Db::new(store);
+    #[cfg(debug_assertions)]
+    let db = crate::dial::test_clock(&db);
+    let db = Arc::new(db);
+    let watch = Watch::new(Arc::clone(&db), token(8)?, link.to_owned(), Arc::clone(log))?;
+    // The first read is the notifications' baseline: the cases in the store
+    // when serve started (IN-08). It comes before serve says it is up, in its
+    // instance file and its address line, so that a case opened once it is
+    // up is new. A read that fails leaves the baseline to the next one.
+    let _ = watch.read();
+    Ok((db, watch))
+}
+
+/// Records the instance for status, and whether it did. serve runs without
+/// the file, as when the state directory cannot be written; status then
+/// does not find it.
+fn record(store: &Path, info: &Info, log: &Log) -> bool {
+    match instance::write(store, info) {
+        Ok(()) => true,
+        Err(error) => {
+            log.line(format!(
+                "could not record the instance for cases status: {error}"
+            ));
+            false
+        }
+    }
 }
 
 /// Whether serve leaves the browser alone: the flag, else the config
