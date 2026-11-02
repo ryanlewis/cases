@@ -1559,6 +1559,9 @@ mod tests {
         let first = Locks::new(lease);
         let second = Locks::new(lease);
         thread::scope(|scope| {
+            // The watches stop as the scope's body ends, a failed assert's
+            // panic too, so that the test fails and does not hang.
+            let _ending = (Ending(&first), Ending(&second));
             scope.spawn(|| first.watch());
             scope.spawn(|| second.watch());
             assert_eq!(
@@ -1588,8 +1591,6 @@ mod tests {
                 lock_freed(&db, deploy, &second),
                 Answer::ok(json!({"lease_ms": 300}))
             );
-            first.end();
-            second.end();
         });
         // A connection with no lease has none to renew, and one that took
         // its locks without a lease keeps them however long it waits.
@@ -1600,12 +1601,12 @@ mod tests {
             (409, json!("lapsed"))
         );
         thread::scope(|scope| {
+            let _ending = Ending(&unleased);
             scope.spawn(|| unleased.watch());
             let plain = r#"{"locks": [{"on": "label", "text": "deploy"}]}"#;
             assert_eq!(lock_freed(&db, plain, &unleased), Answer::ok(json!({})));
             thread::sleep(Duration::from_millis(200));
             assert_eq!(held_count(&unleased), 1);
-            unleased.end();
         });
     }
 
@@ -1828,6 +1829,15 @@ mod tests {
         );
         let not_a_key = ask(&db, "GET", "cases/x", None, pipe);
         assert_eq!(not_a_key, Answer::refuse(404, "request", "not a key"));
+        // A path under cases that is none of its routes is no route.
+        for (method, route) in [("PUT", "cases"), ("POST", &format!("cases/{key}/x"))] {
+            let answer = ask(&db, method, route, Some("{}"), pipe);
+            assert_eq!(
+                answer,
+                Answer::refuse(404, "request", "no such route"),
+                "{route}"
+            );
+        }
 
         let actors = ask(&db, "GET", "actors", None, pipe);
         assert_eq!(actors.status, 200, "{actors:?}");
