@@ -76,11 +76,13 @@ test("an answer through the thread", () => {
 });
 
 test("events without text have no lines", () => {
+  // The thread reads each event on its own, not whether the store would
+  // have taken it after the one before, so one case holds them all.
   const c = question([["pickup"], ["withdraw"], ["park"], ["resume"], ["note"], ["close"]]);
   assert.deepEqual(texts(c), [[], [], [], [], [], [], []]);
   // A note and a close leave their body and outcome blank too.
   assert.deepEqual(thread(c).map((s) => s.markdown), ["", "", "", "", "", "", ""]);
-  // An event with no data is read as one with none of its fields.
+  // The thread reads an event with no data as one with none of its fields.
   assert.deepEqual(texts(question([["pickup", null]])), [[], []]);
   assert.deepEqual(thread({ ...question([]), events: undefined }), []);
 });
@@ -146,9 +148,13 @@ test("a note or amend after an answer reopens the case, once", () => {
   assert.deepEqual(texts(c), [[], ["reply: a"], ["reopened the case", "added label: l"], ["reply: b"], [], ["reopened the case", "added label: m"], ["added label: n"]]);
   // An amend of an open case does not reopen it.
   assert.deepEqual(texts(question([["amend", { labels: ["l"] }]]))[1], ["added label: l"]);
-  // Nor does a note after the answer was withdrawn, nor a close, park or
-  // pickup after an answer.
+  // The inbox reads whether the case stands answered from the answers and
+  // withdraws before an event, not from its `from` as describe.rs does: a
+  // withdraw clears it, and nothing else but a note or amend does. The
+  // store takes neither thread below; they pin that reading.
   assert.deepEqual(texts(question([["answer", { text: "a" }], ["withdraw"], ["note", { body: "n" }]]))[3], []);
+  // A park and a close say nothing of it, and the note after them reopens
+  // the case; describe.rs, reading the note's `from`, would not say so.
   assert.deepEqual(texts(question([["answer", { text: "a" }], ["park"], ["close"], ["note"]])).slice(2), [[], [], ["reopened the case"]]);
   // The reopening line follows the actor's.
   assert.deepEqual(texts(question([["answer", { text: "a" }], ["note", {}, { actor: builder }]]))[2], ["by builder", "reopened the case"]);
@@ -278,6 +284,11 @@ test("answered says an answer's lines as the thread does, from the list it saw",
   assert.deepEqual(answered(c, { file: [1] }), ["file 1. the TUI"]);
   assert.deepEqual(answered({ ...c, left_out: undefined }, { file: [1] }), ["file 1."]);
   assert.deepEqual(answered({ ...c, events: undefined, left_out: undefined }, { ack: true }), ["acknowledged"]);
+  // BUG (follow-up): an earlier event with no data stops answered, which
+  // reads its fields without the guard thread has; thread says the answer.
+  const nodata = make("briefing", [["open", null], ["answer", { file: [1] }]]);
+  assert.deepEqual(texts(nodata)[1], ["file 1."]);
+  assert.throws(() => answered(nodata, nodata.events[1].data), TypeError);
   // An open with no left-out items gives an empty list.
   const bare = make("briefing", [["open", {}], ["answer", { file: [1] }]]);
   assert.deepEqual(answered(bare, bare.events[1].data), ["file 1."]);
