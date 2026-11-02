@@ -894,25 +894,25 @@ fn stop(taken: Vec<Turn>, error: Failure) -> Result<Vec<Turn>, Error> {
 /// The end of a wait whose read of the store, or held poll, failed with
 /// `error`. A timeout that passed while it was `collecting` gives what it
 /// `collected` at its last read, with the messages it `taken` (AG-18). Any
-/// other failure gives the messages it took, which no later wait takes
-/// again, and says the failure on stderr (AG-16), as [`stop`] does; with
-/// none, it is `error`.
+/// other failure after it took messages, which no later wait takes again,
+/// gives them, with what it collected so that its `next_since` passes no
+/// event it has not printed, and says the failure on stderr (AG-16), as
+/// [`stop`] does; with none taken, it is `error`.
 fn failed(
     error: Error,
     collecting: bool,
     collected: Vec<Turn>,
     taken: Vec<Turn>,
 ) -> Result<Vec<Turn>, Error> {
-    if collecting && error.status() == Status::Timeout {
-        // What it collected holds no message it took: a withdraw of one
-        // is urgent, and ended the wait at that read.
-        return Ok(collected.into_iter().chain(taken).collect());
+    if !(collecting && error.status() == Status::Timeout) {
+        if taken.is_empty() {
+            return Err(error);
+        }
+        ctx::warn(format_args!("{error}"));
     }
-    if taken.is_empty() {
-        return Err(error);
-    }
-    ctx::warn(format_args!("{error}"));
-    Ok(taken)
+    // What it collected holds no message it took: a withdraw of one is
+    // urgent, and ended the wait at that read.
+    Ok(collected.into_iter().chain(taken).collect())
 }
 
 /// The error of a wait whose timeout passed with nothing to report.
