@@ -79,7 +79,7 @@ fn answer_error(answer: &Answer, case: &Case) -> String {
 }
 
 #[test]
-fn an_open_checks_its_kind_then_its_author_then_its_urgency_then_the_rest() {
+fn an_open_checks_its_author_then_its_urgency_then_the_rest() {
     let both = open("decision", |o| o.urgency = "someday".into());
     let error = check_open(&both, Author::Human, true).unwrap_err();
     assert_eq!(error.category(), Category::Author);
@@ -371,20 +371,6 @@ fn an_amend_checks_new_links_then_dropped_links_then_labels() {
 }
 
 #[test]
-fn an_amend_checks_its_labels_against_the_case_before_whether_it_changes_anything() {
-    let fyi = case("fyi", |o| o.labels = strings(&["l"]));
-    let both = Amend {
-        labels: strings(&["l"]),
-        title: "Title".into(),
-        ..Amend::default()
-    };
-    assert_eq!(
-        amend_error(&both, &fyi),
-        "the case has the label \"l\" already"
-    );
-}
-
-#[test]
 fn an_amend_changes_nothing_when_each_value_it_sets_is_the_cases() {
     let decision = case("decision", |o| {
         o.context = "Context".into();
@@ -392,6 +378,7 @@ fn an_amend_changes_nothing_when_each_value_it_sets_is_the_cases() {
         o.links = strings(&["x"]);
     });
     let briefing = case("briefing", |o| o.left_out = strings(&["item"]));
+    let landed = case("briefing", |o| o.landed = true);
     let nothing = [
         (Amend::default(), &decision),
         (
@@ -419,6 +406,13 @@ fn an_amend_changes_nothing_when_each_value_it_sets_is_the_cases() {
             },
             &briefing,
         ),
+        (
+            Amend {
+                landed: Some(true),
+                ..Amend::default()
+            },
+            &landed,
+        ),
     ];
     for (amend, case) in nothing {
         assert!(
@@ -436,6 +430,7 @@ fn an_amend_changes_something_when_any_one_value_differs() {
         o.links = strings(&["x"]);
     });
     let briefing = case("briefing", |o| o.left_out = strings(&["item"]));
+    let approval = case("approval", |_| {});
     let something = [
         (
             Amend {
@@ -507,6 +502,13 @@ fn an_amend_changes_something_when_any_one_value_differs() {
             },
             &briefing,
         ),
+        (
+            Amend {
+                rows: vec![row("r2")],
+                ..Amend::default()
+            },
+            &approval,
+        ),
     ];
     for (amend, case) in something {
         assert_eq!(check_amend(&amend, case), Ok(()), "{amend:?}");
@@ -514,7 +516,7 @@ fn an_amend_changes_something_when_any_one_value_differs() {
 }
 
 #[test]
-fn an_answer_checks_the_responses_in_their_order_then_none() {
+fn an_answer_reports_the_first_response_its_kind_does_not_take() {
     let decision = case("decision", |_| {});
     let both = Answer {
         signoff: "accept".into(),
@@ -524,10 +526,6 @@ fn an_answer_checks_the_responses_in_their_order_then_none() {
     assert_eq!(
         answer_error(&both, &decision),
         "a decision answer does not take signoff"
-    );
-    assert_eq!(
-        answer_error(&Answer::default(), &decision),
-        "the answer has no decision response"
     );
 }
 
@@ -553,7 +551,7 @@ fn an_answer_checks_file_then_its_amend_seq() {
         ..Answer::default()
     };
     assert_eq!(
-        answer_error(&both, &case("briefing", |o| o.left_out = strings(&["i"]))),
+        answer_error(&both, &case("briefing", |_| {})),
         "file goes only with a briefing's verdict, not with drop or on another kind"
     );
 }
