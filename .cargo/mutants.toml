@@ -41,10 +41,10 @@ exclude_re = [
     # never read.
     'replace \+ with [-*] in on_signal',
     # No test can reach it: the arm is for a process with no /proc to read
-    # the ignored signals from, and on Linux there always is one. The text
-    # also names the mask arm's `== 1`, which a test does kill (checked by
-    # running without this line), so it hides that one too.
-    'replace == with != in left_alone',
+    # the ignored signals from, and on Linux there always is one. Matched by
+    # its line and column, as the mask arm's `== 1` has the same text and a
+    # test kills that one; move this if the line does.
+    'forward\.rs:522:24: replace == with != in left_alone',
     # No command reads a forwarded store's listeners: only the store's own
     # trait carries the method (the dial route and `cases serve` answer it
     # from the local store, which their own tests check).
