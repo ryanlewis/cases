@@ -1829,6 +1829,15 @@ mod tests {
         );
         let not_a_key = ask(&db, "GET", "cases/x", None, pipe);
         assert_eq!(not_a_key, Answer::refuse(404, "request", "not a key"));
+        // A path under cases that is none of its routes is no route.
+        for (method, route) in [("PUT", "cases"), ("POST", &format!("cases/{key}/x"))] {
+            let answer = ask(&db, method, route, Some("{}"), pipe);
+            assert_eq!(
+                answer,
+                Answer::refuse(404, "request", "no such route"),
+                "{route}"
+            );
+        }
 
         let actors = ask(&db, "GET", "actors", None, pipe);
         assert_eq!(actors.status, 200, "{actors:?}");
