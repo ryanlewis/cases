@@ -219,6 +219,63 @@ fn a_case_goes_round_over_ssh() {
     }
 }
 
+/// Prune archives or deletes through the forwarded store, and the far
+/// side's store, not the local one, loses the case.
+#[test]
+fn prune_archives_and_deletes_on_the_far_side() {
+    let f = Forwarding::new();
+    let archived = f.open_decision();
+    f.ok(&["withdraw", &archived, "--as", "ryan"]);
+    assert_eq!(
+        f.ok(&["prune", "--age", "0", "--yes"]),
+        format!("{archived} archived\n")
+    );
+    assert_eq!(f.far(&["list", "--all", "--count"]), "0\n");
+
+    let deleted = f.open_decision();
+    f.ok(&["withdraw", &deleted, "--as", "ryan"]);
+    assert_eq!(
+        f.ok(&["prune", "--age", "0", "--delete", "--yes"]),
+        format!("{deleted} deleted\n")
+    );
+    assert_eq!(f.far(&["list", "--all", "--count"]), "0\n");
+}
+
+/// The listening waits are read from the far side: an open warns that its
+/// answer wakes none of them.
+#[test]
+fn open_warns_from_the_waits_listening_on_the_far_side() {
+    let f = Forwarding::new();
+    let fyi = |worker: &str| {
+        f.run(&[
+            "open",
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Runner",
+            "--worker",
+            worker,
+            "--label",
+            "homeday",
+        ])
+    };
+    // The store is made by the first case: a listener never makes one.
+    let first = fyi("homeday");
+    assert_eq!((first.code, first.stderr.as_str()), (0, ""), "{first:?}");
+    cases_store_sqlite::Db::new(&f.far)
+        .listen("homeday", "homeday", &["homeday".to_owned()], &[], None)
+        .unwrap();
+    let out = fyi("ci-runner");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("wait for --worker homeday, not ci-runner"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn a_case_goes_round_over_a_command() {
     let f = Forwarding::over_exec();
