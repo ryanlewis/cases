@@ -43,7 +43,8 @@ shift
 relay=$(cat "@RELAY@" 2>/dev/null || echo 0)
 if [ "$relay" -gt 0 ]; then
     echo $((relay - 1)) > "@RELAY@"
-    sh -c 'echo $$ > "@RELAYPID@"; exec cat' | CASES_STORE="@FAR@" "@BIN@" "$@"
+    sh -c 'echo $$ > "@RELAYPID@"; exec cat' |
+        CASES_STORE="@FAR@" perl -e 'setpgrp; exec @ARGV or die "$ARGV[0]: $!\n"' "@BIN@" "$@"
     exit $?
 fi
 spare=$(cat "@SPARE@" 2>/dev/null || echo 0)
@@ -62,6 +63,11 @@ if [ "$drops" -gt 0 ]; then
     sleep 1
     kill $pid
     exit 255
+fi
+if [ -n "$CASES_TEST_SLOW_EXIT" ]; then
+    CASES_STORE="@FAR@" "@BIN@" "$@"
+    sleep 2
+    exit 0
 fi
 CASES_STORE="@FAR@" exec "@BIN@" "$@"
 "#;
@@ -958,7 +964,13 @@ fn a_killed_pickup_wait_keeps_its_locks_on_the_far_side_until_their_lease_runs_o
 /// so on a busy machine.
 #[test]
 fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_lease_ends() {
-    let f = leasing(3000);
+    let mut f = leasing(3000);
+    if std::env::var_os("PROBE_SLOW").is_some() {
+        f.env.set("CASES_TEST_SLOW_EXIT", "1");
+    }
+    if std::env::var_os("PROBE_NOKILL").is_some() {
+        f.env.set("CASES_TEST_NO_GROUP_KILL", "1");
+    }
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
     let (lock, holder) = taken(&f, "worker-lead-");
@@ -1503,7 +1515,13 @@ fn a_pickup_wait_whose_locks_connection_dies_stops() {
 /// so a second never runs beside it.
 #[test]
 fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
-    let f = leasing(3000);
+    let mut f = leasing(3000);
+    if std::env::var_os("PROBE_SLOW").is_some() {
+        f.env.set("CASES_TEST_SLOW_EXIT", "1");
+    }
+    if std::env::var_os("PROBE_NOKILL").is_some() {
+        f.env.set("CASES_TEST_NO_GROUP_KILL", "1");
+    }
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
     let (lock, holder) = taken(&f, "worker-lead-");

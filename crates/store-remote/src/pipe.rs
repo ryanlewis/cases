@@ -605,10 +605,10 @@ impl Drop for Pipe {
         self.stdin = None;
         if self.exited(CLOSE_GRACE).is_none() {
             #[cfg(unix)]
-            let _ = rustix::process::kill_process_group(
+            if std::env::var_os("CASES_TEST_NO_GROUP_KILL").is_none() { let _ = rustix::process::kill_process_group(
                 rustix::process::Pid::from_child(&self.child),
                 rustix::process::Signal::KILL,
-            );
+            ); }
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
