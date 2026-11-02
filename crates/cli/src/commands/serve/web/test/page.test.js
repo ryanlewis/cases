@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { html } from "../static/html.ts";
-import { Page } from "../static/page.ts";
+import { Page, withRefused } from "../static/page.ts";
 import { decision, steps } from "./case.js";
 
 const now = Date.parse("2026-09-25T13:45:00Z");
@@ -66,4 +66,23 @@ test("a case's page without its case is not inbox zero", () => {
   assert.ok(page.startsWith('<div class="split">'), page);
   assert.ok(page.includes('<p class="empty">no case zZ9 in this store.</p>'), page);
   assert.ok(!page.includes("zero-panel"), page);
+});
+
+test("a refusal's case takes the shown one's place, unless it is older or another case", () => {
+  const at = (revision, id = "aB3xQ") => ({ ...decision("open", steps.open), id, revision });
+  const data = (c) => ({ route: home(), show: "inbox", inbox: [], done: [], briefings: [], shown: c ? { id: c.id, case: c } : null, listeners: null });
+  // The refusal's case is newer, or the same revision: it is shown.
+  assert.equal(withRefused(data(at(4)), at(5)).shown.case.revision, 5);
+  const same = at(4);
+  assert.equal(withRefused(data(at(4)), same).shown.case, same);
+  // A later write already showed a newer case: an older refusal's case
+  // does not take it back.
+  const shown = data(at(5));
+  assert.equal(withRefused(shown, at(4)), shown);
+  // Another case shown, none shown, or nothing read: the page stays.
+  const other = data(at(4, "zZ9yY"));
+  assert.equal(withRefused(other, at(5)), other);
+  const none = data(null);
+  assert.equal(withRefused(none, at(5)), none);
+  assert.equal(withRefused(null, at(5)), null);
 });

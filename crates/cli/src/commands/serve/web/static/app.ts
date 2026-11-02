@@ -13,7 +13,7 @@ import { copyCode } from "./code.js";
 import { Composer, Entry } from "./compose.js";
 import { DONE, Tally, addressee, afterRead, icon, listed, split, tally } from "./lists.js";
 import { Keys, Options, notify } from "./options.js";
-import { Page } from "./page.js";
+import { Page, withRefused } from "./page.js";
 import { moved, query, same, under, where } from "./routes.js";
 import type { What } from "./api.js";
 import type { Data, Shown } from "./page.js";
@@ -508,11 +508,10 @@ function App({ build }: { build: string }) {
     navigate(next + query(data.show));
   }
 
-  // The case as serve gave it with a refusal, fresher than the one shown,
-  // while it is the one shown: a refusal that comes back after the page
-  // moved on leaves the page as it is.
+  // The case as serve gave it with a refusal, while it is the one shown
+  // and no older than it (withRefused).
   function refused(current: Case): void {
-    setData((was) => (was && was.shown && was.shown.case && was.shown.case.id === current.id ? { ...was, shown: { ...was.shown, case: current } } : was));
+    setData((was) => withRefused(was, current));
     // On the list's page, the refused case stays shown with its refusal, on
     // its own page under the same filter, since the next refresh of the
     // list would show the first case again (IN-04, IN-06).
