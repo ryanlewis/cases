@@ -26,7 +26,7 @@ use crate::duration;
 use crate::error::{Error, Status};
 use crate::forward::FarLocks;
 use crate::output::{self, Actors, CaseJson};
-use crate::store::{AnyStore, Failure, HOLD_MAX};
+use crate::store::{AnyStore, Failure, HOLD_MAX, Poller};
 
 pub(crate) mod lock;
 
@@ -541,11 +541,17 @@ fn wait(
     far: Option<&FarLocks>,
 ) -> Result<Vec<Turn>, Error> {
     let db = &ctx.store;
-    // A timeout too long to add to the clock waits for ever.
-    let deadline = (!args.timeout.is_zero())
-        .then(|| Instant::now().checked_add(args.timeout))
-        .flatten();
+    let deadline = deadline(args.timeout);
     db.until(deadline);
+    let asked = Asked {
+        args,
+        ctx,
+        ids,
+        since,
+        mood,
+        far,
+        deadline,
+    };
     let mut offline = Offline::default();
     let mut poller = db.poller();
     let none = Cases::new();
@@ -561,167 +567,285 @@ fn wait(
         if let Some(error) = lapsed(far) {
             return stop(taken, error);
         }
-        let cases = match poller.poll() {
-            Ok(cases) => {
-                offline.reached();
-                cases
-            }
-            // The store is not there yet: wait for it (ST-08).
-            Err(error) if error.is_missing() => &none,
-            Err(error) if first.is_some() && error.is_transient() => {
-                offline.pause(&error, deadline, args, far)?;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
+        let Some(cases) = asked.read(&mut poller, &none, first.is_some(), &mut offline)? else {
+            continue;
         };
         warn_once(db, cases, &mut warned, &mut unfolded);
         if let Some(listening) = &mut listening {
             listening.beat(db, &mut warned);
         }
         let first = first.get_or_insert_with(|| First::read(cases, ids));
-
-        let mut turns = Vec::new();
-        let mut withdrawn = Vec::new();
-        // Whether a case this wait waits on is still open, so that another
-        // answer can come.
-        let mut open = false;
-        for (key, case) in cases {
-            let Ok(case) = case else { continue };
-            // A message is this wait's only when it listens, and then by
-            // whom it is sent to or who took it, not by the filters.
-            if case.kind() == Kind::Message {
-                let writing = match far
-                    .filter(|_| listening.is_some())
-                    .map(FarLocks::write)
-                    .transpose()
-                {
-                    Err(error) => return stop(taken, error),
-                    Ok(writing) => writing,
-                };
-                if let Some(listening) = &listening
-                    && let Some(turn) =
-                        listening.message(ctx, first, since, *key, case, &mut warned)
-                {
-                    if turn.taken {
-                        if let Some(writing) = &writing {
-                            writing.owe(turn.key);
-                        }
-                        taken.push(turn);
-                    } else {
-                        withdrawn.push(turn);
-                    }
-                }
-                continue;
-            }
-            let id = (*key, case.opened_at());
-            // An id names the case found with its key at the first read or,
-            // when there was none then, such as in a store not there yet, the
-            // first case found with it since.
-            let named = ids.contains(key) && *first.named.entry(*key).or_insert(id) == id;
-            if !ids.is_empty() && !named || !args.filter.matches(case) {
-                continue;
-            }
-            open |= case.state() == State::Open;
-            let Some(event) = args.for_.turn(case) else {
-                continue;
-            };
-            let fresh = !first.events.contains(&(id, event.seq))
-                || since.is_some_and(|since| event.at().is_some_and(|at| at > since));
-            // A case the human withdrew is the agent's turn once: while the
-            // withdraw is new (AG-04).
-            if event.event() == EventType::Withdraw && !fresh {
-                continue;
-            }
-            turns.push((*key, case, event, fresh));
+        let found = match asked.find(listening.as_ref(), first, cases, &mut taken, &mut warned) {
+            Ok(found) => found,
+            Err(error) => return stop(taken, error),
+        };
+        let woke = !taken.is_empty() || found.woke();
+        if woke && asked.done(&mut collecting, &found, &taken) {
+            return Ok(found.give(taken));
         }
-        let woke =
-            !taken.is_empty() || !withdrawn.is_empty() || turns.iter().any(|&(.., fresh)| fresh);
-        if woke {
-            let now = Instant::now();
-            let done = match mood.linger() {
-                None => true,
-                Some(linger) => {
-                    let collecting = collecting.get_or_insert_with(|| Collecting::new(now));
-                    let seen = |turn: &Turn| {
-                        let seq = turn.case.events().last().map_or(0, |event| event.seq);
-                        ((turn.key, turn.case.opened_at()), seq)
-                    };
-                    collecting.saw(
-                        turns
-                            .iter()
-                            .filter(|&&(.., fresh)| fresh)
-                            .map(|&(key, case, event, _)| ((key, case.opened_at()), event.seq))
-                            .chain(taken.iter().chain(&withdrawn).map(seen)),
-                        now,
-                    );
-                    // The agent cannot go on without a blocking case's
-                    // answer, and the sooner it hears of a withdraw, the less
-                    // work it throws away.
-                    let urgent = !withdrawn.is_empty()
-                        || turns.iter().any(|&(_, case, event, fresh)| {
-                            fresh
-                                && (event.event() == EventType::Withdraw
-                                    || event.event() == EventType::Answer
-                                        && case.urgency() == Urgency::Blocking)
-                        });
-                    urgent
-                        || !open
-                        || collecting.until(linger) <= now
-                        || deadline.is_some_and(|deadline| deadline <= now)
-                }
-            };
-            if done {
-                let keys: HashSet<Key> = withdrawn.iter().map(|turn| turn.key).collect();
-                return Ok(turns
-                    .into_iter()
-                    .map(|(key, case, event, fresh)| Turn {
-                        key,
-                        case: case.clone(),
-                        at: event.at(),
-                        fresh,
-                        taken: false,
-                    })
-                    .chain(withdrawn)
-                    // A message taken and then withdrawn while collecting is
-                    // printed withdrawn.
-                    .chain(taken.into_iter().filter(|turn| !keys.contains(&turn.key)))
-                    .collect());
-            }
-        }
-
         // What it was collecting has gone, such as a case another wait
         // picked up: it waits as it did before the first event.
         if !woke {
             collecting = None;
         }
-        // A wait collecting stops at the end of its linger, or the timeout,
-        // whichever is first; one that is not stops only at the timeout.
-        let until = match (&collecting, mood.linger()) {
+        asked.rest(&poller, collecting.as_ref(), &mut offline)?;
+    }
+}
+
+/// When a wait with `timeout` gives up, if it does: a timeout of 0, or one
+/// too long to add to the clock, waits for ever.
+fn deadline(timeout: Duration) -> Option<Instant> {
+    (!timeout.is_zero())
+        .then(|| Instant::now().checked_add(timeout))
+        .flatten()
+}
+
+/// What a wait was asked: its flags, the cases its `--id`s name, the time
+/// `--since` gives, its mood, a pickup wait's locks on the far side of a
+/// forwarded store, `far`, and when it gives up, if it does.
+struct Asked<'a> {
+    args: &'a Args,
+    ctx: &'a Ctx,
+    ids: &'a [Key],
+    since: Option<Time>,
+    mood: Mood,
+    far: Option<&'a FarLocks>,
+    deadline: Option<Instant>,
+}
+
+/// What a read of the store gives a wait, beside the messages it took.
+struct Found<'c> {
+    /// Each case that matches and is the side's turn, with the event that
+    /// makes it so, and whether that event is new to this wait.
+    turns: Vec<(Key, &'c Case, &'c Event, bool)>,
+    /// The messages it took that the human has withdrawn since, while the
+    /// withdraw is new (AG-04).
+    withdrawn: Vec<Turn>,
+    /// Whether a case this wait waits on is still open, so that another
+    /// answer can come.
+    open: bool,
+}
+
+impl Asked<'_> {
+    /// The store as `poller`'s next read finds it: `none`, no cases, when
+    /// it is not there yet (ST-08), or nothing, for the wait to read again,
+    /// when a read after the first, as `read_before` says this is, fails in
+    /// a way [`Offline`] rides out.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails for good, or the timeout passes while a failing
+    /// store is ridden out.
+    fn read<'p>(
+        &self,
+        poller: &'p mut Poller,
+        none: &'p Cases,
+        read_before: bool,
+        offline: &mut Offline,
+    ) -> Result<Option<&'p Cases>, Error> {
+        match poller.poll() {
+            Ok(cases) => {
+                offline.reached();
+                Ok(Some(cases))
+            }
+            // The store is not there yet: wait for it (ST-08).
+            Err(error) if error.is_missing() => Ok(Some(none)),
+            Err(error) if read_before && error.is_transient() => {
+                offline.pause(&error, self.deadline, self.args, self.far)?;
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// What `cases`, the store as a read found it, holds for this wait. A
+    /// message it takes, it adds to `taken`, owing it to the far side's
+    /// locks while it writes the pickup, when it holds them.
+    ///
+    /// # Errors
+    ///
+    /// When a pickup wait's locks on the far side may have been let go.
+    fn find<'c>(
+        &self,
+        listening: Option<&Listening>,
+        first: &mut First,
+        cases: &'c Cases,
+        taken: &mut Vec<Turn>,
+        warned: &mut HashSet<String>,
+    ) -> Result<Found<'c>, Failure> {
+        let mut found = Found {
+            turns: Vec::new(),
+            withdrawn: Vec::new(),
+            open: false,
+        };
+        for (key, case) in cases {
+            let Ok(case) = case else { continue };
+            // A message is this wait's only when it listens, and then by
+            // whom it is sent to or who took it, not by the filters.
+            if case.kind() == Kind::Message {
+                if let Some(listening) = listening {
+                    let writing = self.far.map(FarLocks::write).transpose()?;
+                    if let Some(turn) =
+                        listening.message(self.ctx, first, self.since, *key, case, warned)
+                    {
+                        if turn.taken {
+                            if let Some(writing) = &writing {
+                                writing.owe(turn.key);
+                            }
+                            taken.push(turn);
+                        } else {
+                            found.withdrawn.push(turn);
+                        }
+                    }
+                }
+                continue;
+            }
+            if !self.matches(first, *key, case) {
+                continue;
+            }
+            found.open |= case.state() == State::Open;
+            if let Some((event, fresh)) = self.turn_of(first, *key, case) {
+                found.turns.push((*key, case, event, fresh));
+            }
+        }
+        Ok(found)
+    }
+
+    /// Whether `case`, by its `key`, is one this wait waits on: one its
+    /// `--id`s name, if it has any, that its filters match. An id names the
+    /// case found with its key at the first read or, when there was none
+    /// then, such as in a store not there yet, the first case found with it
+    /// since.
+    fn matches(&self, first: &mut First, key: Key, case: &Case) -> bool {
+        let id = (key, case.opened_at());
+        let named = self.ids.contains(&key) && *first.named.entry(key).or_insert(id) == id;
+        (self.ids.is_empty() || named) && self.args.filter.matches(case)
+    }
+
+    /// The event that makes `case`, by its `key`, the side's turn, and
+    /// whether it is new to this wait: not in its first read, or after
+    /// `--since`. A case the human withdrew is the agent's turn once: while
+    /// the withdraw is new (AG-04).
+    fn turn_of<'c>(&self, first: &First, key: Key, case: &'c Case) -> Option<(&'c Event, bool)> {
+        let event = self.args.for_.turn(case)?;
+        let id = (key, case.opened_at());
+        let fresh = !first.events.contains(&(id, event.seq))
+            || self
+                .since
+                .is_some_and(|since| event.at().is_some_and(|at| at > since));
+        (event.event() != EventType::Withdraw || fresh).then_some((event, fresh))
+    }
+
+    /// Whether a wait that woke on what it `found` and `taken` gives its
+    /// cases now: an eager one at once; one that lingers, which notes in
+    /// `collecting` what it saw, once its linger ends, nothing it waits on
+    /// is open, something urgent came, or the timeout passed (AG-18).
+    fn done(&self, collecting: &mut Option<Collecting>, found: &Found, taken: &[Turn]) -> bool {
+        let Some(linger) = self.mood.linger() else {
+            return true;
+        };
+        let now = Instant::now();
+        let collecting = collecting.get_or_insert_with(|| Collecting::new(now));
+        let seen = |turn: &Turn| {
+            let seq = turn.case.events().last().map_or(0, |event| event.seq);
+            ((turn.key, turn.case.opened_at()), seq)
+        };
+        collecting.saw(
+            found
+                .turns
+                .iter()
+                .filter(|&&(.., fresh)| fresh)
+                .map(|&(key, case, event, _)| ((key, case.opened_at()), event.seq))
+                .chain(taken.iter().chain(&found.withdrawn).map(seen)),
+            now,
+        );
+        found.urgent()
+            || !found.open
+            || collecting.until(linger) <= now
+            || self.deadline.is_some_and(|deadline| deadline <= now)
+    }
+
+    /// Waits until the next read: a remote or forwarded store's held poll
+    /// says it changed, or a local store's [`POLL`] passes, no longer than a
+    /// pickup wait's locks on the far side are held for. A wait `collecting`
+    /// stops at the end of its linger, or the timeout, whichever is first;
+    /// one that is not stops only at the timeout.
+    ///
+    /// # Errors
+    ///
+    /// When the timeout passes with nothing collected, or a held poll fails
+    /// for good.
+    fn rest(
+        &self,
+        poller: &Poller,
+        collecting: Option<&Collecting>,
+        offline: &mut Offline,
+    ) -> Result<(), Error> {
+        let db = &self.ctx.store;
+        let until = match (collecting, self.mood.linger()) {
             (Some(collecting), Some(linger)) => {
                 let until = collecting.until(linger);
-                Some(deadline.map_or(until, |deadline| deadline.min(until)))
+                Some(self.deadline.map_or(until, |deadline| deadline.min(until)))
             }
-            _ => deadline,
+            _ => self.deadline,
         };
         if let (true, Some(version)) = (db.follows(), poller.version()) {
-            match follow(db, &version, until, args, &mut offline, far) {
+            return match follow(db, &version, until, self.args, offline, self.far) {
                 // Its linger has ended: the next read gives the cases.
-                Err(error) if collecting.is_some() && error.status() == Status::Timeout => {}
-                result => result?,
-            }
-            continue;
+                Err(error) if collecting.is_some() && error.status() == Status::Timeout => Ok(()),
+                result => result,
+            };
         }
         let mut pause = POLL;
-        if let Some(held) = held_for(far) {
+        if let Some(held) = held_for(self.far) {
             pause = pause.min(held);
         }
         if let Some(left) = left(until) {
             if left.is_zero() && collecting.is_none() {
-                return Err(timed_out(args));
+                return Err(timed_out(self.args));
             }
             pause = pause.min(left);
         }
         thread::sleep(pause);
+        Ok(())
+    }
+}
+
+impl Found<'_> {
+    /// Whether it wakes the wait: a message withdrawn, or a turn new to it.
+    fn woke(&self) -> bool {
+        !self.withdrawn.is_empty() || self.turns.iter().any(|&(.., fresh)| fresh)
+    }
+
+    /// Whether it ends a lingering wait at once: the agent cannot go on
+    /// without a blocking case's answer, and the sooner it hears of a
+    /// withdraw, the less work it throws away.
+    fn urgent(&self) -> bool {
+        !self.withdrawn.is_empty()
+            || self.turns.iter().any(|&(_, case, event, fresh)| {
+                fresh
+                    && (event.event() == EventType::Withdraw
+                        || event.event() == EventType::Answer
+                            && case.urgency() == Urgency::Blocking)
+            })
+    }
+
+    /// The cases it gives, with the messages the wait `taken`. A message
+    /// taken and then withdrawn while collecting is given withdrawn.
+    fn give(self, taken: Vec<Turn>) -> Vec<Turn> {
+        let keys: HashSet<Key> = self.withdrawn.iter().map(|turn| turn.key).collect();
+        self.turns
+            .into_iter()
+            .map(|(key, case, event, fresh)| Turn {
+                key,
+                case: case.clone(),
+                at: event.at(),
+                fresh,
+                taken: false,
+            })
+            .chain(self.withdrawn)
+            .chain(taken.into_iter().filter(|turn| !keys.contains(&turn.key)))
+            .collect()
     }
 }
 
