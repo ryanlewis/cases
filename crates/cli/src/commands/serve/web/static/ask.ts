@@ -85,7 +85,7 @@ export function ask(c: Case, f: FollowUp | null): string {
     return note ? `parked: ${note}` : "parked";
   }
   if (f) {
-    const a = f.answer.data;
+    const a = f.answer.data || {};
     if (a.other) return "follow-up · you chose other";
     if (typeof a.choice === "number" && a.choice > 0) return `follow-up · you chose ${a.choice}`;
     return "follow-up · you answered";
