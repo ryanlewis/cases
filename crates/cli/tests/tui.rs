@@ -1158,6 +1158,109 @@ fn a_resize_draws_the_screen_again() {
     tui.quits();
 }
 
+/// A key that comes with a resize is read with it. crossterm 0.29 reads
+/// the terminal in mio by default, whose epoll tells of each file once:
+/// told of the resize and the key in one wake, it gave the resize and lost
+/// the key, which then waited for the next key. `q` typed as the window
+/// changed size did not quit (as `a_resize_draws_the_screen_again` showed
+/// on CI). The child has both wait before it reads; on Linux, cases has
+/// crossterm read in poll(2), which tells again of what is still there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_that_comes_with_a_resize_is_read() {
+    let child = format!(
+        "'{}' --exact a_key_that_comes_with_a_resize_is_read_child --nocapture --test-threads=1",
+        std::env::current_exe().unwrap().display()
+    );
+    let mut script = spawn(
+        Command::new("/usr/bin/script")
+            .args(["-q", "-c", &child, "/dev/null"])
+            .env("CASES_KEY_WITH_RESIZE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    );
+    let mut stdout = script.stdout.take().expect("a stdout");
+    let (chunks, received) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buffer = [0; 4096];
+        while let Ok(n) = stdout.read(&mut buffer) {
+            if n == 0 || chunks.send(buffer[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut shown = Vec::new();
+    let wait_for = |text: &str, shown: &mut Vec<u8>| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !String::from_utf8_lossy(shown).contains(text) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(chunk) => shown.extend(chunk),
+                Err(_) => return false,
+            }
+        }
+        true
+    };
+    let ready = wait_for("resize waits", &mut shown);
+    if ready {
+        let stdin = script.stdin.as_mut().expect("a stdin");
+        stdin.write_all(b"q").expect("the key is typed");
+        stdin.flush().expect("the key is sent");
+    }
+    let done = ready && wait_for("child done", &mut shown);
+    let _ = script.kill();
+    let _ = script.wait();
+    let shown = String::from_utf8_lossy(&shown);
+    assert!(done, "the child did not finish: {shown}");
+    assert!(shown.contains("read q"), "{shown}");
+}
+
+/// The child of [`a_key_that_comes_with_a_resize_is_read`], in a terminal
+/// of its own: a resize, and then the key, wait before it reads.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_that_comes_with_a_resize_is_read_child() {
+    use ratatui::crossterm::event::{self, Event, KeyCode};
+    use ratatui::crossterm::terminal;
+    use rustix::event::{PollFd, PollFlags, Timespec};
+    use rustix::process::{Signal, getpid, kill_process};
+    if std::env::var_os("CASES_KEY_WITH_RESIZE").is_none() {
+        return;
+    }
+    terminal::enable_raw_mode().unwrap();
+    // The first look makes crossterm's reader, which takes SIGWINCH.
+    assert!(!event::poll(Duration::ZERO).unwrap(), "something to read");
+    // The resize: the signal is handled before the call returns.
+    kill_process(getpid(), Signal::WINCH).unwrap();
+    print!("a resize waits\r\n");
+    std::io::stdout().flush().unwrap();
+    // The key: poll(2) sees it there without reading it.
+    let stdin = std::io::stdin();
+    let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+    let within = Timespec {
+        tv_sec: 5,
+        tv_nsec: 0,
+    };
+    rustix::event::poll(&mut fds, Some(&within)).unwrap();
+    let mut read = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        if !event::poll(left).unwrap() {
+            break;
+        }
+        let event = event::read().unwrap();
+        let q = matches!(&event, Event::Key(key) if key.code == KeyCode::Char('q'));
+        read.push(format!("{event:?}"));
+        if q {
+            print!("read q\r\n");
+            break;
+        }
+    }
+    terminal::disable_raw_mode().unwrap();
+    println!("read {read:?}\nchild done");
+}
+
 /// SIGTERM ends the loop, and the terminal is put back.
 #[cfg(unix)]
 #[test]
