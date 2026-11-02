@@ -298,56 +298,41 @@ enum Action<'a> {
 impl Step {
     /// The step's one action, or why it is not a step.
     fn action(&self) -> Result<Action<'_>, String> {
-        let mut found = Vec::new();
-        if let Some(t) = &self.clock {
-            found.push(Action::Clock(t));
-        }
-        if let Some(open) = &self.open {
-            found.push(Action::Open(open));
-        }
-        if let Some(case) = &self.append {
-            found.push(Action::Append(case));
-        }
-        if let Some(case) = &self.archive {
-            found.push(Action::Archive(case));
-        }
-        if let Some(case) = &self.delete {
-            found.push(Action::Delete(case));
-        }
-        if let Some(listen) = &self.listen {
-            found.push(Action::Listen(listen));
-        }
-        if let Some(set) = &self.set_doing {
-            found.push(Action::SetDoing(set));
-        }
-        if let Some(name) = &self.version {
-            found.push(Action::Version(name));
-        }
-        match &self.rows_since {
-            None => {}
-            Some(Value::Null) => found.push(Action::RowsSince(None)),
-            Some(Value::String(name)) => found.push(Action::RowsSince(Some(name))),
-            Some(_) => return Err("rows_since is a version's name or null".into()),
-        }
-        if let Some(actors) = &self.actors {
-            found.push(Action::Actors(actors));
-        }
-        if let Some(listeners) = &self.listeners {
-            found.push(Action::Listeners(listeners));
-        }
+        let found: Vec<Action> = [
+            self.clock.as_deref().map(Action::Clock),
+            self.open.as_ref().map(Action::Open),
+            self.append.as_deref().map(Action::Append),
+            self.archive.as_deref().map(Action::Archive),
+            self.delete.as_deref().map(Action::Delete),
+            self.listen.as_ref().map(Action::Listen),
+            self.set_doing.as_ref().map(Action::SetDoing),
+            self.version.as_deref().map(Action::Version),
+            self.rows_since()?,
+            self.actors.as_deref().map(Action::Actors),
+            self.listeners.as_deref().map(Action::Listeners),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let [action] = <[Action; 1]>::try_from(found)
             .map_err(|found| format!("{} actions, not one", found.len()))?;
-        match action {
-            Action::Clock(text) => drop(time(text)?),
-            Action::Listeners(want) => {
-                for w in want {
-                    for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
-                        time(text)?;
-                    }
-                }
-            }
-            _ => {}
+        check_times(&action)?;
+        self.check_takes(&action)?;
+        self.check_needs(action)
+    }
+
+    /// The step's `rows_since` action, if it has one.
+    fn rows_since(&self) -> Result<Option<Action<'_>>, String> {
+        match &self.rows_since {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(Action::RowsSince(None))),
+            Some(Value::String(name)) => Ok(Some(Action::RowsSince(Some(name)))),
+            Some(_) => Err("rows_since is a version's name or null".into()),
         }
+    }
+
+    /// Checks that the step gives no field `action` does not take.
+    fn check_takes(&self, action: &Action) -> Result<(), String> {
         let writes = matches!(
             action,
             Action::Open(_) | Action::Append(_) | Action::Archive(_) | Action::Delete(_)
@@ -406,6 +391,11 @@ impl Step {
         if let Some((key, ..)) = takes.iter().find(|(_, given, allowed)| *given && !allowed) {
             return Err(format!("{key} does not go with this action"));
         }
+        Ok(())
+    }
+
+    /// `action`, if the step gives every field it needs.
+    fn check_needs<'a>(&self, action: Action<'a>) -> Result<Action<'a>, String> {
         match action {
             Action::Open(_) if self.name.is_none() && self.expect_error.is_none() => {
                 Err("an open that is taken names its case with as".into())
@@ -419,6 +409,22 @@ impl Step {
             action => Ok(action),
         }
     }
+}
+
+/// Checks that each time an action gives is one.
+fn check_times(action: &Action) -> Result<(), String> {
+    match action {
+        Action::Clock(text) => drop(time(text)?),
+        Action::Listeners(want) => {
+            for w in *want {
+                for text in [&w.since, &w.heard, &w.doing_at].into_iter().flatten() {
+                    time(text)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// What one vector's run has named so far.
@@ -511,136 +517,216 @@ fn outcome(step: &Step, got: Result<(), String>) -> Result<(), Failed> {
     }
 }
 
+/// Runs one step: its action, checked against what it expects.
 fn run_step<H>(harness: &H, names: &mut Names, step: &Step) -> Result<(), Failed>
 where
     H: Harness,
     <H::Store as Store>::Error: Display,
 {
     let store = harness.store();
-    let writer = || Writer::new(step.writer.as_deref());
-    let category = |error: StoreError<_>| write_category(harness, &error);
     match step.action().map_err(Failed::from)? {
         Action::Clock(text) => {
             harness.set_clock(time(text)?);
             Ok(())
         }
-        Action::Open(record) => {
-            let append = Append {
-                author: step.author.clone().unwrap_or_else(|| "agent".into()),
-                event: "open".into(),
-                data: Value::Object(record.clone()).to_string(),
-            };
-            let got = match store.create(&append, &writer()) {
-                Ok((key, _)) => {
-                    if let Some(name) = &step.name {
-                        names.cases.insert(name.clone(), key);
-                    }
-                    check_actor(store, key, &append.author, &writer())?;
-                    Ok(())
-                }
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Append(name) => {
-            let key = names.case(name)?;
-            let append = Append {
-                author: step.author.clone().unwrap_or_default(),
-                event: step.event.clone().unwrap_or_default(),
-                data: Value::Object(step.data.clone().unwrap_or_default()).to_string(),
-            };
-            let got = match store.append(&key, &append, &writer(), step.at_revision) {
-                Ok(_) => {
-                    check_actor(store, key, &append.author, &writer())?;
-                    Ok(())
-                }
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Archive(name) | Action::Delete(name) => {
-            let key = names.case(name)?;
-            let removed = if step.archive.is_some() {
-                store.archive(&key, step.at_revision)
-            } else {
-                store.delete(&key, step.at_revision)
-            };
-            let got = match removed {
-                Ok(()) => Ok(()),
-                Err(error) => Err(category(error)?),
-            };
-            outcome(step, got)
-        }
+        Action::Open(record) => run_open(harness, names, step, record),
+        Action::Append(name) => run_append(harness, names, step, name),
+        Action::Archive(name) | Action::Delete(name) => run_remove(harness, names, step, name),
         Action::Listen(listen) => {
-            let got = match store.listen(
+            let listened = store.listen(
                 &listen.wait,
                 &listen.worker,
                 &listen.labels,
                 &listen.kinds,
                 listen.doing.as_deref(),
-            ) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(store_category(harness, &error)?),
-            };
-            outcome(step, got)
+            );
+            stored(harness, step, listened)
         }
-        Action::SetDoing(set) => {
-            let got = match store.set_doing(&set.worker, &set.text) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(store_category(harness, &error)?),
-            };
-            outcome(step, got)
-        }
-        Action::Version(name) => {
-            let version = store
-                .version()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            if let Some(same) = &step.same_as
-                && *names.version(same)? != version
-            {
-                return Err(format!("the version moved from {same}: {version}").into());
+        Action::SetDoing(set) => stored(harness, step, store.set_doing(&set.worker, &set.text)),
+        Action::Version(name) => run_version(store, names, step, name),
+        Action::RowsSince(since) => run_rows_since(store, names, step, since),
+        Action::Actors(want) => check_actors(store, want),
+        Action::Listeners(want) => run_listeners(store, want),
+    }
+}
+
+/// Compares what a call other than a write gave, taken or refused with
+/// the category of the store's error, with what the step expects.
+fn stored<H>(
+    harness: &H,
+    step: &Step,
+    result: Result<(), <H::Store as Store>::Error>,
+) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let got = match result {
+        Ok(()) => Ok(()),
+        Err(error) => Err(store_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Opens the case `record`, naming it as the step says.
+fn run_open<H>(
+    harness: &H,
+    names: &mut Names,
+    step: &Step,
+    record: &Map<String, Value>,
+) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let writer = || Writer::new(step.writer.as_deref());
+    let append = Append {
+        author: step.author.clone().unwrap_or_else(|| "agent".into()),
+        event: "open".into(),
+        data: Value::Object(record.clone()).to_string(),
+    };
+    let got = match store.create(&append, &writer()) {
+        Ok((key, _)) => {
+            if let Some(name) = &step.name {
+                names.cases.insert(name.clone(), key);
             }
-            for other in step.differs_from.iter().flatten() {
-                if *names.version(other)? == version {
-                    return Err(format!("the version is still {other}'s: {version}").into());
-                }
-            }
-            names.versions.insert(name.to_owned(), version);
+            check_actor(store, key, &append.author, &writer())?;
             Ok(())
         }
-        Action::RowsSince(since) => {
-            let since = since.map(|name| names.version(name)).transpose()?.cloned();
-            let want = step.expect.as_ref().ok_or("no expect")?;
-            let changes = store
-                .rows_since(since.as_ref())
-                .map_err(|e| format!("the store failed: {e}"))?;
-            check_changes(store, names, since.as_ref(), &changes, want)
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Appends the step's event to the case named `name`.
+fn run_append<H>(harness: &H, names: &Names, step: &Step, name: &str) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let writer = || Writer::new(step.writer.as_deref());
+    let key = names.case(name)?;
+    let append = Append {
+        author: step.author.clone().unwrap_or_default(),
+        event: step.event.clone().unwrap_or_default(),
+        data: Value::Object(step.data.clone().unwrap_or_default()).to_string(),
+    };
+    let got = match store.append(&key, &append, &writer(), step.at_revision) {
+        Ok(_) => {
+            check_actor(store, key, &append.author, &writer())?;
+            Ok(())
         }
-        Action::Actors(want) => {
-            let actors = store
-                .actors()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            let got: Vec<(String, Option<String>)> =
-                actors.into_iter().map(|a| (a.kind, a.name)).collect();
-            let want: Vec<(String, Option<String>)> = want
-                .iter()
-                .map(|a| (a.kind.clone(), a.name.clone()))
-                .collect();
-            if got == want {
-                Ok(())
-            } else {
-                Err(format!("the actors are {got:?}, want {want:?}").into())
-            }
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Archives or deletes the case named `name`, as the step says.
+fn run_remove<H>(harness: &H, names: &Names, step: &Step, name: &str) -> Result<(), Failed>
+where
+    H: Harness,
+    <H::Store as Store>::Error: Display,
+{
+    let store = harness.store();
+    let key = names.case(name)?;
+    let removed = if step.archive.is_some() {
+        store.archive(&key, step.at_revision)
+    } else {
+        store.delete(&key, step.at_revision)
+    };
+    let got = match removed {
+        Ok(()) => Ok(()),
+        Err(error) => Err(write_category(harness, &error)?),
+    };
+    outcome(step, got)
+}
+
+/// Names the store's version `name`, after checking it against the
+/// versions the step says it is the same as or differs from.
+fn run_version<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &mut Names,
+    step: &Step,
+    name: &str,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let version = store
+        .version()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    if let Some(same) = &step.same_as
+        && *names.version(same)? != version
+    {
+        return Err(format!("the version moved from {same}: {version}").into());
+    }
+    for other in step.differs_from.iter().flatten() {
+        if *names.version(other)? == version {
+            return Err(format!("the version is still {other}'s: {version}").into());
         }
-        Action::Listeners(want) => {
-            let listeners = store
-                .listeners()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            let waits = store
-                .waits()
-                .map_err(|e| format!("the store failed: {e}"))?;
-            check_listeners(&listeners, &waits, want)
-        }
+    }
+    names.versions.insert(name.to_owned(), version);
+    Ok(())
+}
+
+/// Checks what changed since the version named `since`, or since the
+/// start, against what the step expects.
+fn run_rows_since<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &Names,
+    step: &Step,
+    since: Option<&str>,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let since = since.map(|name| names.version(name)).transpose()?.cloned();
+    let want = step.expect.as_ref().ok_or("no expect")?;
+    let changes = store
+        .rows_since(since.as_ref())
+        .map_err(|e| format!("the store failed: {e}"))?;
+    check_changes(store, names, since.as_ref(), &changes, want)
+}
+
+/// Checks the store's listeners and their waits against `want`.
+fn run_listeners<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    want: &[ListenerWant],
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let listeners = store
+        .listeners()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    let waits = store
+        .waits()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    check_listeners(&listeners, &waits, want)
+}
+
+/// Checks the store's actors, by kind and name, against `want`.
+fn check_actors<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    want: &[ActorWant],
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    let actors = store
+        .actors()
+        .map_err(|e| format!("the store failed: {e}"))?;
+    let got: Vec<(String, Option<String>)> = actors.into_iter().map(|a| (a.kind, a.name)).collect();
+    let want: Vec<(String, Option<String>)> = want
+        .iter()
+        .map(|a| (a.kind.clone(), a.name.clone()))
+        .collect();
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!("the actors are {got:?}, want {want:?}").into())
     }
 }
 
