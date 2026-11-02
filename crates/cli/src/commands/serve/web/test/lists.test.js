@@ -463,3 +463,10 @@ test("a withdraw line takes nothing from a case the stream brings late", () => {
   // follows the case the stream brought, as it would have.
   assert.deepEqual(lineFollows(lineFrom(answeredCase), pickedUpCase).line, lineFrom(pickedUpCase));
 });
+
+test("a withdrawn card whose withdraw has no data says no reason", () => {
+  const blank = through("w2", "withdrawn", 1, { events: [{ event: "withdraw", at: at(1), data: null }] });
+  const done = list([], [blank], "done");
+  assert.ok(done.includes('<a class="card state-withdrawn" href="/cases/w2-case-w2?show=done">'), done);
+  assert.ok(!done.includes('<p class="ask">'), done);
+});
