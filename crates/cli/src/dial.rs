@@ -1156,6 +1156,11 @@ mod tests {
         ] {
             assert_eq!(request(text), Read::End, "{text:?}");
         }
+        // One that ends with its head at the limit exactly, part-way
+        // through a line, ended: it was not over the limit.
+        let at_limit = format!("GET / HTTP/1.1\r\nX: {}", "a".repeat(HEAD_LIMIT - 19));
+        assert_eq!(at_limit.len(), HEAD_LIMIT);
+        assert_eq!(request(&at_limit), Read::End);
     }
 
     #[test]
