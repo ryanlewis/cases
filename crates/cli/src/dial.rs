@@ -386,7 +386,8 @@ fn request_line(line: &str) -> Option<(&str, &str, &str)> {
     else {
         return None;
     };
-    if method.is_empty() || !target.starts_with('/') || !version.starts_with("HTTP/1.") {
+    if method.is_empty() || !target.starts_with('/') || !matches!(version, "HTTP/1.0" | "HTTP/1.1")
+    {
         return None;
     }
     Some((method, target, version))
@@ -420,8 +421,10 @@ fn headers<'a>(
         let Some((name, value)) = line.split_once(':') else {
             return Err("a header is not one");
         };
-        // No space between a name and its colon (RFC 9112, 5.1).
-        if name.ends_with([' ', '\t']) {
+        // A name is a token, with no space before its colon (RFC 9112,
+        // 5.1) nor at its start, as a line that goes on from the last has
+        // (5.2).
+        if !is_token(name) {
             return Err("a header is not one");
         }
         let value = ows(value);
@@ -446,6 +449,15 @@ fn headers<'a>(
     headers.length = length.unwrap_or(0);
     headers.close = closes || (http_1_0 && !keeps);
     Ok(headers)
+}
+
+/// Whether `text` is a token (RFC 9110, 5.6.2): one or more of the
+/// letters, digits and marks a header's name may hold.
+fn is_token(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// `text` without the spaces and tabs around it, the optional whitespace
@@ -1328,6 +1340,45 @@ mod tests {
             panic!("not read");
         };
         assert_eq!(got.body, b"{}");
+    }
+
+    #[test]
+    fn a_folded_line_a_name_that_is_no_token_or_another_version_is_bad() {
+        for (text, why) in [
+            // A line that goes on from the last (RFC 9112, 5.2), or a
+            // first header that starts with space (2.2): its header is not
+            // skipped, and its body is not read as the next request.
+            (
+                "POST / HTTP/1.1\r\nX: a\r\n Content-Length: 5\r\n\r\nhello",
+                "a header is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nX: a\r\n\tContent-Length: 5\r\n\r\nhello",
+                "a header is not one",
+            ),
+            ("GET / HTTP/1.1\r\n X: a\r\n\r\n", "a header is not one"),
+            // A name is a token (RFC 9110, 5.1 and 5.6.2).
+            ("GET / HTTP/1.1\r\n:x\r\n\r\n", "a header is not one"),
+            ("GET / HTTP/1.1\r\na b: 1\r\n\r\n", "a header is not one"),
+            ("GET / HTTP/1.1\r\na(b): 1\r\n\r\n", "a header is not one"),
+            ("GET / HTTP/1.1\r\na\"b: 1\r\n\r\n", "a header is not one"),
+            ("GET / HTTP/1.1\r\n\u{e9}: 1\r\n\r\n", "a header is not one"),
+            // The version is 1.0 or 1.1, as it is written.
+            ("GET / HTTP/1.x\r\n\r\n", "the request line is not one"),
+            ("GET / HTTP/1.\r\n\r\n", "the request line is not one"),
+            ("GET / HTTP/1.10\r\n\r\n", "the request line is not one"),
+            ("GET / HTTP/1.2\r\n\r\n", "the request line is not one"),
+            ("GET / http/1.1\r\n\r\n", "the request line is not one"),
+        ] {
+            assert_eq!(request(text), Read::Bad(why), "{text:?}");
+        }
+        // Every character a token may hold is taken in a name.
+        let Read::Request(got) =
+            request("GET / HTTP/1.0\r\nX-a_1.2~!#$%&'*+^`|: v\r\nUser-Agent: cases/1\r\n\r\n")
+        else {
+            panic!("not read");
+        };
+        assert_eq!(got.agent.as_deref(), Some("cases/1"));
     }
 
     #[test]
