@@ -669,97 +669,149 @@ fn key(text: &str) -> Result<Key, Answer> {
 /// The answer to a store route, `rest` being the path after `store/`.
 fn route(db: &Db, request: &Request, rest: &[&str], holds: Holds<'_>) -> Answer {
     let result = match (request.method.as_str(), rest) {
-        ("GET", ["cases"]) => Ok(list(db, request.query("since"))),
-        ("GET", ["cases", k]) => key(k).map(|k| match db.rows(&k) {
-            Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
-            Ok(None) => Answer::refuse(404, "nocase", "no such case"),
-            Err(error) => Answer::failed(&error),
-        }),
-        ("POST", ["cases"]) => body(request).and_then(|b| {
-            let (writer, append) = writer_append(&b)?;
-            Ok(match db.create_rows(&append, &writer) {
-                Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, "events"]) => key(k).and_then(|k| {
-            let b = body(request)?;
-            let (writer, append) = writer_append(&b)?;
-            let at = revision(&b)?;
-            Ok(match db.append_rows(&k, &append, &writer, at) {
-                Ok(rows) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, what @ ("archive" | "delete")]) => key(k).and_then(|k| {
-            let at = revision(&body(request)?)?;
-            let done = if *what == "archive" {
-                db.archive(&k, at)
-            } else {
-                db.delete(&k, at)
-            };
-            Ok(match done {
-                Ok(()) => Answer::ok(json!({})),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("GET", ["actors"]) => Ok(match db.actors() {
-            Ok(actors) => Answer::ok(json!({"list": actors
-                .iter()
-                .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        (method, ["cases", rest @ ..]) => cases_route(db, request, method, rest),
+        ("GET", ["actors"]) => Ok(actors(db)),
         ("GET", ["changes"]) => Ok(changes(db, request)),
-        ("GET", ["waits"]) => Ok(match db.waits() {
-            Ok(waits) => {
-                Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()}))
-            }
-            Err(error) => Answer::failed(&error),
-        }),
-        ("GET", ["listeners"]) => Ok(match db.listeners() {
-            Ok(listeners) => Answer::ok(json!({"list": listeners
-                .iter()
-                .map(listener_json)
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        ("GET", ["waits"]) => Ok(waits(db)),
+        ("GET", ["listeners"]) => Ok(listeners(db)),
         ("GET", ["inbox"]) => Ok(inbox(db)),
         ("POST", ["listen"]) => body(request).and_then(|b| listen(db, &b)),
-        ("POST", ["lock"]) => body(request).and_then(|b| match holds {
-            Holds::Connection(locks) => take_locks(db, &b, locks),
-            Holds::Leases(leases) => leases.take(db, &b),
-        }),
-        ("POST", ["lock", "renew"]) => Ok(match holds {
-            Holds::Connection(locks) => renew(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", "release"]) => Ok(match holds {
-            Holds::Connection(locks) => release(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", id, "renew"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.renew(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("POST", ["lock", id, "release"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.release(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("PUT", ["doing", worker]) => body(request).and_then(|b| {
-            let text = text(&b, "text")?;
-            Ok(match db.set_doing(&decode(worker), text) {
-                Ok(()) => Answer::ok(json!({})),
-                Err(DbError::NotListening { .. }) => {
-                    Answer::refuse(404, "not-listening", "the worker is not listening")
-                }
-                Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
-                Err(error) => Answer::failed(&error),
-            })
-        }),
-        _ => Ok(Answer::refuse(404, "request", "no such route")),
+        ("POST", ["lock", rest @ ..]) => lock_route(db, request, rest, holds),
+        ("PUT", ["doing", worker]) => body(request).and_then(|b| doing(db, worker, &b)),
+        _ => Ok(no_route()),
     };
     result.unwrap_or_else(|answer| answer)
+}
+
+/// The refusal of a path that is not one of the store routes.
+fn no_route() -> Answer {
+    Answer::refuse(404, "request", "no such route")
+}
+
+/// `store/cases…`, `rest` being the path after `cases`: the cases read,
+/// a case read or made, and a case's event, archive or delete.
+fn cases_route(db: &Db, request: &Request, method: &str, rest: &[&str]) -> Result<Answer, Answer> {
+    match (method, rest) {
+        ("GET", []) => Ok(list(db, request.query("since"))),
+        ("GET", [k]) => key(k).map(|k| case(db, k)),
+        ("POST", []) => body(request).and_then(|b| create(db, &b)),
+        ("POST", [k, "events"]) => key(k).and_then(|k| append(db, request, k)),
+        ("POST", [k, what @ ("archive" | "delete")]) => {
+            key(k).and_then(|k| remove(db, request, k, *what == "archive"))
+        }
+        _ => Ok(no_route()),
+    }
+}
+
+/// `GET store/cases/<k>`: the case's rows.
+fn case(db: &Db, k: Key) -> Answer {
+    match db.rows(&k) {
+        Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
+        Ok(None) => Answer::refuse(404, "nocase", "no such case"),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/cases` `{writer, append}`: a new case, with its rows.
+fn create(db: &Db, body: &Value) -> Result<Answer, Answer> {
+    let (writer, append) = writer_append(body)?;
+    Ok(match db.create_rows(&append, &writer) {
+        Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/events` `{writer, append, revision}`: the case's
+/// rows with the event appended.
+fn append(db: &Db, request: &Request, k: Key) -> Result<Answer, Answer> {
+    let b = body(request)?;
+    let (writer, append) = writer_append(&b)?;
+    let at = revision(&b)?;
+    Ok(match db.append_rows(&k, &append, &writer, at) {
+        Ok(rows) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/archive` or `…/delete` `{revision}`: the case
+/// moved into the archive, or removed.
+fn remove(db: &Db, request: &Request, k: Key, archive: bool) -> Result<Answer, Answer> {
+    let at = revision(&body(request)?)?;
+    let done = if archive {
+        db.archive(&k, at)
+    } else {
+        db.delete(&k, at)
+    };
+    Ok(match done {
+        Ok(()) => Answer::ok(json!({})),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `GET store/actors`: `{list}`, the store's actors.
+fn actors(db: &Db) -> Answer {
+    match db.actors() {
+        Ok(actors) => Answer::ok(json!({"list": actors
+            .iter()
+            .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/waits`: `{list}`, the waits listening now.
+fn waits(db: &Db) -> Answer {
+    match db.waits() {
+        Ok(waits) => Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/listeners`: `{list}`, the workers listening now.
+fn listeners(db: &Db) -> Answer {
+    match db.listeners() {
+        Ok(listeners) => Answer::ok(json!({"list": listeners
+            .iter()
+            .map(listener_json)
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/lock…`, `rest` being the path after `lock`: a pickup
+/// wait's locks taken, renewed or let go, on the connection over a pipe
+/// and by id over HTTP. A route of the other is no route, or refused.
+fn lock_route(
+    db: &Db,
+    request: &Request,
+    rest: &[&str],
+    holds: Holds<'_>,
+) -> Result<Answer, Answer> {
+    Ok(match (rest, holds) {
+        ([], Holds::Connection(locks)) => {
+            return body(request).and_then(|b| take_locks(db, &b, locks));
+        }
+        ([], Holds::Leases(leases)) => return body(request).and_then(|b| leases.take(db, &b)),
+        (["renew"], Holds::Connection(locks)) => renew(locks),
+        (["release"], Holds::Connection(locks)) => release(locks),
+        (["renew" | "release"], Holds::Leases(_)) => no_connection(),
+        ([id, "renew"], Holds::Leases(leases)) => leases.renew(id),
+        ([id, "release"], Holds::Leases(leases)) => leases.release(id),
+        _ => no_route(),
+    })
+}
+
+/// `PUT store/doing/<worker>` `{text}`: the worker's doing line set.
+fn doing(db: &Db, worker: &str, body: &Value) -> Result<Answer, Answer> {
+    let text = text(body, "text")?;
+    Ok(match db.set_doing(&decode(worker), text) {
+        Ok(()) => Answer::ok(json!({})),
+        Err(DbError::NotListening { .. }) => {
+            Answer::refuse(404, "not-listening", "the worker is not listening")
+        }
+        Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
+        Err(error) => Answer::failed(&error),
+    })
 }
 
 /// `GET store/inbox`: `{link}`, the link of the inbox a serve on this
