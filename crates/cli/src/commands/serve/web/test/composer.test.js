@@ -312,7 +312,11 @@ test("a message sent closes the composer and says so; one refused says why and c
 test("a send not answered yet keeps a second from going, for ten seconds", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let answer;
-  const posted = serve([() => new Promise((resolve) => (answer = resolve)), () => new Response(JSON.stringify({ id: "m2" }), { status: 200 })]);
+  const posted = serve([
+    () => new Promise((resolve) => (answer = resolve)),
+    () => new Response(JSON.stringify({ id: "m2" }), { status: 200 }),
+    () => new Response(JSON.stringify({ id: "m3" }), { status: 200 }),
+  ]);
   const c = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
   note(c, "Rebase");
   const form = c.find((v) => v.type === "form").props;
@@ -320,19 +324,71 @@ test("a send not answered yet keeps a second from going, for ten seconds", async
   await new Promise((resolve) => setImmediate(resolve));
   await form.onSubmit(event());
   assert.equal(posted.length, 1);
-  // After ten seconds, and not before, a send goes again.
-  // BUG, pinned and not fixed here: the first send is still under way, so
-  // if it is taken this second send is a second message, which submit says
-  // must not happen; and the first one's answer, coming last, sets the
-  // guard and the refusal of a composer that has sent.
+  // After ten seconds, and not before, a send goes again (IN-09).
   t.mock.timers.tick(9999);
   await form.onSubmit(event());
   assert.equal(posted.length, 1);
   t.mock.timers.tick(1);
   await form.onSubmit(event());
   assert.equal(posted.length, 2);
+  assert.deepEqual(c.sent, [{ id: "m2" }]);
+  // The first send's answer, come last, changes nothing: the composer has
+  // sent, says no refusal, and sends nothing more.
   answer(new Response(JSON.stringify({ error: { category: "request", message: "late" } }), { status: 400 }));
   await first;
+  c.act(() => {});
+  assert.ok(!c.page().includes("late"), c.page());
+  await form.onSubmit(event());
+  assert.equal(posted.length, 2);
+});
+
+test("a send taken after ten seconds holds the guard for good", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer;
+  const posted = serve([() => new Promise((resolve) => (answer = resolve)), () => new Response(JSON.stringify({ id: "m2" }), { status: 200 })]);
+  const c = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(c, "Rebase");
+  const form = c.find((v) => v.type === "form").props;
+  const first = form.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(10000);
+  answer(new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
+  await first;
+  assert.deepEqual(c.sent, [{ id: "m1" }]);
+  await form.onSubmit(event());
+  assert.equal(posted.length, 1);
+});
+
+test("a send taken after a later send went counts, and the later send's answer changes nothing", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const answers = [];
+  const posted = serve([
+    () => new Promise((resolve) => answers.push(resolve)),
+    () => new Promise((resolve) => answers.push(resolve)),
+    () => new Response(JSON.stringify({ id: "m3" }), { status: 200 }),
+  ]);
+  const c = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(c, "Rebase");
+  const form = c.find((v) => v.type === "form").props;
+  const first = form.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(10000);
+  const second = form.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posted.length, 2);
+  // The first is taken while the second is out: the message is sent, so
+  // the composer goes, and sends nothing more.
+  answers[0](new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
+  await first;
+  c.act(() => {});
+  assert.deepEqual([c.sent, c.log.at(-1)], [[{ id: "m1" }], "close"]);
+  // The second's refusal, come after, changes nothing.
+  answers[1](new Response(JSON.stringify({ error: { category: "request", message: "no" } }), { status: 400 }));
+  await second;
+  c.act(() => {});
+  assert.ok(!c.page().includes('role="alert">no<'), c.page());
+  await form.onSubmit(event());
+  assert.equal(posted.length, 2);
 });
 
 test("a send refused stops its ten seconds, so they do not cut short the next send's", async (t) => {
