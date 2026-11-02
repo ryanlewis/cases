@@ -410,21 +410,7 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
     };
     let head =
         std::str::from_utf8(&got[..end]).map_err(|_| bad("the answer's head is not UTF-8"))?;
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .and_then(|line| {
-            let mut parts = line.split(' ');
-            let version = parts.next()?;
-            version.starts_with("HTTP/1.").then_some(())?;
-            parts.next()?.parse::<u16>().ok()
-        })
-        .ok_or_else(|| bad("the answer's status line is not one"))?;
-    let length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
-        .ok_or_else(|| bad("the answer has no length"))?;
+    let (status, length) = answer_head(head).map_err(bad)?;
     if length > limit {
         return Err(ureq::Error::BodyExceedsLimit(limit));
     }
@@ -434,6 +420,51 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
         return Ok(None);
     }
     Ok(Some((status, got[start..start + length].to_vec())))
+}
+
+/// The status and the body's length the answer's `head` gives, read as
+/// strictly as `cases dial-stdio` reads a request's: the version 1.0 or
+/// 1.1, each header's name a token, and one length, of digits alone; or
+/// why it gives none.
+fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| {
+            let mut parts = line.split(' ');
+            matches!(parts.next()?, "HTTP/1.0" | "HTTP/1.1").then_some(())?;
+            parts.next()?.parse::<u16>().ok()
+        })
+        .ok_or("the answer's status line is not one")?;
+    let mut length = None;
+    for line in lines {
+        // A name is a token (RFC 9110, 5.6.2), so not one with space
+        // before it or its colon, nor a line that goes on from the last
+        // (RFC 9112, 5.2).
+        let Some((name, value)) = line.split_once(':').filter(|(name, _)| is_token(name)) else {
+            return Err("the answer's header is not one");
+        };
+        if !name.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        // One, of digits alone (RFC 9112, 6.3), with spaces and tabs
+        // alone around it.
+        let value = value.trim_matches([' ', '\t']);
+        if length.is_some() || value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("the answer's length is not one");
+        }
+        length = Some(value.parse::<u64>().unwrap_or(u64::MAX));
+    }
+    Ok((status, length.ok_or("the answer has no length")?))
+}
+
+/// Whether `text` is a token (RFC 9110, 5.6.2): one or more of the
+/// letters, digits and marks a header's name may hold.
+fn is_token(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// The error for a pipe the child was not given.
@@ -628,6 +659,46 @@ mod tests {
         assert_eq!(answer_in(answer, 10).unwrap(), Some((409, b"{}".to_vec())));
         let empty = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
         assert_eq!(answer_in(empty, 10).unwrap(), Some((200, Vec::new())));
+    }
+
+    #[test]
+    fn an_answer_s_head_is_read_as_strictly_as_dial_stdio_reads_a_request_s() {
+        for bad in [
+            // The version is 1.0 or 1.1, as it is written.
+            &b"HTTP/1.x 200 OK\r\nContent-Length: 0\r\n\r\n"[..],
+            b"HTTP/1. 200 OK\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.10 200 OK\r\nContent-Length: 0\r\n\r\n",
+            // A name is a token: not a line that goes on from the last
+            // (RFC 9112, 5.2), nor one with space before it or its colon.
+            b"HTTP/1.1 200 OK\r\nX: a\r\n Content-Length: 5\r\n\r\nhello",
+            b"HTTP/1.1 200 OK\r\nX: a\r\n\tContent-Length: 5\r\n\r\nhello",
+            b"HTTP/1.1 200 OK\r\n Content-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length : 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\n:x\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\na b: 1\r\nContent-Length: 0\r\n\r\n",
+            // A line with no colon is no header.
+            b"HTTP/1.1 200 OK\r\njunk\r\nContent-Length: 0\r\n\r\n",
+            // One length, of digits alone (RFC 9112, 6.3), with spaces and
+            // tabs alone around it.
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ncontent-length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: +2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2, 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: \x0b2\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Length: \u{3000}2\r\n\r\n{}".as_bytes(),
+        ] {
+            match answer_in(bad, 10) {
+                Err(ureq::Error::Io(error)) => {
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+                }
+                other => panic!("{:?}: {other:?}", String::from_utf8_lossy(bad)),
+            }
+        }
+        // HTTP/1.0, a name of every character a token may hold, and spaces
+        // and tabs around a length, are taken.
+        let fine = b"HTTP/1.0 200 OK\r\nX-a_1.2~!#$%&'*+^`|: v\r\nContent-Length: \t2 \r\n\r\n{}";
+        assert_eq!(answer_in(fine, 10).unwrap(), Some((200, b"{}".to_vec())));
     }
 
     #[test]
