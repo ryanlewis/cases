@@ -861,6 +861,217 @@ mod tests {
         }
     }
 
+    /// A store token, as `store-tokens-file` holds one.
+    const STORE_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    /// The app of [`app`], taking [`STORE_TOKEN`] on its store routes.
+    fn store_app(dir: &tempfile::TempDir, proxied: &[&str], logins: &[&str]) -> App {
+        let token = cases_store_remote::Token::forward(STORE_TOKEN).unwrap();
+        App {
+            store_tokens: Tokens::new(vec![token]),
+            ..app(dir, proxied, logins)
+        }
+    }
+
+    /// The message of the refusal `check_store` gives, always 401 `auth`,
+    /// or `None` when it lets the request through.
+    fn store_refused(app: &App, pairs: &[(&str, &str)]) -> Option<String> {
+        check_store(app, &with(pairs)).err().map(|refusal| {
+            assert_eq!(refusal.status, StatusCode::UNAUTHORIZED);
+            assert_eq!(refusal.category, "auth");
+            assert_eq!(refusal.case, None);
+            refusal.message
+        })
+    }
+
+    /// A store route straight to the loopback address needs nothing, by
+    /// any of the server's Hosts in any case; through a proxy's
+    /// X-Forwarded-Host it needs a token or a login like any other.
+    #[test]
+    fn a_store_route_to_loopback_needs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = store_app(&dir, &[], &[]);
+        for host in ["127.0.0.1:7337", "localhost:7337", "LocalHost:7337"] {
+            assert_eq!(store_refused(&app, &[("host", host)]), None, "{host}");
+        }
+        let message = store_refused(
+            &app,
+            &[("host", "127.0.0.1:7337"), ("x-forwarded-host", TAILNET)],
+        )
+        .unwrap();
+        assert!(message.contains("needs a token"), "{message}");
+        assert_eq!(
+            store_refused(
+                &app,
+                &[
+                    ("host", "127.0.0.1:7337"),
+                    ("x-forwarded-host", TAILNET),
+                    ("authorization", &format!("Bearer {STORE_TOKEN}")),
+                ],
+            ),
+            None
+        );
+    }
+
+    /// A Host that is neither the server's nor in allow-hosts, with no
+    /// X-Forwarded-Host, is refused whatever it carries; with
+    /// X-Forwarded-Host, any Host goes on to the token and login checks.
+    #[test]
+    fn a_store_route_by_another_host_is_refused_unless_proxied() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = store_app(&dir, &[TAILNET], &["ryan@github"]);
+        let bearer = format!("Bearer {STORE_TOKEN}");
+        for host in [
+            "evil.example:7337",
+            "devbox.example.ts.net",
+            "127.0.0.1",
+            "",
+        ] {
+            let message = store_refused(
+                &app,
+                &[
+                    ("host", host),
+                    ("authorization", &bearer),
+                    ("tailscale-user-login", "ryan@github"),
+                ],
+            )
+            .unwrap();
+            assert!(message.contains("allow-hosts"), "{host}: {message}");
+            assert_eq!(
+                store_refused(
+                    &app,
+                    &[
+                        ("host", host),
+                        ("x-forwarded-host", host),
+                        ("authorization", &bearer)
+                    ],
+                ),
+                None,
+                "{host}"
+            );
+        }
+        // An allowed host, in any case, goes on to the checks without
+        // X-Forwarded-Host.
+        for host in [TAILNET, "DevBox.Example.TS.net:7337"] {
+            assert_eq!(
+                store_refused(&app, &[("host", host), ("authorization", &bearer)]),
+                None,
+                "{host}"
+            );
+            let message = store_refused(&app, &[("host", host)]).unwrap();
+            assert!(message.contains("needs a token"), "{host}: {message}");
+        }
+    }
+
+    /// Through a proxy, the bearer must be one of the tokens, whole, after
+    /// `Bearer ` as spelt. An Authorization header that is not one is
+    /// refused even with a listed login.
+    #[test]
+    fn a_proxied_store_route_lets_in_only_a_whole_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = store_app(&dir, &[TAILNET], &["ryan@github"]);
+        let route = |authorization: &str, login: Option<&str>| {
+            let mut pairs = vec![("host", TAILNET), ("authorization", authorization)];
+            if let Some(login) = login {
+                pairs.push(("tailscale-user-login", login));
+            }
+            store_refused(&app, &pairs)
+        };
+        assert_eq!(route(&format!("Bearer {STORE_TOKEN}"), None), None);
+        let wrong = "f".repeat(32);
+        for authorization in [
+            format!("Bearer {wrong}"),
+            format!("Bearer {}", &STORE_TOKEN[1..]),
+            format!("Bearer {STORE_TOKEN}x"),
+            // Pins current behaviour, possibly a bug: RFC 7235 makes the
+            // scheme case-insensitive, but only `Bearer ` is taken.
+            format!("bearer {STORE_TOKEN}"),
+            format!("Bearer  {STORE_TOKEN}"),
+            STORE_TOKEN.to_owned(),
+            "Bearer ".to_owned(),
+            "Bearer".to_owned(),
+            String::new(),
+        ] {
+            for login in [None, Some("ryan@github")] {
+                let message = route(&authorization, login).unwrap();
+                assert!(
+                    message.contains("the token is not one"),
+                    "{authorization:?} {login:?}: {message}"
+                );
+            }
+        }
+    }
+
+    /// Through a proxy with no Authorization, the request must name one of
+    /// tailscale-logins, exactly; with none set, nothing gets in.
+    #[test]
+    fn a_proxied_store_route_lets_in_a_listed_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let listed = store_app(&dir, &[TAILNET], &["ryan@github", "sam@github"]);
+        let route = |login: Option<&str>| {
+            let mut pairs = vec![("host", TAILNET)];
+            if let Some(login) = login {
+                pairs.push(("tailscale-user-login", login));
+            }
+            store_refused(&listed, &pairs)
+        };
+        assert_eq!(route(Some("ryan@github")), None);
+        assert_eq!(route(Some("sam@github")), None);
+        for login in [None, Some(""), Some("eve@github"), Some("RYAN@github")] {
+            let message = route(login).unwrap();
+            assert!(message.contains("tailscale-logins"), "{login:?}: {message}");
+        }
+        // An empty login is never one, even when the list holds one.
+        let blank = store_app(&dir, &[TAILNET], &[""]);
+        for pairs in [
+            &[("host", TAILNET)][..],
+            &[("host", TAILNET), ("tailscale-user-login", "")],
+        ] {
+            assert!(store_refused(&blank, pairs).is_some(), "{pairs:?}");
+        }
+        // With no tokens and no logins, a proxied store route is refused.
+        let closed = app(&dir, &[TAILNET], &[]);
+        assert!(store_refused(&closed, &[("host", TAILNET)]).is_some());
+        assert!(
+            store_refused(
+                &closed,
+                &[
+                    ("host", TAILNET),
+                    ("authorization", &format!("Bearer {STORE_TOKEN}"))
+                ],
+            )
+            .is_some()
+        );
+    }
+
+    /// A store route `tailscale funnel` passed on, or a browser sent, is
+    /// refused even to the loopback address with a token and a login.
+    #[test]
+    fn a_store_route_from_funnel_or_a_browser_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = store_app(&dir, &[TAILNET], &["ryan@github"]);
+        let bearer = format!("Bearer {STORE_TOKEN}");
+        for host in ["127.0.0.1:7337", TAILNET] {
+            let pass = [
+                ("host", host),
+                ("authorization", bearer.as_str()),
+                ("tailscale-user-login", "ryan@github"),
+            ];
+            assert_eq!(store_refused(&app, &pass), None, "{host}");
+            for (name, value, says) in [
+                ("tailscale-funnel-request", "?1", "funnel"),
+                ("origin", "http://127.0.0.1:7337", "not a browser"),
+                ("sec-fetch-site", "same-origin", "not a browser"),
+                ("sec-fetch-site", "none", "not a browser"),
+            ] {
+                let mut pairs = pass.to_vec();
+                pairs.push((name, value));
+                let message = store_refused(&app, &pairs).unwrap();
+                assert!(message.contains(says), "{host} {name}: {message}");
+            }
+        }
+    }
+
     #[test]
     fn tokens_compare_whole() {
         assert!(same(b"abc", b"abc"));
