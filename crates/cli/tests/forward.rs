@@ -36,6 +36,11 @@ struct Forwarding {
 /// count above 0, it takes one off that first and sends its stdin on to
 /// `dial-stdio` through a `cat` whose pid it writes to `@RELAYPID@`, so
 /// that a test can stop what is sent, as a network that drops it does.
+/// The relayed `dial-stdio` runs in a process group of its own, out of the
+/// near side's reach as a far side on another machine is: a dropped pipe
+/// whose child has not exited 200 ms after its stdin closed kills the
+/// child's group, as a hold that lost its lease does, and that must not let
+/// go of the far side's locks before their lease runs out.
 const SSH: &str = r#"#!/bin/sh
 echo "$*" >> "@LOG@"
 while [ $# -gt 0 ] && [ "$1" != "cases" ]; do shift; done
@@ -43,7 +48,8 @@ shift
 relay=$(cat "@RELAY@" 2>/dev/null || echo 0)
 if [ "$relay" -gt 0 ]; then
     echo $((relay - 1)) > "@RELAY@"
-    sh -c 'echo $$ > "@RELAYPID@"; exec cat' | CASES_STORE="@FAR@" "@BIN@" "$@"
+    sh -c 'echo $$ > "@RELAYPID@"; exec cat' |
+        CASES_STORE="@FAR@" perl -e 'setpgrp; exec @ARGV or die "$ARGV[0]: $!\n"' "@BIN@" "$@"
     exit $?
 fi
 spare=$(cat "@SPARE@" 2>/dev/null || echo 0)
@@ -217,6 +223,63 @@ fn a_case_goes_round_over_ssh() {
     for run in &runs {
         assert_eq!(run, "-T -o BatchMode=yes -- devbox cases dial-stdio");
     }
+}
+
+/// Prune archives or deletes through the forwarded store, and the far
+/// side's store, not the local one, loses the case.
+#[test]
+fn prune_archives_and_deletes_on_the_far_side() {
+    let f = Forwarding::new();
+    let archived = f.open_decision();
+    f.ok(&["withdraw", &archived, "--as", "ryan"]);
+    assert_eq!(
+        f.ok(&["prune", "--age", "0", "--yes"]),
+        format!("{archived} archived\n")
+    );
+    assert_eq!(f.far(&["list", "--all", "--count"]), "0\n");
+
+    let deleted = f.open_decision();
+    f.ok(&["withdraw", &deleted, "--as", "ryan"]);
+    assert_eq!(
+        f.ok(&["prune", "--age", "0", "--delete", "--yes"]),
+        format!("{deleted} deleted\n")
+    );
+    assert_eq!(f.far(&["list", "--all", "--count"]), "0\n");
+}
+
+/// The listening waits are read from the far side: an open warns that its
+/// answer wakes none of them.
+#[test]
+fn open_warns_from_the_waits_listening_on_the_far_side() {
+    let f = Forwarding::new();
+    let fyi = |worker: &str| {
+        f.run(&[
+            "open",
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Runner",
+            "--worker",
+            worker,
+            "--label",
+            "homeday",
+        ])
+    };
+    // The store is made by the first case: a listener never makes one.
+    let first = fyi("homeday");
+    assert_eq!((first.code, first.stderr.as_str()), (0, ""), "{first:?}");
+    cases_store_sqlite::Db::new(&f.far)
+        .listen("homeday", "homeday", &["homeday".to_owned()], &[], None)
+        .unwrap();
+    let out = fyi("ci-runner");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("wait for --worker homeday, not ci-runner"),
+        "{out:?}"
+    );
 }
 
 #[test]

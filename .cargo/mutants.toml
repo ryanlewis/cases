@@ -31,9 +31,25 @@ exclude_re = [
     # Equivalent: the wait for a child to exit stops at its deadline, and
     # the clock lands on the deadline itself only by a nanosecond's chance.
     'replace < with <= in Pipe::exited',
+    # Equivalent: a heartbeat is due once the clock reaches its time, and
+    # the clock lands on that time itself only by a nanosecond's chance.
+    "replace < with <= in Listening<'a>::beat",
     # No test can reach it: a read of a child's stderr is interrupted only
     # by a signal that lands while it blocks, which a test cannot time.
     'replace match guard error.kind\(\) == io::ErrorKind::Interrupted with (true|false) in Pipe::start',
     # The guard's is the only == in Pipe::start.
     'replace == with != in Pipe::start',
+    # No test can reach it: the exit code after the default handler fails
+    # to end the process. The handler ends it by the signal, so the code is
+    # never read.
+    'replace \+ with [-*] in on_signal',
+    # No test can reach it: the arm is for a process with no /proc to read
+    # the ignored signals from, and on Linux there always is one. Matched by
+    # its line and column, as the mask arm's `== 1` has the same text and a
+    # test kills that one; move this if the line does.
+    'forward\.rs:522:24: replace == with != in left_alone',
+    # No command reads a forwarded store's listeners: only the store's own
+    # trait carries the method (the dial route and `cases serve` answer it
+    # from the local store, which their own tests check).
+    'replace <impl Store for Forwarded>::listeners .* with Ok\(vec!\[\]\)',
 ]
