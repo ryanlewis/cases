@@ -881,6 +881,27 @@ impl Offline {
     }
 }
 
+/// Whether `error`, from a worker's listening write, is about that worker or
+/// the doing line given with it, which the store refused: the wait's other
+/// workers may still be recorded. Any other failure is the store's own, and
+/// would meet them too.
+fn about_the_worker(error: &Failure) -> bool {
+    use cases_store_remote::Error as RemoteError;
+    use cases_store_sqlite::Error as DbError;
+    let remote =
+        |error: &RemoteError| matches!(error, RemoteError::Invalid(_) | RemoteError::NotListening);
+    match error {
+        Failure::Local(error) => matches!(
+            error,
+            DbError::Unnamed | DbError::Doing(_) | DbError::NotListening { .. }
+        ),
+        Failure::Forward { error, .. } => remote(error),
+        #[cfg(feature = "remote")]
+        Failure::Remote { error, .. } => remote(error),
+        Failure::Named(_) => false,
+    }
+}
+
 /// Whether a wait with `args` listens for messages: it picks up and names a
 /// worker, and neither `--id` nor a `--kind` that leaves out messages scopes
 /// it to other cases.
@@ -939,7 +960,8 @@ impl<'a> Listening<'a> {
     /// the first read of a store that is there, and every [`HEARTBEAT`]
     /// after (ST-16). A store not there yet is tried again at the next read.
     /// A worker whose write fails is warned about once, the workers after it
-    /// are recorded still, and the next beat is a [`RETRY`] later. The record
+    /// are recorded still when the failure is about that worker alone, and
+    /// the next beat is a [`RETRY`] later. The record
     /// lapses when the wait stops refreshing it, whether it stops cleanly or
     /// not, so nothing is written when it ends.
     fn beat(&mut self, db: &AnyStore, warned: &mut HashSet<String>) {
@@ -976,6 +998,11 @@ impl<'a> Listening<'a> {
                         ctx::warn(message);
                     }
                     failed = true;
+                    // A failure of the store would meet each worker after
+                    // it, a timeout each on a store that does not answer.
+                    if !about_the_worker(&error) {
+                        break;
+                    }
                 }
             }
         }
@@ -1467,6 +1494,36 @@ mod tests {
         assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
         assert!(listening.due.is_some());
         assert!(warned.is_empty(), "{warned:?}");
+    }
+
+    /// A write that fails for the store, not for one worker, such as a file
+    /// that is not a store, ends the beat at the first worker: one write and
+    /// one warning, however many workers the wait has, rather than one each.
+    /// The beat tries them all again a [`RETRY`] later.
+    #[test]
+    fn a_store_that_fails_is_written_once_a_beat_whatever_the_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        std::fs::write(&path, "not a database, but a file of text").unwrap();
+        let clock = Arc::new(AtomicI64::new(100));
+        let db = clocked(&path, &clock);
+        let workers = ["ada".to_owned(), "bo".to_owned(), "cy".to_owned()];
+        let mut listening = listening(&workers, &[], Some("reading"));
+        let mut warned = HashSet::new();
+
+        listening.beat(&db, &mut warned);
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        let warning = warned.iter().next().unwrap().clone();
+        assert!(
+            warning.starts_with("ada is not recorded as listening: "),
+            "{warning}"
+        );
+        let due = listening.due.expect("a beat that failed sets the next");
+        assert!(due > Instant::now() + RETRY / 2, "{due:?}");
+
+        listening.due = Some(Instant::now());
+        listening.beat(&db, &mut warned);
+        assert_eq!(warned, HashSet::from([warning]));
     }
 
     /// A worker whose write fails is warned about once, however many beats
