@@ -317,6 +317,40 @@ enum Read {
 
 /// Reads one request.
 fn read(input: &mut impl BufRead) -> io::Result<Read> {
+    let head = match read_head(input)? {
+        Ok(head) => head,
+        Err(read) => return Ok(read),
+    };
+    let Ok(head) = String::from_utf8(head) else {
+        return Ok(Read::Bad("the request's head is not UTF-8"));
+    };
+    let mut lines = head.lines();
+    let Some((method, target, version)) = request_line(lines.next().unwrap_or_default()) else {
+        return Ok(Read::Bad("the request line is not one"));
+    };
+    let headers = match headers(lines, version == "HTTP/1.0") {
+        Ok(headers) => headers,
+        Err(why) => return Ok(Read::Bad(why)),
+    };
+    let Some(body) = read_body(input, headers.length)? else {
+        return Ok(Read::End);
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    Ok(Read::Request(Request {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query: pairs(query),
+        content_type: headers.content_type,
+        body,
+        close: headers.close,
+        agent: headers.agent,
+    }))
+}
+
+/// Reads a request's head, its request line and headers to the blank line
+/// that ends them, or what reading gave instead: the end of the input, or
+/// a head over [`HEAD_LIMIT`].
+fn read_head(input: &mut impl BufRead) -> io::Result<Result<Vec<u8>, Read>> {
     let mut head = Vec::new();
     loop {
         let mut line = Vec::new();
@@ -324,13 +358,13 @@ fn read(input: &mut impl BufRead) -> io::Result<Read> {
         let n = io::Read::take(&mut *input, u64::try_from(left).unwrap_or(u64::MAX))
             .read_until(b'\n', &mut line)?;
         if n == 0 {
-            return Ok(Read::End);
+            return Ok(Err(Read::End));
         }
         if !line.ends_with(b"\n") {
             if head.len() + line.len() > HEAD_LIMIT {
-                return Ok(Read::Bad("the request's head is over 64 KiB"));
+                return Ok(Err(Read::Bad("the request's head is over 64 KiB")));
             }
-            return Ok(Read::End);
+            return Ok(Err(Read::End));
         }
         // A blank line before the request line is skipped (RFC 9112, 2.2).
         if head.is_empty() && (line == b"\r\n" || line == b"\n") {
@@ -339,66 +373,83 @@ fn read(input: &mut impl BufRead) -> io::Result<Read> {
         let end = line == b"\r\n" || line == b"\n";
         head.extend_from_slice(&line);
         if end {
-            break;
+            return Ok(Ok(head));
         }
     }
-    let Ok(head) = String::from_utf8(head) else {
-        return Ok(Read::Bad("the request's head is not UTF-8"));
-    };
-    let mut lines = head.lines();
-    let mut first = lines.next().unwrap_or_default().split(' ');
+}
+
+/// The method, target and version of a request line, when it is one.
+fn request_line(line: &str) -> Option<(&str, &str, &str)> {
+    let mut first = line.split(' ');
     let (Some(method), Some(target), Some(version), None) =
         (first.next(), first.next(), first.next(), first.next())
     else {
-        return Ok(Read::Bad("the request line is not one"));
+        return None;
     };
     if method.is_empty() || !target.starts_with('/') || !version.starts_with("HTTP/1.") {
-        return Ok(Read::Bad("the request line is not one"));
+        return None;
     }
-    let mut length = 0;
-    let mut content_type = None;
-    let mut close = version == "HTTP/1.0";
-    let mut agent = None;
+    Some((method, target, version))
+}
+
+/// What a request's headers say of it.
+struct Headers {
+    length: usize,
+    content_type: Option<String>,
+    /// Whether the connection ends after the answer.
+    close: bool,
+    agent: Option<String>,
+}
+
+/// What the header `lines` say, the connection closing after the answer
+/// unless they say otherwise when `close`, or why they cannot be read.
+fn headers<'a>(lines: impl Iterator<Item = &'a str>, close: bool) -> Result<Headers, &'static str> {
+    let mut headers = Headers {
+        length: 0,
+        content_type: None,
+        close,
+        agent: None,
+    };
     for line in lines.filter(|line| !line.is_empty()) {
         let Some((name, value)) = line.split_once(':') else {
-            return Ok(Read::Bad("a header is not one"));
+            return Err("a header is not one");
         };
         let value = value.trim();
         if name.eq_ignore_ascii_case("content-length") {
-            match value.parse::<usize>() {
-                Ok(n) if n <= BODY_LIMIT => length = n,
-                Ok(_) => return Ok(Read::Bad("the body is over 1 MiB")),
-                Err(_) => return Ok(Read::Bad("the body's length is not one")),
-            }
+            headers.length = content_length(value)?;
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Ok(Read::Bad("a body is sent with its length"));
+            return Err("a body is sent with its length");
         } else if name.eq_ignore_ascii_case("content-type") {
-            content_type = Some(value.to_owned());
+            headers.content_type = Some(value.to_owned());
         } else if name.eq_ignore_ascii_case("user-agent") {
-            agent = Some(value.to_owned());
+            headers.agent = Some(value.to_owned());
         } else if name.eq_ignore_ascii_case("connection") {
-            close = value
+            headers.close = value
                 .split(',')
                 .any(|token| token.trim().eq_ignore_ascii_case("close"));
         }
     }
-    let mut body = vec![0; length];
-    if let Err(error) = input.read_exact(&mut body) {
-        return match error.kind() {
-            io::ErrorKind::UnexpectedEof => Ok(Read::End),
-            _ => Err(error),
-        };
+    Ok(headers)
+}
+
+/// The length a `Content-Length` header's `value` gives, at most
+/// [`BODY_LIMIT`], or why it gives none.
+fn content_length(value: &str) -> Result<usize, &'static str> {
+    match value.parse::<usize>() {
+        Ok(n) if n <= BODY_LIMIT => Ok(n),
+        Ok(_) => Err("the body is over 1 MiB"),
+        Err(_) => Err("the body's length is not one"),
     }
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    Ok(Read::Request(Request {
-        method: method.to_owned(),
-        path: path.to_owned(),
-        query: pairs(query),
-        content_type,
-        body,
-        close,
-        agent,
-    }))
+}
+
+/// The body of `length` bytes, or `None` when the input ends first.
+fn read_body(input: &mut impl BufRead, length: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut body = vec![0; length];
+    match input.read_exact(&mut body) {
+        Ok(()) => Ok(Some(body)),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// The pairs of a query, decoded.
@@ -669,97 +720,149 @@ fn key(text: &str) -> Result<Key, Answer> {
 /// The answer to a store route, `rest` being the path after `store/`.
 fn route(db: &Db, request: &Request, rest: &[&str], holds: Holds<'_>) -> Answer {
     let result = match (request.method.as_str(), rest) {
-        ("GET", ["cases"]) => Ok(list(db, request.query("since"))),
-        ("GET", ["cases", k]) => key(k).map(|k| match db.rows(&k) {
-            Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
-            Ok(None) => Answer::refuse(404, "nocase", "no such case"),
-            Err(error) => Answer::failed(&error),
-        }),
-        ("POST", ["cases"]) => body(request).and_then(|b| {
-            let (writer, append) = writer_append(&b)?;
-            Ok(match db.create_rows(&append, &writer) {
-                Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, "events"]) => key(k).and_then(|k| {
-            let b = body(request)?;
-            let (writer, append) = writer_append(&b)?;
-            let at = revision(&b)?;
-            Ok(match db.append_rows(&k, &append, &writer, at) {
-                Ok(rows) => Answer::ok(case_json(k, &rows)),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("POST", ["cases", k, what @ ("archive" | "delete")]) => key(k).and_then(|k| {
-            let at = revision(&body(request)?)?;
-            let done = if *what == "archive" {
-                db.archive(&k, at)
-            } else {
-                db.delete(&k, at)
-            };
-            Ok(match done {
-                Ok(()) => Answer::ok(json!({})),
-                Err(error) => refused(&error),
-            })
-        }),
-        ("GET", ["actors"]) => Ok(match db.actors() {
-            Ok(actors) => Answer::ok(json!({"list": actors
-                .iter()
-                .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        (method, ["cases", rest @ ..]) => cases_route(db, request, method, rest),
+        ("GET", ["actors"]) => Ok(actors(db)),
         ("GET", ["changes"]) => Ok(changes(db, request)),
-        ("GET", ["waits"]) => Ok(match db.waits() {
-            Ok(waits) => {
-                Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()}))
-            }
-            Err(error) => Answer::failed(&error),
-        }),
-        ("GET", ["listeners"]) => Ok(match db.listeners() {
-            Ok(listeners) => Answer::ok(json!({"list": listeners
-                .iter()
-                .map(listener_json)
-                .collect::<Vec<_>>()})),
-            Err(error) => Answer::failed(&error),
-        }),
+        ("GET", ["waits"]) => Ok(waits(db)),
+        ("GET", ["listeners"]) => Ok(listeners(db)),
         ("GET", ["inbox"]) => Ok(inbox(db)),
         ("POST", ["listen"]) => body(request).and_then(|b| listen(db, &b)),
-        ("POST", ["lock"]) => body(request).and_then(|b| match holds {
-            Holds::Connection(locks) => take_locks(db, &b, locks),
-            Holds::Leases(leases) => leases.take(db, &b),
-        }),
-        ("POST", ["lock", "renew"]) => Ok(match holds {
-            Holds::Connection(locks) => renew(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", "release"]) => Ok(match holds {
-            Holds::Connection(locks) => release(locks),
-            Holds::Leases(_) => no_connection(),
-        }),
-        ("POST", ["lock", id, "renew"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.renew(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("POST", ["lock", id, "release"]) => Ok(match holds {
-            Holds::Leases(leases) => leases.release(id),
-            Holds::Connection(_) => Answer::refuse(404, "request", "no such route"),
-        }),
-        ("PUT", ["doing", worker]) => body(request).and_then(|b| {
-            let text = text(&b, "text")?;
-            Ok(match db.set_doing(&decode(worker), text) {
-                Ok(()) => Answer::ok(json!({})),
-                Err(DbError::NotListening { .. }) => {
-                    Answer::refuse(404, "not-listening", "the worker is not listening")
-                }
-                Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
-                Err(error) => Answer::failed(&error),
-            })
-        }),
-        _ => Ok(Answer::refuse(404, "request", "no such route")),
+        ("POST", ["lock", rest @ ..]) => lock_route(db, request, rest, holds),
+        ("PUT", ["doing", worker]) => body(request).and_then(|b| doing(db, worker, &b)),
+        _ => Ok(no_route()),
     };
     result.unwrap_or_else(|answer| answer)
+}
+
+/// The refusal of a path that is not one of the store routes.
+fn no_route() -> Answer {
+    Answer::refuse(404, "request", "no such route")
+}
+
+/// `store/cases…`, `rest` being the path after `cases`: the cases read,
+/// a case read or made, and a case's event, archive or delete.
+fn cases_route(db: &Db, request: &Request, method: &str, rest: &[&str]) -> Result<Answer, Answer> {
+    match (method, rest) {
+        ("GET", []) => Ok(list(db, request.query("since"))),
+        ("GET", [k]) => key(k).map(|k| case(db, k)),
+        ("POST", []) => body(request).and_then(|b| create(db, &b)),
+        ("POST", [k, "events"]) => key(k).and_then(|k| append(db, request, k)),
+        ("POST", [k, what @ ("archive" | "delete")]) => {
+            key(k).and_then(|k| remove(db, request, k, *what == "archive"))
+        }
+        _ => Ok(no_route()),
+    }
+}
+
+/// `GET store/cases/<k>`: the case's rows.
+fn case(db: &Db, k: Key) -> Answer {
+    match db.rows(&k) {
+        Ok(Some(rows)) => Answer::ok(case_json(k, &rows)),
+        Ok(None) => Answer::refuse(404, "nocase", "no such case"),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/cases` `{writer, append}`: a new case, with its rows.
+fn create(db: &Db, body: &Value) -> Result<Answer, Answer> {
+    let (writer, append) = writer_append(body)?;
+    Ok(match db.create_rows(&append, &writer) {
+        Ok((k, rows)) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/events` `{writer, append, revision}`: the case's
+/// rows with the event appended.
+fn append(db: &Db, request: &Request, k: Key) -> Result<Answer, Answer> {
+    let b = body(request)?;
+    let (writer, append) = writer_append(&b)?;
+    let at = revision(&b)?;
+    Ok(match db.append_rows(&k, &append, &writer, at) {
+        Ok(rows) => Answer::ok(case_json(k, &rows)),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `POST store/cases/<k>/archive` or `…/delete` `{revision}`: the case
+/// moved into the archive, or removed.
+fn remove(db: &Db, request: &Request, k: Key, archive: bool) -> Result<Answer, Answer> {
+    let at = revision(&body(request)?)?;
+    let done = if archive {
+        db.archive(&k, at)
+    } else {
+        db.delete(&k, at)
+    };
+    Ok(match done {
+        Ok(()) => Answer::ok(json!({})),
+        Err(error) => refused(&error),
+    })
+}
+
+/// `GET store/actors`: `{list}`, the store's actors.
+fn actors(db: &Db) -> Answer {
+    match db.actors() {
+        Ok(actors) => Answer::ok(json!({"list": actors
+            .iter()
+            .map(|a| json!({"id": a.id, "kind": a.kind, "name": a.name, "created": a.created}))
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/waits`: `{list}`, the waits listening now.
+fn waits(db: &Db) -> Answer {
+    match db.waits() {
+        Ok(waits) => Answer::ok(json!({"list": waits.iter().map(wait_json).collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `GET store/listeners`: `{list}`, the workers listening now.
+fn listeners(db: &Db) -> Answer {
+    match db.listeners() {
+        Ok(listeners) => Answer::ok(json!({"list": listeners
+            .iter()
+            .map(listener_json)
+            .collect::<Vec<_>>()})),
+        Err(error) => Answer::failed(&error),
+    }
+}
+
+/// `POST store/lock…`, `rest` being the path after `lock`: a pickup
+/// wait's locks taken, renewed or let go, on the connection over a pipe
+/// and by id over HTTP. A route of the other is no route, or refused.
+fn lock_route(
+    db: &Db,
+    request: &Request,
+    rest: &[&str],
+    holds: Holds<'_>,
+) -> Result<Answer, Answer> {
+    Ok(match (rest, holds) {
+        ([], Holds::Connection(locks)) => {
+            return body(request).and_then(|b| take_locks(db, &b, locks));
+        }
+        ([], Holds::Leases(leases)) => return body(request).and_then(|b| leases.take(db, &b)),
+        (["renew"], Holds::Connection(locks)) => renew(locks),
+        (["release"], Holds::Connection(locks)) => release(locks),
+        (["renew" | "release"], Holds::Leases(_)) => no_connection(),
+        ([id, "renew"], Holds::Leases(leases)) => leases.renew(id),
+        ([id, "release"], Holds::Leases(leases)) => leases.release(id),
+        _ => no_route(),
+    })
+}
+
+/// `PUT store/doing/<worker>` `{text}`: the worker's doing line set.
+fn doing(db: &Db, worker: &str, body: &Value) -> Result<Answer, Answer> {
+    let text = text(body, "text")?;
+    Ok(match db.set_doing(&decode(worker), text) {
+        Ok(()) => Answer::ok(json!({})),
+        Err(DbError::NotListening { .. }) => {
+            Answer::refuse(404, "not-listening", "the worker is not listening")
+        }
+        Err(DbError::Doing(why)) => Answer::refuse(400, "request", &why),
+        Err(error) => Answer::failed(&error),
+    })
 }
 
 /// `GET store/inbox`: `{link}`, the link of the inbox a serve on this
@@ -826,31 +929,9 @@ fn listener_json(l: &cases_core::Listening) -> Value {
 /// takes none, as a local one does not. One that another wait holds is
 /// refused, 409 `held`, naming that wait.
 fn take_locks(db: &Db, body: &Value, locks: &Locks) -> Result<Answer, Answer> {
-    let not_locks = || Answer::refuse(400, "request", "the body is not a list of locks");
-    let scopes = body["locks"]
-        .as_array()
-        .ok_or_else(not_locks)?
-        .iter()
-        .map(|item| {
-            let on = item["on"]
-                .as_str()
-                .and_then(lock::what)
-                .ok_or_else(not_locks)?;
-            let text = item["text"].as_str().ok_or_else(not_locks)?;
-            Ok((on, text.to_owned()))
-        })
-        .collect::<Result<Vec<lock::Scope>, Answer>>()?;
-    let flag = |name: &str| match &body[name] {
-        Value::Null => Ok(false),
-        Value::Bool(flag) => Ok(*flag),
-        _ => Err(Answer::refuse(
-            400,
-            "request",
-            &format!("the {name} is not true or false"),
-        )),
-    };
-    let lease = flag("lease")?;
-    let releases = flag("release")?;
+    let scopes = lock_scopes(body)?;
+    let lease = flag(body, "lease")?;
+    let releases = flag(body, "release")?;
     let answer = |taken: &mut Taken| {
         if !lease {
             return Answer::ok(json!({}));
@@ -873,6 +954,39 @@ fn take_locks(db: &Db, body: &Value, locks: &Locks) -> Result<Answer, Answer> {
         Err(lock::Refusal::Held(error)) => Answer::refuse(409, "held", &error.to_string()),
         Err(lock::Refusal::Failed(error)) => Answer::refuse(500, "store", &error.to_string()),
     })
+}
+
+/// The locks of a `POST store/lock` body, `{locks: [{on, text}]}`, or the
+/// refusal of one that is not a list of them.
+fn lock_scopes(body: &Value) -> Result<Vec<lock::Scope>, Answer> {
+    let not_locks = || Answer::refuse(400, "request", "the body is not a list of locks");
+    body["locks"]
+        .as_array()
+        .ok_or_else(not_locks)?
+        .iter()
+        .map(|item| {
+            let on = item["on"]
+                .as_str()
+                .and_then(lock::what)
+                .ok_or_else(not_locks)?;
+            let text = item["text"].as_str().ok_or_else(not_locks)?;
+            Ok((on, text.to_owned()))
+        })
+        .collect()
+}
+
+/// A true-or-false field of `body`, false when it is not there, or the
+/// refusal of one that is neither.
+fn flag(body: &Value, name: &str) -> Result<bool, Answer> {
+    match &body[name] {
+        Value::Null => Ok(false),
+        Value::Bool(flag) => Ok(*flag),
+        _ => Err(Answer::refuse(
+            400,
+            "request",
+            &format!("the {name} is not true or false"),
+        )),
+    }
 }
 
 /// `POST store/lock/renew`: renews the lease of the locks this connection
@@ -1156,6 +1270,11 @@ mod tests {
         ] {
             assert_eq!(request(text), Read::End, "{text:?}");
         }
+        // One that ends with its head at the limit exactly, part-way
+        // through a line, ended: it was not over the limit.
+        let at_limit = format!("GET / HTTP/1.1\r\nX: {}", "a".repeat(HEAD_LIMIT - 19));
+        assert_eq!(at_limit.len(), HEAD_LIMIT);
+        assert_eq!(request(&at_limit), Read::End);
     }
 
     #[test]
