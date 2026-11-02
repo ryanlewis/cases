@@ -199,13 +199,13 @@ function leftOutBefore(c: Case, seq: number): string[] {
 }
 
 // What answer `data` of case `c` said, as lines of text: the same lines the
-// thread gives it, less who answered. A briefing's filed items are named
+// thread gives it, less who answered. An answer with no data says nothing. A briefing's filed items are named
 // from the left-out items the answer saw, as the thread names them.
 export function answered(c: Case, data: EventData): string[] {
   const lines: string[] = [];
   const event = (c.events || []).find((e) => e.data === data);
   const items = event ? leftOutBefore(c, event.seq) : c.left_out || [];
-  answer(c, data, (text) => lines.push(...String(text).trim().split("\n")), items);
+  answer(c, data || {}, (text) => lines.push(...String(text).trim().split("\n")), items);
   return lines;
 }
 

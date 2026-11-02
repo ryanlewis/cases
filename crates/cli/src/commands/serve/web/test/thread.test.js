@@ -291,6 +291,10 @@ test("answered says an answer's lines as the thread does, from the list it saw",
   assert.deepEqual(answered(nodata, nodata.events[1].data), ["file 1."]);
   const amended = make("briefing", [["open", { left_out: ["a"] }], ["amend", null], ["answer", { file: [1] }]]);
   assert.deepEqual(answered(amended, amended.events[2].data), ["file 1. a"]);
+  // So is an answer with no data of its own: it says nothing.
+  const blank = make("briefing", [["open", { left_out: ["a"] }], ["answer", null]]);
+  assert.deepEqual(texts(blank)[1], []);
+  assert.deepEqual(answered(blank, blank.events[1].data), []);
   // An open with no left-out items gives an empty list.
   const bare = make("briefing", [["open", {}], ["answer", { file: [1] }]]);
   assert.deepEqual(answered(bare, bare.events[1].data), ["file 1."]);
