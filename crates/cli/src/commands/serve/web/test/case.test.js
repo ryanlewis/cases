@@ -603,3 +603,20 @@ test("an open or amend whose body is the case's (body_in_case) is read from the 
   const said = thread(c).map(({ lines }) => lines.filter((l) => l.text === "replaced the body").map((l) => l.previous));
   assert.deepEqual(said, [[], [{ body: "A" }], [{ body: "B" }]]);
 });
+
+// An event whose record has no data reads as one with none of its fields,
+// as the thread reads it, and leaves the page drawn.
+test("a follow-up whose pickup or note has no data still draws, naming the pickup's actor", () => {
+  const page = draw(decision("open", open, answer, { ...pickup, data: null }, note));
+  assert.ok(at(page, "your previous answer") < at(page, "picked up by gift-agent"), page);
+  const blank = { ...note, data: null };
+  const noted = draw(decision("open", open, answer, pickup, blank));
+  assert.ok(at(noted, "new since your answer") < at(noted, "your previous answer"), noted);
+});
+
+test("a withdrawn message whose withdraw has no data says who withdrew it, and no reason", () => {
+  const withdrawEvent = { seq: 3, author: "human", event: "withdraw", file: "", at: "2026-09-25T13:50:00Z", actor: human, data: null };
+  const page = drawWith(message("withdrawn", sentEvent, pickupEvent, withdrawEvent));
+  assert.ok(page.includes('<p class="taken withdrawn">withdrawn by <strong>ryan</strong>, '), page);
+  assert.ok(!page.includes('class="reason"'), page);
+});
