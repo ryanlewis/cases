@@ -662,38 +662,85 @@ mod tests {
 
     #[test]
     fn an_answer_s_head_is_read_strictly() {
-        for bad in [
+        let (status, header, length) = (
+            "the answer's status line is not one",
+            "the answer's header is not one",
+            "the answer's length is not one",
+        );
+        for (bad, why) in [
             // The version is 1.0 or 1.1, as it is written.
-            &b"HTTP/1.x 200 OK\r\nContent-Length: 0\r\n\r\n"[..],
-            b"HTTP/1. 200 OK\r\nContent-Length: 0\r\n\r\n",
-            b"HTTP/1.10 200 OK\r\nContent-Length: 0\r\n\r\n",
+            (&b"HTTP/1.x 200 OK\r\nContent-Length: 0\r\n\r\n"[..], status),
+            (b"HTTP/1. 200 OK\r\nContent-Length: 0\r\n\r\n", status),
+            (b"HTTP/1.10 200 OK\r\nContent-Length: 0\r\n\r\n", status),
             // A name is a token: not a line that goes on from the last
             // (RFC 9112, 5.2), nor one with space before it or its colon.
-            b"HTTP/1.1 200 OK\r\nX: a\r\n Content-Length: 5\r\n\r\nhello",
-            b"HTTP/1.1 200 OK\r\nX: a\r\n\tContent-Length: 5\r\n\r\nhello",
-            b"HTTP/1.1 200 OK\r\n Content-Length: 2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\nContent-Length : 2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\n:x\r\nContent-Length: 0\r\n\r\n",
-            b"HTTP/1.1 200 OK\r\na b: 1\r\nContent-Length: 0\r\n\r\n",
+            // Each has a length of its own as well, so that it is refused
+            // for its name and not for want of one.
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n Content-Length: 5\r\n\r\nhello",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\tContent-Length: 5\r\n\r\nhello",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\n X: a\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nX : a\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\n:x\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\na b: 1\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
             // A line with no colon is no header.
-            b"HTTP/1.1 200 OK\r\njunk\r\nContent-Length: 0\r\n\r\n",
+            (
+                b"HTTP/1.1 200 OK\r\njunk\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
             // One length, of digits alone (RFC 9112, 6.3), with spaces and
             // tabs alone around it.
-            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ncontent-length: 2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\nContent-Length: +2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2, 2\r\n\r\n{}",
-            b"HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n",
-            b"HTTP/1.1 200 OK\r\nContent-Length: \x0b2\r\n\r\n{}",
-            "HTTP/1.1 200 OK\r\nContent-Length: \u{3000}2\r\n\r\n{}".as_bytes(),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
+                length,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ncontent-length: 2\r\n\r\n{}",
+                length,
+            ),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: +2\r\n\r\n{}", length),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 2, 2\r\n\r\n{}", length),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n", length),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: \x0b2\r\n\r\n{}",
+                length,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: \u{3000}2\r\n\r\n{}".as_bytes(),
+                length,
+            ),
         ] {
             match answer_in(bad, 10) {
                 Err(ureq::Error::Io(error)) => {
                     assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+                    assert_eq!(error.to_string(), why, "{:?}", String::from_utf8_lossy(bad));
                 }
                 other => panic!("{:?}: {other:?}", String::from_utf8_lossy(bad)),
             }
         }
+        // A length too long for a u64 is over the limit.
+        let huge = b"HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999999\r\n\r\n";
+        assert!(matches!(
+            answer_in(huge, 10),
+            Err(ureq::Error::BodyExceedsLimit(10))
+        ));
         // HTTP/1.0, a name of every character a token may hold, and spaces
         // and tabs around a length, are taken.
         let fine = b"HTTP/1.0 200 OK\r\nX-a_1.2~!#$%&'*+^`|: v\r\nContent-Length: \t2 \r\n\r\n{}";
