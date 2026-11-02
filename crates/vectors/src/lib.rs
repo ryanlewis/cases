@@ -113,37 +113,9 @@ pub fn load_all() -> Result<Vec<(String, Vec<Vector>)>, Vec<String>> {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let read = fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| serde_json::from_str::<Vec<Vector>>(&text).map_err(|e| e.to_string()));
-        match read {
+        match read(&path) {
             Ok(vectors) => {
-                let mut seen = BTreeSet::new();
-                for vector in &vectors {
-                    if !seen.insert(vector.description.clone()) {
-                        errors.push(format!("{name}.json: {:?} twice", vector.description));
-                    }
-                    // A case or a version is named once in a vector.
-                    let mut named = BTreeSet::new();
-                    for (i, step) in vector.steps.iter().enumerate() {
-                        let names = [
-                            step.name.as_ref().map(|n| ("case", n)),
-                            step.version.as_ref().map(|n| ("version", n)),
-                        ];
-                        let twice = names.into_iter().flatten().find(|n| !named.insert(*n));
-                        let checked = match twice {
-                            Some((what, n)) => Err(format!("the {what} {n:?} is named twice")),
-                            None => step.action().map(drop),
-                        };
-                        if let Err(why) = checked {
-                            errors.push(format!(
-                                "{name}.json: {:?}, step {}: {why}",
-                                vector.description,
-                                i + 1
-                            ));
-                        }
-                    }
-                }
+                errors.extend(check_file(&name, &vectors));
                 files.push((name, vectors));
             }
             Err(why) => errors.push(format!("{name}.json: {why}")),
@@ -154,6 +126,54 @@ pub fn load_all() -> Result<Vec<(String, Vec<Vector>)>, Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+/// The vectors in the file at `path`, or why they do not read.
+fn read(path: &Path) -> Result<Vec<Vector>, String> {
+    fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str::<Vec<Vector>>(&text).map_err(|e| e.to_string()))
+}
+
+/// What is wrong with the vectors of the file `name`, in order: a
+/// description given twice, then what is wrong with each vector's steps.
+fn check_file(name: &str, vectors: &[Vector]) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut seen = BTreeSet::new();
+    for vector in vectors {
+        if !seen.insert(vector.description.clone()) {
+            errors.push(format!("{name}.json: {:?} twice", vector.description));
+        }
+        errors.extend(check_steps(name, vector));
+    }
+    errors
+}
+
+/// What is wrong with a vector's steps: a case or a version named twice,
+/// or a step that is not one.
+fn check_steps(name: &str, vector: &Vector) -> Vec<String> {
+    let mut errors = Vec::new();
+    // A case or a version is named once in a vector.
+    let mut named = BTreeSet::new();
+    for (i, step) in vector.steps.iter().enumerate() {
+        let names = [
+            step.name.as_ref().map(|n| ("case", n)),
+            step.version.as_ref().map(|n| ("version", n)),
+        ];
+        let twice = names.into_iter().flatten().find(|n| !named.insert(*n));
+        let checked = match twice {
+            Some((what, n)) => Err(format!("the {what} {n:?} is named twice")),
+            None => step.action().map(drop),
+        };
+        if let Err(why) = checked {
+            errors.push(format!(
+                "{name}.json: {:?}, step {}: {why}",
+                vector.description,
+                i + 1
+            ));
+        }
+    }
+    errors
 }
 
 /// A store vector: steps run in order against one new store.
@@ -446,6 +466,11 @@ impl Names {
         self.versions
             .get(name)
             .ok_or_else(|| format!("no version named {name:?}").into())
+    }
+
+    /// The names of `cases`, in order.
+    fn of(&self, cases: &[(Key, Vec<cases_core::Row>)]) -> Vec<String> {
+        cases.iter().map(|(key, _)| self.name_of(*key)).collect()
     }
 
     /// The name of the case `key`.
@@ -782,18 +807,7 @@ fn check_changes<S: Store<Key = Key, Writer = Writer>>(
 where
     S::Error: Display,
 {
-    let named = |cases: &[(Key, Vec<cases_core::Row>)]| -> Vec<String> {
-        cases.iter().map(|(key, _)| names.name_of(*key)).collect()
-    };
-    // Every case given is as the store gives it now.
-    for (key, rows) in changes.cases() {
-        let now = store
-            .rows(key)
-            .map_err(|e| format!("the store failed: {e}"))?;
-        if now.as_ref() != Some(rows) {
-            return Err(format!("{}'s rows are not the store's", names.name_of(*key)).into());
-        }
-    }
+    check_rows(store, names, changes)?;
     let version = store
         .version()
         .map_err(|e| format!("the store failed: {e}"))?;
@@ -808,53 +822,92 @@ where
         return Err("with no version, the answer is every case".into());
     }
     match changes {
-        // Nothing changed only when the store is still at the version asked
-        // about.
-        Changes::Unchanged { .. } if since != Some(&version) => {
-            Err(format!("nothing changed, but the version moved to {version}").into())
-        }
-        Changes::Unchanged { .. } if !want.changed.is_empty() || !want.removed.is_empty() => {
-            Err(format!(
-                "nothing changed, want {:?} changed and {:?} removed",
-                want.changed, want.removed
-            )
-            .into())
-        }
-        Changes::Since { cases, removed, .. } => {
-            let got = named(cases);
-            if got != want.changed {
-                return Err(format!("{got:?} changed, want {:?}", want.changed).into());
-            }
-            // A store never gives a key twice.
-            let keys: BTreeSet<Key> = removed.iter().copied().collect();
-            if keys.len() != removed.len() || cases.iter().any(|(key, _)| keys.contains(key)) {
-                return Err("a key is given twice".into());
-            }
-            let removed: BTreeSet<String> = removed.iter().map(|k| names.name_of(*k)).collect();
-            let must: BTreeSet<String> = want.removed.iter().cloned().collect();
-            let may: BTreeSet<String> = must
-                .union(&want.removed_may.iter().cloned().collect())
-                .cloned()
-                .collect();
-            if !must.is_subset(&removed) || !removed.is_subset(&may) {
-                return Err(format!(
-                    "{removed:?} removed, want {must:?}, with {:?} allowed",
-                    want.removed_may
-                )
-                .into());
-            }
-            Ok(())
-        }
+        Changes::Unchanged { .. } => check_unchanged(since, &version, want),
+        Changes::Since { cases, removed, .. } => check_since(names, cases, removed, want),
         Changes::All { cases, .. } => {
-            let got = named(cases);
+            let got = names.of(cases);
             if got == want.live {
                 Ok(())
             } else {
                 Err(format!("every case is {got:?}, want {:?}", want.live).into())
             }
         }
-        Changes::Unchanged { .. } => Ok(()),
     }
+}
+
+/// Checks an answer that nothing changed since the version `since`.
+fn check_unchanged(
+    since: Option<&Version>,
+    version: &Version,
+    want: &ChangesWant,
+) -> Result<(), Failed> {
+    // Nothing changed only when the store is still at the version asked
+    // about.
+    if since != Some(version) {
+        Err(format!("nothing changed, but the version moved to {version}").into())
+    } else if !want.changed.is_empty() || !want.removed.is_empty() {
+        Err(format!(
+            "nothing changed, want {:?} changed and {:?} removed",
+            want.changed, want.removed
+        )
+        .into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Checks that every case an answer of `rows_since` gives is as the store
+/// gives it now.
+fn check_rows<S: Store<Key = Key, Writer = Writer>>(
+    store: &S,
+    names: &Names,
+    changes: &Changes<Key>,
+) -> Result<(), Failed>
+where
+    S::Error: Display,
+{
+    for (key, rows) in changes.cases() {
+        let now = store
+            .rows(key)
+            .map_err(|e| format!("the store failed: {e}"))?;
+        if now.as_ref() != Some(rows) {
+            return Err(format!("{}'s rows are not the store's", names.name_of(*key)).into());
+        }
+    }
+    Ok(())
+}
+
+/// Checks the cases an answer of what changed gives as changed and as
+/// removed against what the step expects.
+fn check_since(
+    names: &Names,
+    cases: &[(Key, Vec<cases_core::Row>)],
+    removed: &[Key],
+    want: &ChangesWant,
+) -> Result<(), Failed> {
+    let got = names.of(cases);
+    if got != want.changed {
+        return Err(format!("{got:?} changed, want {:?}", want.changed).into());
+    }
+    // A store never gives a key twice.
+    let keys: BTreeSet<Key> = removed.iter().copied().collect();
+    if keys.len() != removed.len() || cases.iter().any(|(key, _)| keys.contains(key)) {
+        return Err("a key is given twice".into());
+    }
+    let removed: BTreeSet<String> = removed.iter().map(|k| names.name_of(*k)).collect();
+    let must: BTreeSet<String> = want.removed.iter().cloned().collect();
+    let may: BTreeSet<String> = must
+        .union(&want.removed_may.iter().cloned().collect())
+        .cloned()
+        .collect();
+    if !must.is_subset(&removed) || !removed.is_subset(&may) {
+        return Err(format!(
+            "{removed:?} removed, want {must:?}, with {:?} allowed",
+            want.removed_may
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Checks the workers listening now, and that the waits listening now are
