@@ -59,7 +59,7 @@ export function thread(c: Case): Said[] {
     // A pickup whose `by` names its actor says so once.
     if (name && !(event.event === "pickup" && data.by === name)) add(`by ${name}`);
     reopened(event, seen, add);
-    const markdown = say[event.event]?.(c, event, data, seen, add) || "";
+    const markdown = say.get(event.event)?.(c, event, data, seen, add) || "";
     return { event, lines, markdown };
   });
 }
@@ -95,25 +95,25 @@ function reopened(event: Event, seen: Seen, add: Add): void {
 // its markdown: a note's body or a close's outcome. An event left out says
 // nothing of its own.
 type Say = (c: Case, event: Event, data: EventData, seen: Seen, add: Add) => string | void;
-const say: Partial<Record<Event["event"], Say>> = {
-  open: opened,
-  amend: amended,
-  answer: (c, _event, data, seen, add) => answer(c, data, add, seen.leftOut),
-  pickup: (_c, _event, data, _seen, add) => {
+const say = new Map<Event["event"], Say>([
+  ["open", opened],
+  ["amend", amended],
+  ["answer", (c, _event, data, seen, add) => answer(c, data, add, seen.leftOut)],
+  ["pickup", (_c, _event, data, _seen, add) => {
     if (data.by) add(`by ${data.by}`);
-  },
-  note: (_c, _event, data) => data.body || "",
-  close: (_c, _event, data, _seen, add) => {
+  }],
+  ["note", (_c, _event, data) => data.body || ""],
+  ["close", (_c, _event, data, _seen, add) => {
     for (const link of data.links || []) add(link);
     return data.outcome || "";
-  },
-  withdraw: (_c, _event, data, _seen, add) => {
+  }],
+  ["withdraw", (_c, _event, data, _seen, add) => {
     if (data.reason) add(`reason: ${data.reason}`);
-  },
-  park: (_c, _event, data, _seen, add) => {
+  }],
+  ["park", (_c, _event, data, _seen, add) => {
     if (data.note) add(`note: ${data.note}`);
-  },
-};
+  }],
+]);
 
 // An open: what it set, and for a message who it went to, its worker then
 // its labels.
