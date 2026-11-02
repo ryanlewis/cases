@@ -1107,6 +1107,47 @@ fn a_remote_wait_rides_out_a_503_after_its_first_read() {
     );
 }
 
+/// A read of the store that fails after the first, once a held poll has
+/// said it changed, is ridden out too: the wait says so once, reads again,
+/// and wakes on the answer.
+#[test]
+fn a_remote_wait_rides_out_a_503_on_a_read_after_its_first() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Read through an outage");
+    // The first read and the first held poll, then the read it wakes to
+    // and both its retries.
+    r.fake.fault(PASS);
+    r.fake.fault(PASS);
+    for _ in 0..3 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let wait = r.wait(&["--id", &id, "--timeout", "60s"]);
+    assert!(soon(Duration::from_secs(20), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&id),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(json(out.stdout.lines().next().unwrap())["id"], id.as_str());
+    assert_eq!(
+        out.stderr,
+        "warning: the server failed (503): the fake failed; the wait goes on, trying again \
+         until the timeout\n"
+    );
+}
+
 /// A wait whose first read fails fails at once, even for a failure it
 /// would ride out later, so that a wrong store is not waited on.
 #[test]
@@ -1152,6 +1193,45 @@ fn a_remote_wait_does_not_overshoot_on_a_429() {
         1,
         "{out:?}"
     );
+}
+
+/// A steady wait on a remote store with a case still open holds its poll
+/// no longer than its quiet time, and prints once that passes with no
+/// event new to it, well before its timeout (AG-18).
+#[test]
+fn a_steady_remote_wait_prints_at_the_end_of_its_quiet_time() {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    let wait = r.wait(&[
+        "--id",
+        &answered,
+        "--id",
+        &left,
+        "--mood",
+        "steady",
+        "--timeout",
+        "40s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let start = Instant::now();
+    r.ok(&["--store", &r.ids[0], "answer", &answered, "--ack"]);
+    // The holds sent before the answer landed, the last of which it ends.
+    let before = holds(&r.fake).len();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let took = start.elapsed();
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+    // Its quiet time is 10 s, from the read that found the answer.
+    assert!(
+        took >= Duration::from_secs(9) && took < Duration::from_secs(16),
+        "{took:?}"
+    );
+    // The holds after the answer are cut to the quiet time left.
+    let holds = holds(&r.fake);
+    assert!(holds[before..].iter().all(|&secs| secs <= 10), "{holds:?}");
 }
 
 /// A steady wait on a remote store holds the poll while it collects, and
