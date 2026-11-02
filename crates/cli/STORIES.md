@@ -353,7 +353,7 @@ Tally: 419 criteria, 349 covered, 61 by hand, 7 gap, 0 question, 2 n/a.
 
 ## IN-09 Use the keyboard (keep)
 
-- Cmd/Ctrl+Enter sends from anywhere but a link; once, with a 10 s guard: `crates/cli/src/commands/serve/page.rs::tests::the_keys_find_what_the_page_draws`; by hand — in a browser
+- Cmd/Ctrl+Enter sends from anywhere but a link; once, with a 10 s guard: `crates/cli/src/commands/serve/page.rs::tests::the_keys_find_what_the_page_draws`, `crates/cli/src/commands/serve/web/test/send.test.js "a send slower than the guard's 10 s does not release the guard of the send after it"`; by hand — in a browser
 - 1–9 choose an option on decision, signoff, stuck; the next number is "other": by hand — in a browser
 - 1, 2, 3 approve, hold or don't run an approval's current row (the focused row, else the first with no verdict), then focus the next row with none: `crates/cli/src/commands/serve/web/test/keys.test.js "the number keys set the approval row with the focus, else the first with no verdict"`, `"after a verdict the focus goes to the next row with none, or stays"`; by hand
 - n goes to the open case's note to the agent (comment on a sign-off), shown by the field and in the properties: `crates/cli/src/commands/serve/web/test/case.test.js "the note to the agent shows the n key that goes to it, which the field names, and the properties list it"`; by hand

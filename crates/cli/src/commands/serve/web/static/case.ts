@@ -221,7 +221,7 @@ export function CaseView({
 }) {
   const [refusal, setRefusal] = useState("");
   const [drawn, setDrawn] = useState(() => drawnFrom(c));
-  const sending = useRef(false);
+  const sending = useRef<object | null>(null);
   useLift();
 
   // The form follows the case as `redrawn` says.
@@ -264,24 +264,30 @@ ${c.kind !== "message" && html`<${Thread} c=${c} now=${now} />`}
 
 // What a send of case `id` needs from the view that sends it: the form as
 // drawn, and how to say what came of it.
-interface Sending {
+export interface Sending {
   id: string;
   what: Sends;
   body: Body;
   drawn: Drawn;
   setDrawn: (next: Drawn | ((was: Drawn) => Drawn)) => void;
   setRefusal: (refusal: string) => void;
-  sending: { current: boolean };
+  sending: { current: object | null };
   onSent: (what: Sends, after: Case) => void;
   onCase: (current: Case) => void;
 }
 
 // Sends `what` of `body`, once: a send while one is out does nothing,
-// until it is answered or 10 s have passed (IN-09).
-async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase }: Sending): Promise<void> {
+// until it is answered or 10 s have passed (IN-09). `sending` holds the
+// send that is out, and only that send lets it go: one slower than 10 s
+// does not, when it comes back, let go of the send that went after it.
+export async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase }: Sending): Promise<void> {
   if (sending.current) return;
-  sending.current = true;
-  const release = setTimeout(() => (sending.current = false), 10000);
+  const self = {};
+  sending.current = self;
+  const done = () => {
+    if (sending.current === self) sending.current = null;
+  };
+  const release = setTimeout(done, 10000);
   const sent: Write = { revision: drawn.revision, ...body };
   if (what === "answer") sent.answer = { ...body.answer, amend_seq: drawn.amendSeq };
   try {
@@ -298,14 +304,15 @@ async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, 
     }
     setRefusal(refusal);
     // The case as it is now: the form, which keeps what was typed, takes
-    // its revision, as it has now been shown (IN-05).
+    // its revision, as it has now been shown (IN-05), unless a later write
+    // or redraw has already moved it past that case.
     if (current) {
-      setDrawn(drawnFrom(current));
+      setDrawn((was) => (current.revision >= was.revision ? drawnFrom(current) : was));
       onCase(current);
     }
   } finally {
     clearTimeout(release);
-    sending.current = false;
+    done();
   }
 }
 
