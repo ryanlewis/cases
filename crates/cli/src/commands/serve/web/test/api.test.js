@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { listeners, send, upgrade } from "../static/api.ts";
+import * as api from "../static/api.ts";
 
 test("a page reloads for another build of serve, or says so when something typed would be lost", () => {
   assert.equal(upgrade("0.0.0+aa", "0.0.0+aa", false), "same");
@@ -81,4 +82,30 @@ test("a send refused for a token from before serve restarted is sent once more",
   assert.deepEqual(sent.after, mine);
   assert.equal(posts, 2);
   assert.ok(calls.filter((c) => c === "GET /v1").length >= 1, "the token is read again");
+});
+
+// A case as serve sends it with an event stored with no data.
+const served = (revision = 2) => ({
+  id: "c1Ab2", kind: "decision", state: "open", title: "T", revision, amend_seq: 0, last_seq: 2,
+  events: [{ seq: 1, author: "agent", event: "open", file: "", data: null }, { seq: 2, author: "human", event: "answer", file: "", data: { choice: 1 } }],
+});
+const datas = (c) => c.events.map((e) => e.data);
+
+test("a case read, written or refused comes out with empty data on each event serve sent with none", async (t) => {
+  const was = globalThis.fetch;
+  t.after(() => { globalThis.fetch = was; });
+  let reply;
+  globalThis.fetch = async (url) => (url === "/v1" ? new Response(JSON.stringify({ csrf: "tok" }), { status: 200 }) : reply());
+  reply = () => new Response(JSON.stringify({ list: [served()] }), { status: 200 });
+  assert.deepEqual((await api.list(["open"])).map(datas), [[{}, { choice: 1 }]]);
+  reply = () => new Response(JSON.stringify(served()), { status: 200 });
+  assert.deepEqual(datas((await api.one("c1Ab2")).body), [{}, { choice: 1 }]);
+  assert.deepEqual(datas((await api.send("c1Ab2", "park", { revision: 2 })).after), [{}, { choice: 1 }]);
+  reply = () => new Response(JSON.stringify({ error: { category: "stale", message: "stale", case: served(3) } }), { status: 409 });
+  assert.deepEqual(datas((await api.send("c1Ab2", "park", { revision: 2 })).current), [{}, { choice: 1 }]);
+  // A refusal without a case, and a case without events, are as they were.
+  reply = () => new Response(JSON.stringify({ error: { category: "store", message: "no" } }), { status: 500 });
+  assert.equal((await api.send("c1Ab2", "park", { revision: 2 })).current, undefined);
+  reply = () => new Response(JSON.stringify({ ...served(), events: undefined }), { status: 200 });
+  assert.equal((await api.one("c1Ab2")).body.events, undefined);
 });

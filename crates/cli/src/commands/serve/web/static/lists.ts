@@ -287,7 +287,8 @@ const STATES: Record<string, string> = { answered: "answered", pickedup: "picked
 // Why case `c` was withdrawn, from its last withdraw, if it says.
 function withdrawal(c: Case): string {
   const w = (c.events || []).filter((e) => e.event === "withdraw").pop();
-  return w && typeof w.data.reason === "string" ? w.data.reason.trim() : "";
+  const reason = w && (w.data || {}).reason;
+  return typeof reason === "string" ? reason.trim() : "";
 }
 
 // The needs-you banner: how many open cases are blocking an agent, who has
