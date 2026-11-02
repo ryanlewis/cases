@@ -409,8 +409,12 @@ fn a_pickup_wait_over_a_command_takes_and_lets_go_of_its_lease() {
         "{waited:?}"
     );
     let ended = Instant::now();
-    starts_within(&f, Duration::from_secs(10));
-    assert!(ended.elapsed() < Duration::from_millis(1500));
+    let started = starts_within(&f, Duration::from_secs(10));
+    assert!(
+        started - ended < Duration::from_millis(1500),
+        "{:?}",
+        started - ended
+    );
 
     // The lock file names the last wait until another takes it.
     let locks = f.far.with_file_name("far.db-waits");
@@ -421,15 +425,12 @@ fn a_pickup_wait_over_a_command_takes_and_lets_go_of_its_lease() {
         assert!(Instant::now() < until, "the wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
+    let (lock, holder) = taken(&f, "worker-lead-");
+    let early = kept_at(&lock, &holder, Instant::now() + Duration::from_secs(1));
     killed.kill().unwrap();
     killed.wait().unwrap();
-    let at = Instant::now();
-    let started = starts_within(&f, Duration::from_secs(10));
-    assert!(
-        started - at > Duration::from_millis(1800),
-        "{:?}",
-        started - at
-    );
+    assert!(early.join().unwrap(), "let go within 1 s of the kill");
+    starts_within(&f, Duration::from_secs(10));
     assert_eq!(f.ssh_runs().len(), opened_over_ssh);
 }
 
@@ -992,30 +993,32 @@ fn a_second_pickup_wait_on_a_forwarded_store_is_refused() {
 fn a_killed_pickup_wait_keeps_its_locks_on_the_far_side_until_their_lease_runs_out() {
     let f = leasing(3000);
     let mut first = picking_up(&f);
+    let (lock, holder) = taken(&f, "worker-lead-");
+    // Renewed a second at most before it was killed, the lease runs out two
+    // seconds after at the soonest: a second in, it is held still.
+    let early = kept_at(&lock, &holder, Instant::now() + Duration::from_secs(1));
     first.kill().unwrap();
     first.wait().unwrap();
-    let killed = Instant::now();
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(again.stderr.contains("already picking up"), "{again:?}");
-    let started = starts_within(&f, Duration::from_secs(10));
-    // Renewed a second at most before it was killed, the lease ran out two
-    // seconds after at the soonest.
-    assert!(
-        started - killed > Duration::from_millis(1800),
-        "{:?}",
-        started - killed
-    );
+    assert!(early.join().unwrap(), "let go within 1 s of the kill");
+    starts_within(&f, Duration::from_secs(10));
 }
 
 /// A pickup wait whose connection for its locks dies, while the wait goes
 /// on, leaves the far side refusing a second pickup wait until their lease
 /// runs out, and then taking it: the first could have had a pickup on its
 /// way over another connection. The first stops before the second starts.
+///
+/// Both are read off the lock itself, not off when a second wait was
+/// started: a wait is started some time before it takes the lock, the more
+/// so on a busy machine.
 #[test]
 fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_lease_ends() {
     let f = leasing(3000);
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
+    let (lock, holder) = taken(&f, "worker-lead-");
     let relay: u32 = fs::read_to_string(f.env.path("relay.pid"))
         .unwrap()
         .trim()
@@ -1023,27 +1026,73 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
         .unwrap();
     // The relay is what carries the connection to the far side's
     // dial-stdio, which sees it end.
+    // Renewed a second at most before the kill, the lease runs out two
+    // seconds after it at the soonest: a second in, it is held still.
+    let early = kept_at(&lock, &holder, Instant::now() + Duration::from_secs(1));
     signal("KILL", relay);
-    let killed = Instant::now();
-    let ended = thread::spawn(move || {
-        let waited: Output = first.wait_with_output().unwrap().into();
-        (Instant::now(), waited)
+    let ended = thread::spawn({
+        let (lock, holder) = (lock.clone(), holder.clone());
+        move || {
+            let waited: Output = first.wait_with_output().unwrap().into();
+            (kept(&lock, &holder), waited)
+        }
     });
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(again.stderr.contains("already picking up"), "{again:?}");
-    let second = starts_within(&f, Duration::from_secs(10));
-    assert!(
-        second - killed > Duration::from_millis(1800),
-        "{:?}",
-        second - killed
-    );
-    let (ended, waited) = ended.join().unwrap();
+    assert!(early.join().unwrap(), "let go within 1 s of the kill");
+    starts_within(&f, Duration::from_secs(10));
+    let (kept_as_it_ended, waited) = ended.join().unwrap();
     lapsed(&waited);
     assert!(
-        ended < second,
-        "the second started {:?} before the first ended",
-        ended - second
+        kept_as_it_ended,
+        "the first ended after its locks were let go"
     );
+}
+
+/// The far side's lock file whose name starts with `prefix`, and the line
+/// its holder's take wrote in it, once all of it is there: a take writes
+/// it in parts.
+fn taken(f: &Forwarding, prefix: &str) -> (PathBuf, String) {
+    let lock = fs::read_dir(f.far.with_file_name("far.db-waits"))
+        .unwrap()
+        .flatten()
+        .find(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+        .unwrap()
+        .path();
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let holder = fs::read_to_string(&lock).unwrap();
+        if holder.ends_with('\n') {
+            return (lock, holder);
+        }
+        assert!(
+            Instant::now() < until,
+            "its holder is not written: {holder:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Whether, at `at`, the lock `lock` is held still by the wait whose take
+/// wrote `holder` in it, read on a thread of its own so that nothing the
+/// test does meanwhile makes it late.
+fn kept_at(lock: &std::path::Path, holder: &str, at: Instant) -> thread::JoinHandle<bool> {
+    let (lock, holder) = (lock.to_owned(), holder.to_owned());
+    thread::spawn(move || {
+        thread::sleep(at.saturating_duration_since(Instant::now()));
+        kept(&lock, &holder)
+    })
+}
+
+/// Whether the lock `lock` is held still by the wait whose take wrote
+/// `holder` in it: another's take writes its own. When it is free, taking
+/// it to see lets it go again at once. A take that has just locked it and
+/// not yet written is taken as the holder still, for those few
+/// microseconds.
+fn kept(lock: &std::path::Path, holder: &str) -> bool {
+    let file = fs::File::open(lock).unwrap();
+    let busy = matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock));
+    busy && fs::read_to_string(lock).unwrap() == holder
 }
 
 /// A pickup wait that ends, however it ends, lets go of its locks on the
@@ -1480,23 +1529,28 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
     let f = leasing(3000);
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
+    let (lock, holder) = taken(&f, "worker-lead-");
     let relay: u32 = fs::read_to_string(f.env.path("relay.pid"))
         .unwrap()
         .trim()
         .parse()
         .unwrap();
     signal("STOP", relay);
-    let ended = thread::spawn(move || {
-        let waited: Output = first.wait_with_output().unwrap().into();
-        (Instant::now(), waited)
+    // Read off the lock, as a second wait is started some time before it
+    // takes it.
+    let ended = thread::spawn({
+        let (lock, holder) = (lock.clone(), holder.clone());
+        move || {
+            let waited: Output = first.wait_with_output().unwrap().into();
+            (kept(&lock, &holder), waited)
+        }
     });
-    let second = starts_within(&f, Duration::from_secs(15));
-    let (ended, waited) = ended.join().unwrap();
+    starts_within(&f, Duration::from_secs(15));
+    let (kept_as_it_ended, waited) = ended.join().unwrap();
     lapsed(&waited);
     assert!(
-        ended < second,
-        "the second started {:?} before the first ended",
-        ended - second
+        kept_as_it_ended,
+        "the first ended after its locks were let go"
     );
     resume(relay);
 }

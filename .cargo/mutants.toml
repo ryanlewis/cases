@@ -31,6 +31,9 @@ exclude_re = [
     # Equivalent: the wait for a child to exit stops at its deadline, and
     # the clock lands on the deadline itself only by a nanosecond's chance.
     'replace < with <= in Pipe::exited',
+    # Equivalent: a heartbeat is due once the clock reaches its time, and
+    # the clock lands on that time itself only by a nanosecond's chance.
+    "replace < with <= in Listening<'a>::beat",
     # No test can reach it: a read of a child's stderr is interrupted only
     # by a signal that lands while it blocks, which a test cannot time.
     'replace match guard error.kind\(\) == io::ErrorKind::Interrupted with (true|false) in Pipe::start',
