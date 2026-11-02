@@ -928,53 +928,79 @@ fn check_listeners(
     if waits.iter().collect::<Vec<_>>() != theirs {
         return Err(format!("the waits {waits:?} are not the listeners' {theirs:?}").into());
     }
-    let same = |want: &Option<String>, got: Option<Time>| -> Result<bool, Failed> {
-        Ok(match want {
-            Some(text) => Some(time(text)?) == got,
-            None => true,
-        })
-    };
     for (l, w) in got.iter().zip(want) {
-        let labels: BTreeSet<&String> = l.waits.iter().flat_map(|wait| &wait.labels).collect();
-        let whole = !l.waits.is_empty()
-            && l.waits.iter().all(|wait| wait.worker == l.worker)
-            && l.labels.iter().collect::<BTreeSet<_>>() == labels
-            && l.waits.iter().map(|wait| wait.since).min() == Some(l.since)
-            && l.waits.iter().map(|wait| wait.heard).max() == Some(l.heard)
-            && l.doing.is_some() == l.doing_at.is_some();
-        if !whole {
-            return Err(format!(
-                "{}: its labels, times and doing line are not those of its waits: {l:?}",
-                l.worker
-            )
-            .into());
-        }
-        let got_waits: Vec<(&str, &[String], &[String])> = l
-            .waits
-            .iter()
-            .map(|wait| (wait.id.as_str(), &wait.labels[..], &wait.kinds[..]))
-            .collect();
-        let waits_match = w.waits.as_ref().is_none_or(|want| {
-            let want: Vec<(&str, &[String], &[String])> = want
-                .iter()
-                .map(|wait| (wait.wait.as_str(), &wait.labels[..], &wait.kinds[..]))
-                .collect();
-            want == got_waits
-        });
-        let mismatch = l.worker != w.worker
-            || l.labels != w.labels
-            || l.doing != w.doing
-            || !same(&w.since, Some(l.since))?
-            || !same(&w.heard, Some(l.heard))?
-            || !same(&w.doing_at, l.doing_at)?
-            || !waits_match;
-        if mismatch {
-            return Err(format!(
-                "listening: {got_summary:?} (since {}, heard {}, doing at {:?}, waits {got_waits:?}), want {w:?}",
-                l.since, l.heard, l.doing_at
-            )
-            .into());
-        }
+        check_whole(l)?;
+        check_listener(l, w, &got_summary)?;
+    }
+    Ok(())
+}
+
+/// Checks that a listener's labels, times and doing line are those of its
+/// waits.
+fn check_whole(l: &cases_core::Listening) -> Result<(), Failed> {
+    let labels: BTreeSet<&String> = l.waits.iter().flat_map(|wait| &wait.labels).collect();
+    let whole = !l.waits.is_empty()
+        && l.waits.iter().all(|wait| wait.worker == l.worker)
+        && l.labels.iter().collect::<BTreeSet<_>>() == labels
+        && l.waits.iter().map(|wait| wait.since).min() == Some(l.since)
+        && l.waits.iter().map(|wait| wait.heard).max() == Some(l.heard)
+        && l.doing.is_some() == l.doing_at.is_some();
+    if whole {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: its labels, times and doing line are not those of its waits: {l:?}",
+            l.worker
+        )
+        .into())
+    }
+}
+
+/// Whether the time `got` is the time `want` names, when it names one.
+fn same_time(want: Option<&str>, got: Option<Time>) -> Result<bool, Failed> {
+    Ok(match want {
+        Some(text) => Some(time(text)?) == got,
+        None => true,
+    })
+}
+
+/// Whether the waits `got`, by id, labels and kinds, are the waits `want`.
+fn waits_are(want: &[WaitWant], got: &[(&str, &[String], &[String])]) -> bool {
+    let want: Vec<(&str, &[String], &[String])> = want
+        .iter()
+        .map(|wait| (wait.wait.as_str(), &wait.labels[..], &wait.kinds[..]))
+        .collect();
+    want == got
+}
+
+/// Checks one listener against what the step expects of it.
+fn check_listener(
+    l: &cases_core::Listening,
+    w: &ListenerWant,
+    got_summary: &[String],
+) -> Result<(), Failed> {
+    let got_waits: Vec<(&str, &[String], &[String])> = l
+        .waits
+        .iter()
+        .map(|wait| (wait.id.as_str(), &wait.labels[..], &wait.kinds[..]))
+        .collect();
+    let waits_match = w
+        .waits
+        .as_ref()
+        .is_none_or(|want| waits_are(want, &got_waits));
+    let mismatch = l.worker != w.worker
+        || l.labels != w.labels
+        || l.doing != w.doing
+        || !same_time(w.since.as_deref(), Some(l.since))?
+        || !same_time(w.heard.as_deref(), Some(l.heard))?
+        || !same_time(w.doing_at.as_deref(), l.doing_at)?
+        || !waits_match;
+    if mismatch {
+        return Err(format!(
+            "listening: {got_summary:?} (since {}, heard {}, doing at {:?}, waits {got_waits:?}), want {w:?}",
+            l.since, l.heard, l.doing_at
+        )
+        .into());
     }
     Ok(())
 }
