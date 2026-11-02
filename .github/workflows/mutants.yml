@@ -26,7 +26,7 @@ jobs:
   # runs the code. It fails open: on any error the mutants run.
   gate:
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:
       actions: read
@@ -62,7 +62,7 @@ jobs:
     if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
     # x64, not ARM: install-action has no aarch64 Linux build of cargo-mutants.
     # GitHub's 2 vCPUs fit 2 jobs at once.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       JOBS: ${{ inputs.jobs || '2' }}

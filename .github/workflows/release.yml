@@ -22,7 +22,7 @@ jobs:
   # tagged commit must be on main, or nothing is built and nothing is
   # published.
   version:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -163,7 +163,7 @@ jobs:
   # Store Connect API key with the Developer role.
   macos-sign:
     needs: [version, macos]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     environment: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || '' }}
     outputs:
@@ -266,7 +266,7 @@ jobs:
   sums:
     needs: [version, linux, macos-sign, macos-verify]
     if: ${{ !cancelled() && !failure() }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -305,7 +305,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, sums]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:
       contents: write
