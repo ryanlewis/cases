@@ -36,6 +36,10 @@ struct Forwarding {
 /// count above 0, it takes one off that first and sends its stdin on to
 /// `dial-stdio` through a `cat` whose pid it writes to `@RELAYPID@`, so
 /// that a test can stop what is sent, as a network that drops it does.
+/// That `dial-stdio` runs in a process group of its own, out of the near
+/// side's reach as a far side on another machine is: a hold that lost its
+/// lease kills its child's group 200 ms after closing its stdin, which must
+/// not let go of the far side's locks before their lease runs out.
 const SSH: &str = r#"#!/bin/sh
 echo "$*" >> "@LOG@"
 while [ $# -gt 0 ] && [ "$1" != "cases" ]; do shift; done
@@ -63,11 +67,6 @@ if [ "$drops" -gt 0 ]; then
     sleep 1
     kill $pid
     exit 255
-fi
-if [ -n "$CASES_TEST_SLOW_EXIT" ]; then
-    CASES_STORE="@FAR@" "@BIN@" "$@"
-    sleep 2
-    exit 0
 fi
 CASES_STORE="@FAR@" exec "@BIN@" "$@"
 "#;
@@ -964,13 +963,7 @@ fn a_killed_pickup_wait_keeps_its_locks_on_the_far_side_until_their_lease_runs_o
 /// so on a busy machine.
 #[test]
 fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_lease_ends() {
-    let mut f = leasing(3000);
-    if std::env::var_os("PROBE_SLOW").is_some() {
-        f.env.set("CASES_TEST_SLOW_EXIT", "1");
-    }
-    if std::env::var_os("PROBE_NOKILL").is_some() {
-        f.env.set("CASES_TEST_NO_GROUP_KILL", "1");
-    }
+    let f = leasing(3000);
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
     let (lock, holder) = taken(&f, "worker-lead-");
@@ -984,58 +977,24 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
     // Renewed a second at most before the kill, the lease runs out two
     // seconds after it at the soonest: a second in, it is held still.
     let early = kept_at(&lock, &holder, Instant::now() + Duration::from_secs(1));
-    let t0 = Instant::now();
-    let pr = probe(first.id(), lock.clone(), holder.clone(), t0);
     signal("KILL", relay);
     let ended = thread::spawn({
         let (lock, holder) = (lock.clone(), holder.clone());
         move || {
             let waited: Output = first.wait_with_output().unwrap().into();
-            let back = t0.elapsed();
-            let k = kept(&lock, &holder);
-            (k, waited, back, t0.elapsed())
+            (kept(&lock, &holder), waited)
         }
     });
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(again.stderr.contains("already picking up"), "{again:?}");
     assert!(early.join().unwrap(), "let go within 1 s of the kill");
     starts_within(&f, Duration::from_secs(10));
-    let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
-    let (exited, let_go) = pr.join().unwrap();
-    let _ = std::io::stderr().write_all(format!("PROBE {} kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}
-", line!()).as_bytes());
+    let (kept_as_it_ended, waited) = ended.join().unwrap();
     lapsed(&waited);
     assert!(
         kept_as_it_ended,
         "the first ended after its locks were let go"
     );
-}
-
-/// TEMP instrumentation.
-fn probe(
-    pid: u32,
-    lock: PathBuf,
-    holder: String,
-    t0: Instant,
-) -> thread::JoinHandle<(Option<Duration>, Option<Duration>)> {
-    thread::spawn(move || {
-        let (mut exited, mut let_go) = (None, None);
-        let until = Instant::now() + Duration::from_secs(20);
-        while (exited.is_none() || let_go.is_none()) && Instant::now() < until {
-            if exited.is_none() {
-                let st = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-                let state = st.rsplit(") ").next().and_then(|r| r.chars().next());
-                if state != Some('S') && state != Some('R') && state != Some('D') {
-                    exited = Some(t0.elapsed());
-                }
-            }
-            if let_go.is_none() && !kept(&lock, &holder) {
-                let_go = Some(t0.elapsed());
-            }
-            thread::sleep(Duration::from_millis(2));
-        }
-        (exited, let_go)
-    })
 }
 
 /// The far side's lock file whose name starts with `prefix`, and the line
@@ -1515,13 +1474,7 @@ fn a_pickup_wait_whose_locks_connection_dies_stops() {
 /// so a second never runs beside it.
 #[test]
 fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
-    let mut f = leasing(3000);
-    if std::env::var_os("PROBE_SLOW").is_some() {
-        f.env.set("CASES_TEST_SLOW_EXIT", "1");
-    }
-    if std::env::var_os("PROBE_NOKILL").is_some() {
-        f.env.set("CASES_TEST_NO_GROUP_KILL", "1");
-    }
+    let f = leasing(3000);
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = picking_up(&f);
     let (lock, holder) = taken(&f, "worker-lead-");
@@ -1530,8 +1483,6 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         .trim()
         .parse()
         .unwrap();
-    let t0 = Instant::now();
-    let pr = probe(first.id(), lock.clone(), holder.clone(), t0);
     signal("STOP", relay);
     // Read off the lock, as a second wait is started some time before it
     // takes it.
@@ -1539,16 +1490,11 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         let (lock, holder) = (lock.clone(), holder.clone());
         move || {
             let waited: Output = first.wait_with_output().unwrap().into();
-            let back = t0.elapsed();
-            let k = kept(&lock, &holder);
-            (k, waited, back, t0.elapsed())
+            (kept(&lock, &holder), waited)
         }
     });
     starts_within(&f, Duration::from_secs(15));
-    let (kept_as_it_ended, waited, back, checked) = ended.join().unwrap();
-    let (exited, let_go) = pr.join().unwrap();
-    let _ = std::io::stderr().write_all(format!("PROBE {} kept={kept_as_it_ended} exited={exited:?} let_go={let_go:?} back={back:?} checked={checked:?}
-", line!()).as_bytes());
+    let (kept_as_it_ended, waited) = ended.join().unwrap();
     lapsed(&waited);
     assert!(
         kept_as_it_ended,

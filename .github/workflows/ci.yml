@@ -43,12 +43,6 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: WIP probe the lease tests
-        run: |
-          for i in $(seq 15); do
-            cargo test -p cases --test forward --locked 2>&1 | grep -E "PROBE|panicked|first ended|test result" || true
-          done
-
       # The hosted client is parked behind the cli's `remote` feature, off
       # in a release. It still builds and passes its tests.
       - name: Lint and test with the remote feature
