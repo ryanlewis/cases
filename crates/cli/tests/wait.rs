@@ -1832,6 +1832,53 @@ fn a_listening_wait_that_cannot_print_names_each_message_it_took() {
     assert_eq!(out.stderr.lines().count(), 2, "{out:?}");
 }
 
+/// Waits until the case `id` is picked up, as a wait that takes it does.
+fn until_picked_up(env: &Env, id: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    while env.case(id).state().as_str() != "pickedup" {
+        assert!(Instant::now() < deadline, "{id} was not picked up");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A steady wait that took a message and then fails to read the store, as
+/// it collects, still prints the message it took, and says the failure on
+/// stderr: no later wait takes it again (AG-16).
+#[test]
+fn a_steady_wait_that_fails_after_taking_a_message_prints_it() {
+    let env = Env::new();
+    // A case it waits on still open, so that it lingers after the message.
+    env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+    until_picked_up(&env, &sent);
+
+    // A file at the store's path that is not a store: the next read fails,
+    // and not in a way a wait rides out.
+    remove_store(&env);
+    fs::write(&env.store, "not a database, but a file of text").unwrap();
+    let out = waiting.finish();
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [sent.as_str()], "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(
+        without(&out.stderr, &marker),
+        "warning: file is not a database\n",
+        "{out:?}"
+    );
+}
+
 /// A message waits until a wait takes it: one sent before the wait began is
 /// taken at once, whatever `--since` says, and one to a label goes to a wait
 /// on that label.
