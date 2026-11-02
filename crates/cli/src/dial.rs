@@ -401,22 +401,35 @@ struct Headers {
     agent: Option<String>,
 }
 
-/// What the header `lines` say, the connection closing after the answer
-/// unless they say otherwise when `close`, or why they cannot be read.
-fn headers<'a>(lines: impl Iterator<Item = &'a str>, close: bool) -> Result<Headers, &'static str> {
+/// What the header `lines` say, or why they cannot be read. The
+/// connection is kept after the answer unless a `Connection` header says
+/// `close` or, for an HTTP/1.0 request (`http_1_0`), unless one says
+/// `keep-alive`; the tokens of every `Connection` header count.
+fn headers<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    http_1_0: bool,
+) -> Result<Headers, &'static str> {
     let mut headers = Headers {
         length: 0,
         content_type: None,
-        close,
+        close: false,
         agent: None,
     };
+    let (mut length, mut closes, mut keeps) = (None, false, false);
     for line in lines.filter(|line| !line.is_empty()) {
         let Some((name, value)) = line.split_once(':') else {
             return Err("a header is not one");
         };
-        let value = value.trim();
+        // No space between a name and its colon (RFC 9112, 5.1).
+        if name.ends_with([' ', '\t']) {
+            return Err("a header is not one");
+        }
+        let value = ows(value);
         if name.eq_ignore_ascii_case("content-length") {
-            headers.length = content_length(value)?;
+            // Given once (RFC 9112, 6.3).
+            if length.replace(content_length(value)?).is_some() {
+                return Err("the body's length is given more than once");
+            }
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err("a body is sent with its length");
         } else if name.eq_ignore_ascii_case("content-type") {
@@ -424,21 +437,33 @@ fn headers<'a>(lines: impl Iterator<Item = &'a str>, close: bool) -> Result<Head
         } else if name.eq_ignore_ascii_case("user-agent") {
             headers.agent = Some(value.to_owned());
         } else if name.eq_ignore_ascii_case("connection") {
-            headers.close = value
-                .split(',')
-                .any(|token| token.trim().eq_ignore_ascii_case("close"));
+            for token in value.split(',').map(ows) {
+                closes |= token.eq_ignore_ascii_case("close");
+                keeps |= token.eq_ignore_ascii_case("keep-alive");
+            }
         }
     }
+    headers.length = length.unwrap_or(0);
+    headers.close = closes || (http_1_0 && !keeps);
     Ok(headers)
 }
 
-/// The length a `Content-Length` header's `value` gives, at most
-/// [`BODY_LIMIT`], or why it gives none.
+/// `text` without the spaces and tabs around it, the optional whitespace
+/// of a header's value (RFC 9110, 5.6.3).
+fn ows(text: &str) -> &str {
+    text.trim_matches([' ', '\t'])
+}
+
+/// The length a `Content-Length` header's `value` gives, digits alone (RFC
+/// 9112, 6.3) and at most [`BODY_LIMIT`], or why it gives none.
 fn content_length(value: &str) -> Result<usize, &'static str> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("the body's length is not one");
+    }
     match value.parse::<usize>() {
         Ok(n) if n <= BODY_LIMIT => Ok(n),
-        Ok(_) => Err("the body is over 1 MiB"),
-        Err(_) => Err("the body's length is not one"),
+        // Too long for a usize, it is over the limit too.
+        _ => Err("the body is over 1 MiB"),
     }
 }
 
@@ -1246,6 +1271,97 @@ mod tests {
             panic!("not read");
         };
         assert!(got.close);
+    }
+
+    #[test]
+    fn a_body_s_length_and_a_header_s_name_are_read_strictly() {
+        // More than one length, a length that is not all digits, and a
+        // name with space before its colon are refused (RFC 9112, 6.3 and
+        // 5.1), so that no body is read as the next request.
+        for (text, why) in [
+            (
+                "POST / HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
+                "the body's length is given more than once",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: 2\r\ncontent-length: 2\r\n\r\n{}",
+                "the body's length is given more than once",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: +2\r\n\r\n{}",
+                "the body's length is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: 2, 2\r\n\r\n{}",
+                "the body's length is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: \r\n\r\n",
+                "the body's length is not one",
+            ),
+            // Space around a value is spaces and tabs alone (RFC 9110, 5.6.3).
+            (
+                "POST / HTTP/1.1\r\nContent-Length: \x0b2\r\n\r\n{}",
+                "the body's length is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: \u{3000}2\u{a0}\r\n\r\n{}",
+                "the body's length is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: 2\r\r\n\r\n{}",
+                "the body's length is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length : 2\r\n\r\n{}",
+                "a header is not one",
+            ),
+            (
+                "POST / HTTP/1.1\r\nContent-Length\t: 2\r\n\r\n{}",
+                "a header is not one",
+            ),
+        ] {
+            assert_eq!(request(text), Read::Bad(why), "{text:?}");
+        }
+        // A length with space around it, after the colon, is one.
+        let Read::Request(got) = request("POST / HTTP/1.1\r\nContent-Length:  2 \r\n\r\n{}") else {
+            panic!("not read");
+        };
+        assert_eq!(got.body, b"{}");
+    }
+
+    #[test]
+    fn an_http_1_0_connection_is_kept_only_when_it_asks() {
+        let close = |text: &str| {
+            let Read::Request(got) = request(text) else {
+                panic!("not read: {text:?}");
+            };
+            got.close
+        };
+        for (text, closes) in [
+            ("GET / HTTP/1.0\r\n\r\n", true),
+            ("GET / HTTP/1.0\r\nConnection: upgrade\r\n\r\n", true),
+            ("GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\n", false),
+            ("GET / HTTP/1.0\r\nConnection: x, keep-alive\r\n\r\n", false),
+            (
+                "GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n",
+                true,
+            ),
+            ("GET / HTTP/1.1\r\n\r\n", false),
+            ("GET / HTTP/1.1\r\nConnection: upgrade\r\n\r\n", false),
+            ("GET / HTTP/1.1\r\nConnection: close\r\n\r\n", true),
+            // The tokens of each Connection header count, as one list.
+            (
+                "GET / HTTP/1.1\r\nConnection: close\r\nConnection: x\r\n\r\n",
+                true,
+            ),
+            (
+                "GET / HTTP/1.0\r\nConnection: keep-alive\r\nConnection: x\r\n\r\n",
+                false,
+            ),
+        ] {
+            assert_eq!(close(text), closes, "{text:?}");
+        }
     }
 
     #[test]
