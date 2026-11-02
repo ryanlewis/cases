@@ -507,6 +507,18 @@ fn wait_waits_for_a_store_that_is_not_there_yet() {
     assert_eq!(ids(&woke(&by_id.finish())), [id.as_str()]);
 }
 
+/// A store that is there but cannot be read is not waited for, as one not
+/// there yet is, nor ridden out: the wait fails at once, with exit 1.
+#[test]
+fn wait_on_a_store_that_cannot_be_read_fails_at_once() {
+    let env = Env::new();
+    fs::write(&env.store, "not a database, but a file of text").unwrap();
+    let out = wait(&env, &[]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(!out.stderr.contains("goes on"), "{out:?}");
+}
+
 #[test]
 fn answers_with_no_time_are_new_when_they_land_and_print_in_open_order() {
     let env = Env::new();
@@ -2447,6 +2459,28 @@ fn a_steady_wait_prints_answers_given_together_once() {
         &env,
         &["--label", "burst", "--since", next, "--timeout", "1s"],
     ));
+}
+
+/// A steady wait with a case it waits on still open prints once its quiet
+/// time passes with no event new to it, well before its timeout (AG-18).
+#[test]
+fn a_steady_wait_prints_at_the_end_of_its_quiet_time() {
+    let env = Env::new();
+    let answered = open_labelled(&env, "Answered", "quiet", "today");
+    let _left = open_labelled(&env, "Left open", "quiet", "today");
+    let marker = marker(&env);
+    let args = ["--label", "quiet", "--mood", "steady", "--timeout", "40s"];
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let start = Instant::now();
+    run(&env, "answer", &answered, &["--ack"]);
+    let lines = woke(&waiting.finish());
+    let took = start.elapsed();
+    assert_eq!(ids(&lines), [answered.as_str()]);
+    // Its quiet time is 10 s, from the read that found the answer.
+    assert!(
+        took >= Duration::from_secs(9) && took < Duration::from_secs(16),
+        "{took:?}"
+    );
 }
 
 #[test]
