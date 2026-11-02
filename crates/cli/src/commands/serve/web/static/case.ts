@@ -229,42 +229,9 @@ export function CaseView({
     setDrawn((was) => redrawn(was, c));
   }, [c.revision, c.state, c.amend_seq]);
 
-  // Sends `what` of `body`, once: a send while one is out does nothing,
-  // until it is answered or 10 s have passed (IN-09).
-  async function send(what: Sends, body: Body): Promise<void> {
-    if (sending.current) return;
-    sending.current = true;
-    const release = setTimeout(() => (sending.current = false), 10000);
-    const sent: Write = { revision: drawn.revision, ...body };
-    if (what === "answer") sent.answer = { ...body.answer, amend_seq: drawn.amendSeq };
-    try {
-      const { after, refusal, current } = await api.send(c.id, what, sent);
-      if (after) {
-        setRefusal("");
-        // The forms go on from the case as this write left it: after the
-        // edit of a message the page stays on it, and a withdraw or another
-        // edit may be sent before the stream redraws it (IN-13). A redraw
-        // that came first, from a later event, is kept.
-        setDrawn((was) => (after.revision > was.revision ? drawnFrom(after) : was));
-        onSent(what, after);
-        return;
-      }
-      setRefusal(refusal);
-      // The case as it is now: the form, which keeps what was typed, takes
-      // its revision, as it has now been shown (IN-05).
-      if (current) {
-        setDrawn(drawnFrom(current));
-        onCase(current);
-      }
-    } finally {
-      clearTimeout(release);
-      sending.current = false;
-    }
-  }
+  const send = (what: Sends, body: Body) => sendOnce({ id: c.id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase });
 
   const fu = followUp(c);
-  // The case's links, in its article under its body.
-  const links = c.links || [];
   // What comes before the answer box and what comes after it are one block
   // each: where the form is beside the case, it spans the two, and the
   // second grows to the form's height (style.css), so nothing that either
@@ -272,33 +239,19 @@ export function CaseView({
   return html`<div id="case">
 <header class="case-head">
   <h1>${c.title}</h1>
-  ${c.kind === "briefing" && html`<p class=${c.landed ? "landed-mark landed" : "landed-mark gated"}>${c.landed ? "landed" : "waiting to land"}</p>`}
-  ${c.kind === "message" && html`<p class="to">message to <strong>${addressee(c)}</strong></p>`}
-  ${c.re && html`<${About} id=${c.re} cases=${cases} />`}
-  ${c.context && html`<p class="context">${c.context}</p>`}
-  ${c.brief && html`<p class="brief"><span class="label">brief</span> ${c.brief}</p>`}
-  ${c.kind !== "message" && c.worker && html`<p class="message-agent"><a href=${compose(c.worker, c.id)}>message ${c.worker}</a></p>`}
+  ${head(c, cases)}
 </header>
 <${Properties} c=${c} now=${now} />
 <div class="case-main">
 <div class="before-answer">
 <article class="case">
-  ${fu ? html`<${FollowUpFirst} c=${c} fu=${fu} now=${now} />` : html`<${Markdown} text=${c.body} />`}
-  ${(c.left_out || []).length > 0 && html`<section class="left-out" aria-labelledby="left-out-head"><h2 class="section" id="left-out-head">left out</h2><ol>${c.left_out!.map((item) => html`<li>${item}</li>`)}</ol></section>`}
-  ${links.length > 0 && html`<section class="case-links" aria-labelledby="links-head"><h2 class="section" id="links-head">links</h2><ul class="links">${links.map((href) => html`<li><${Link} href=${href} /></li>`)}</ul></section>`}
+  ${article(c, fu, now)}
 </article>
-${c.kind === "message" && c.state === "closed" && c.close && html`<section class="outcome" aria-labelledby="outcome-head"><h2 class="section" id="outcome-head">outcome</h2><${Markdown} text=${c.close.outcome} />${(c.close.links || []).length > 0 && html`<ul class="links">${c.close.links!.map((href) => html`<li><${Link} href=${href} /></li>`)}</ul>`}</section>`}
-${c.kind === "message" && c.pickup && html`<${Taken} c=${c} listeners=${listeners} now=${now} />`}
-${c.kind === "message" && c.state === "withdrawn" && html`<${Withdrawn} c=${c} now=${now} />`}
+${messageAfter(c, listeners, now)}
 </div>
 <div class="answer">
 <p class="error" role="alert" id="refusal" hidden=${!refusal}>${refusal}</p>
-${c.state === "open" && html`<${Respond} key=${c.id} c=${c} last=${fu ? fu.answer.data : undefined} send=${send} refuse=${setRefusal} />`}
-${c.state === "parked" && html`<form class="respond" data-write="resume" onSubmit=${(e: Event) => {
-    e.preventDefault();
-    send("resume", {});
-  }}><div class="actions"><button type="submit">resume</button></div></form>`}
-${c.state === "sent" && html`<${Edit} key=${`${c.id} ${c.amend_seq || 0}`} c=${c} send=${send} refuse=${setRefusal} />`}
+${answerBox(c, fu, send, setRefusal)}
 </div>
 <div class="after-answer">
 ${(c.state === "answered" || c.state === "pickedup" || c.state === "sent") && html`<${Withdraw} key=${`${c.id} ${c.state}`} send=${send} sent=${c.state === "sent"} message=${c.kind === "message"} />`}
@@ -307,6 +260,95 @@ ${c.kind !== "message" && html`<${Thread} c=${c} now=${now} />`}
 </div>
 </div>
 </div>`;
+}
+
+// What a send of case `id` needs from the view that sends it: the form as
+// drawn, and how to say what came of it.
+interface Sending {
+  id: string;
+  what: Sends;
+  body: Body;
+  drawn: Drawn;
+  setDrawn: (next: Drawn | ((was: Drawn) => Drawn)) => void;
+  setRefusal: (refusal: string) => void;
+  sending: { current: boolean };
+  onSent: (what: Sends, after: Case) => void;
+  onCase: (current: Case) => void;
+}
+
+// Sends `what` of `body`, once: a send while one is out does nothing,
+// until it is answered or 10 s have passed (IN-09).
+async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase }: Sending): Promise<void> {
+  if (sending.current) return;
+  sending.current = true;
+  const release = setTimeout(() => (sending.current = false), 10000);
+  const sent: Write = { revision: drawn.revision, ...body };
+  if (what === "answer") sent.answer = { ...body.answer, amend_seq: drawn.amendSeq };
+  try {
+    const { after, refusal, current } = await api.send(id, what, sent);
+    if (after) {
+      setRefusal("");
+      // The forms go on from the case as this write left it: after the
+      // edit of a message the page stays on it, and a withdraw or another
+      // edit may be sent before the stream redraws it (IN-13). A redraw
+      // that came first, from a later event, is kept.
+      setDrawn((was) => (after.revision > was.revision ? drawnFrom(after) : was));
+      onSent(what, after);
+      return;
+    }
+    setRefusal(refusal);
+    // The case as it is now: the form, which keeps what was typed, takes
+    // its revision, as it has now been shown (IN-05).
+    if (current) {
+      setDrawn(drawnFrom(current));
+      onCase(current);
+    }
+  } finally {
+    clearTimeout(release);
+    sending.current = false;
+  }
+}
+
+// The head of case `c` under its title: a briefing's landing, a message's addressee, what
+// the case is about, among `cases`, its context and brief, and a link to
+// message the agent that asked it.
+function head(c: Case, cases: Case[]) {
+  return html`${c.kind === "briefing" && html`<p class=${c.landed ? "landed-mark landed" : "landed-mark gated"}>${c.landed ? "landed" : "waiting to land"}</p>`}
+  ${c.kind === "message" && html`<p class="to">message to <strong>${addressee(c)}</strong></p>`}
+  ${c.re && html`<${About} id=${c.re} cases=${cases} />`}
+  ${c.context && html`<p class="context">${c.context}</p>`}
+  ${c.brief && html`<p class="brief"><span class="label">brief</span> ${c.brief}</p>`}
+  ${c.kind !== "message" && c.worker && html`<p class="message-agent"><a href=${compose(c.worker, c.id)}>message ${c.worker}</a></p>`}`;
+}
+
+// The article of case `c`: its body, or follow-up `fu` when it is one, then
+// its left-out items and its links.
+function article(c: Case, fu: FollowUp | null, now: number) {
+  const links = c.links || [];
+  return html`${fu ? html`<${FollowUpFirst} c=${c} fu=${fu} now=${now} />` : html`<${Markdown} text=${c.body} />`}
+  ${(c.left_out || []).length > 0 && html`<section class="left-out" aria-labelledby="left-out-head"><h2 class="section" id="left-out-head">left out</h2><ol>${c.left_out!.map((item) => html`<li>${item}</li>`)}</ol></section>`}
+  ${links.length > 0 && html`<section class="case-links" aria-labelledby="links-head"><h2 class="section" id="links-head">links</h2><ul class="links">${links.map((href) => html`<li><${Link} href=${href} /></li>`)}</ul></section>`}`;
+}
+
+// What a message says after its article: its outcome once closed, who
+// picked it up, and who withdrew it.
+function messageAfter(c: Case, listeners: Listener[], now: number) {
+  if (c.kind !== "message") return null;
+  return html`${c.state === "closed" && c.close && html`<section class="outcome" aria-labelledby="outcome-head"><h2 class="section" id="outcome-head">outcome</h2><${Markdown} text=${c.close.outcome} />${(c.close.links || []).length > 0 && html`<ul class="links">${c.close.links!.map((href) => html`<li><${Link} href=${href} /></li>`)}</ul>`}</section>`}
+${c.pickup && html`<${Taken} c=${c} listeners=${listeners} now=${now} />`}
+${c.state === "withdrawn" && html`<${Withdrawn} c=${c} now=${now} />`}`;
+}
+
+// The form case `c` takes in its state: the answer, with follow-up `fu`'s
+// answer as the last, the resume of a parked case, or the edit of a sent
+// message.
+function answerBox(c: Case, fu: FollowUp | null, send: (what: Sends, body: Body) => Promise<void>, refuse: (refusal: string) => void) {
+  return html`${c.state === "open" && html`<${Respond} key=${c.id} c=${c} last=${fu ? fu.answer.data : undefined} send=${send} refuse=${refuse} />`}
+${c.state === "parked" && html`<form class="respond" data-write="resume" onSubmit=${(e: Event) => {
+    e.preventDefault();
+    send("resume", {});
+  }}><div class="actions"><button type="submit">resume</button></div></form>`}
+${c.state === "sent" && html`<${Edit} key=${`${c.id} ${c.amend_seq || 0}`} c=${c} send=${send} refuse=${refuse} />`}`;
 }
 
 // What case `about` is about, `id`, by its title when the page read it and
