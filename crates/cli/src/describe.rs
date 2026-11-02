@@ -666,6 +666,28 @@ mod tests {
     }
 
     #[test]
+    fn an_amend_of_a_briefing_says_only_left_out_items_that_differ() {
+        let case = fold(&[
+            (
+                "agent",
+                "open",
+                r#"{"kind":"briefing","title":"B","body":"x","left_out":["a","b"]}"#,
+            ),
+            // The same items: nothing to say of them.
+            ("agent", "amend", r#"{"left_out":["a","b"],"labels":["l"]}"#),
+            ("agent", "amend", r#"{"left_out":["b","c"]}"#),
+        ]);
+        assert_eq!(
+            thread_texts(&case, &Actors::default()),
+            vec![
+                vec![],
+                strs(&["added label: l"]),
+                strs(&["replaced the left-out items: b; c"]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_replaced_text_is_compared_with_the_last_one() {
         let case = fold(&[
             (
