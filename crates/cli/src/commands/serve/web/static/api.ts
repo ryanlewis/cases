@@ -1,5 +1,5 @@
 // The inbox's API (spec/api.md), as the page uses it.
-import type { Case, Category, Index, List, Listener, Listeners, NewMessage, Notifications, Refusal, Write } from "./types.js";
+import type { Case, Category, Index, List, Listener, Listeners, NewMessage, Notifications, Refusal, ServedCase, Write } from "./types.js";
 
 export type { NewMessage };
 
@@ -56,12 +56,27 @@ export class Refused extends Error {
 export async function list(states: readonly string[]): Promise<Case[]> {
   const response = await get<List>(`cases?state=${encodeURIComponent(states.join(","))}`);
   if (!response.ok) throw new Refused(response);
-  return response.body.list;
+  return response.body.list.map(received);
 }
 
 // The case `id`, as show --json gives it; `ok` is false when there is none.
-export function one(id: string): Promise<Reply<Case>> {
-  return get<Case>(`cases/${encodeURIComponent(id)}`);
+export async function one(id: string): Promise<Reply<Case>> {
+  return receivedReply(await get<ServedCase>(`cases/${encodeURIComponent(id)}`));
+}
+
+// Case `c` as serve sent it, with empty data on each event whose record
+// has none, as the page reads an event: the page never meets an event with
+// no data, wherever it reads one.
+export function received(c: ServedCase): Case {
+  // A case serve sent without events (as in a write's reply) has none to
+  // give data to, and is left as it is.
+  if (!c.events) return c as Case;
+  return { ...c, events: c.events.map((e) => ({ ...e, data: e.data || {} })) };
+}
+
+// A reply whose body is a case as serve sent it, with the case as received.
+function receivedReply(response: Reply<ServedCase>): Reply<Case> {
+  return response.ok ? { ...response, body: received(response.body) } : response;
 }
 
 // The workers listening for messages now (ST-16); null when that is not
@@ -91,6 +106,11 @@ export function write(id: string, what: Exclude<What, "message">, body: Write): 
 // it is from before serve restarted is read again, and the write sent once
 // more: nothing was written.
 async function post(path: string, body: unknown): Promise<Reply<Case>> {
+  return receivedReply(await postServed(path, body));
+}
+
+// POSTs as post does, and gives the case in the reply as serve sent it.
+async function postServed(path: string, body: unknown): Promise<Reply<ServedCase>> {
   if (!token) await index();
   const send = () =>
     fetch(`/v1/${path}`, {
@@ -98,7 +118,7 @@ async function post(path: string, body: unknown): Promise<Reply<Case>> {
       headers: { "Content-Type": "application/json", "X-Cases-CSRF": token },
       body: JSON.stringify(body),
       cache: "no-store",
-    }).then(read<Case>);
+    }).then(read<ServedCase>);
   let response = await send();
   if (response.status === 403 && category(response) === "csrf") {
     await index();
@@ -138,7 +158,7 @@ export async function send(id: string, what: Exclude<What, "message">, body: Wri
         ? "this case changed after it was drawn, so this was not recorded. check the thread before sending again."
         : message(response);
     const current = response.body && response.body.error && response.body.error.case;
-    return current ? { refusal, current } : { refusal };
+    return current ? { refusal, current: received(current) } : { refusal };
   } catch (e) {
     // The request may have reached serve, which finishes a write whose
     // answer never came back, so what came of it is not known. No case is
