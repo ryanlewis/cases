@@ -775,8 +775,9 @@ fn a_store_named_through_a_parent_is_the_same_store() {
     assert_eq!(out.code, 0, "{out:?}");
 }
 
-/// A store named through a symlink is the same store: a reinstall that
-/// names it by its real path restarts the service's own serve.
+/// A store named through a symlink is the same store: status by its real
+/// path takes the service for this store's, and a reinstall that names it
+/// by its real path restarts the service's own serve.
 #[test]
 fn a_reinstall_through_a_symlink_is_the_same_store() {
     let mut service = Service::new();
@@ -788,6 +789,9 @@ fn a_reinstall_through_a_symlink_is_the_same_store() {
     let (_listener, _) = service.env.fake_serve(&addr);
     service.active(true);
     service.env.store = real;
+    let (out, ok) = service.status(&[]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("Problem"), "{out}");
     let out = service.run(&["install", "--listen", &addr]);
     assert_eq!(out.code, 0, "{out:?}");
 }

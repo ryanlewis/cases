@@ -407,7 +407,12 @@ fn report(ctx: &Ctx, manager: &Manager) -> Result<Report, Error> {
                         exe.display()
                     ));
                 }
-                if !store.is_empty() && report.store != store {
+                // The same store by another path is still this one, as install
+                // takes it.
+                if !store.is_empty()
+                    && instance::resolve(Path::new(&report.store))
+                        != instance::resolve(Path::new(&store))
+                {
                     report.problems.push(format!(
                         "installed for another store: {} (this command uses {store})",
                         report.store
