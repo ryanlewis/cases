@@ -13,6 +13,7 @@ use ratatui::widgets::{
     Block, BorderType, Clear, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph,
 };
 
+use super::actions::{self, Action};
 use super::app::{App, Filter, Focus, Group, Hit, Verb};
 use super::compose::{Compose, Part};
 use super::field::Field;
@@ -45,9 +46,23 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // The filters and the footer wrap onto more lines on a narrow terminal
     // rather than lose a tab or a key off the end.
     let message = app.only.is_none().then(|| message_button(app));
-    let tabs = message
-        .as_ref()
-        .map(|message| filter_lines(app, width.saturating_sub(message.width() + 1)));
+    // The palette's button is at the right of the tabs, beside the
+    // message's, where that takes the tabs no more rows than they take
+    // without it; otherwise, and on one case's screen, in the header,
+    // when it has room for it. On a screen narrower than that, the
+    // footer's ^k says how to open the palette.
+    let commands = commands_button();
+    let tabs_in = |room: u16| {
+        message
+            .as_ref()
+            .map(|message| filter_lines(app, room.saturating_sub(message.width() + 1)))
+    };
+    let alone = tabs_in(width);
+    let beside = tabs_in(width.saturating_sub(commands.width() + 1));
+    let rows_of = |tabs: &Option<Flow>| tabs.as_ref().map_or(0, |(lines, _)| lines.len());
+    let fits_beside = message.is_some() && rows_of(&beside) <= rows_of(&alone);
+    let in_header = !fits_beside && width >= HEADER_ROOM;
+    let tabs = if fits_beside { beside } else { alone };
     app.strip.room = frame.area().height >= stats::MIN_ROWS;
     let rows = |lines: &[Line]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
     // The stats strip (TU-13), under the filters: not on one case's screen,
@@ -97,7 +112,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     };
     let [header, filters, rule, band, body, footer] = layout(&keys);
     app.hits.clear();
-    draw_header(frame, app, header);
+    draw_header(frame, app, header, in_header.then_some(&commands));
     if let Some(tabs) = tabs {
         let hits = draw_flow(frame, tabs, filters);
         app.hits.extend(hits);
@@ -105,6 +120,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(message) = message {
         let x = filters.right().saturating_sub(message.width());
         message.draw(frame, app, x, filters.y, filters);
+        if fits_beside {
+            let x = x.saturating_sub(commands.width() + 1);
+            commands.draw(frame, app, x, filters.y, filters);
+        }
     }
     draw_rule(frame, app, rule);
     let drawn = strip.is_some();
@@ -132,6 +151,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let hits = draw_flow(frame, keys, footer);
     app.hits.extend(hits);
     draw_toasts(frame, app, body);
+    if app.palette.is_some() {
+        draw_palette(frame, app);
+    }
+    if let Some(at) = app.menu.as_ref().map(|menu| menu.at) {
+        draw_menu(frame, app, at);
+    }
     // Over a dialog or help, what lies under them is not lit: a click
     // there takes them away.
     if !app.help && !app.asking() {
@@ -479,7 +504,9 @@ fn draw_toasts(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+/// The header: the store, what waits on the human, and the palette's
+/// button `commands` before that when it is not beside the tabs.
+fn draw_header(frame: &mut Frame, app: &mut App, area: Rect, commands: Option<&Button>) {
     let (waiting, blocking) = app.waiting();
     let mut right = Vec::new();
     if app.only.is_some() {
@@ -508,7 +535,8 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         right.push(Span::raw(" "));
     }
     let right = Line::from(right).right_aligned();
-    let room = usize::from(area.width).saturating_sub(right.width() + 10);
+    let button = commands.map_or(0, |button| usize::from(button.width()) + 1);
+    let room = usize::from(area.width).saturating_sub(right.width() + button + 10);
     let left = Line::from(vec![
         Span::styled(
             " cases ",
@@ -522,8 +550,15 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(DIM),
         ),
     ]);
+    let right_width = u16::try_from(right.width()).unwrap_or(u16::MAX);
     frame.render_widget(left, area);
     frame.render_widget(right, area);
+    if let Some(button) = commands {
+        let x = area
+            .right()
+            .saturating_sub(right_width + button.width() + 1);
+        button.draw(frame, app, x, area.y, area);
+    }
 }
 
 /// Lines drawn over several rows, and where on them each part a click
@@ -652,6 +687,176 @@ fn message_button(app: &App) -> Button {
     let open = app.form.is_some() || app.compose.is_some();
     let hit = (!open).then(|| Hit::Key(KeyEvent::from(KeyCode::Char('m'))));
     Button::new("+ Message", hit).accel('m')
+}
+
+/// How wide the screen is before the header has room for the palette's
+/// button beside the store and the count of what waits.
+const HEADER_ROOM: u16 = 72;
+
+/// The button that opens the palette (TU-12).
+fn commands_button() -> Button {
+    let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+    Button::new("Commands", Some(Hit::Key(ctrl_k))).key("^k")
+}
+
+/// The palette (TU-12): what is typed, the case it acts on, and the
+/// actions that fit, best first, each with why and its key; the one the
+/// keys are on marked. A click on one runs it.
+fn draw_palette(frame: &mut Frame, app: &mut App) {
+    let Some(palette) = &app.palette else {
+        return;
+    };
+    let found = actions::ranked(app, &palette.query);
+    let at = palette.at.min(found.len().saturating_sub(1));
+    let area = frame.area();
+    let width = area.width.saturating_sub(4).min(64);
+    let shown = found
+        .len()
+        .min(usize::from(area.height.saturating_sub(8)).max(1));
+    let on = app
+        .selected_case()
+        .map(|(_, case)| safe::clean(case.title()).into_owned());
+    let mut lines = vec![Line::from(vec![
+        Span::styled("› ", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::raw(safe::clean(&palette.query).into_owned()),
+        Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
+    ])];
+    lines.push(Line::styled(
+        on.map_or_else(|| "on: no case".to_string(), |title| format!("on: {title}")),
+        Style::new().fg(DIM),
+    ));
+    let inner = usize::from(width.saturating_sub(4));
+    // The window of what was found that keeps the chosen one in sight.
+    let skip = (at + 1).saturating_sub(shown);
+    for (n, action) in found.iter().enumerate().skip(skip).take(shown) {
+        let key = action.key();
+        let name = action.name();
+        let room = inner.saturating_sub(name.chars().count() + key.chars().count() + 3);
+        let why = truncate(action.why(), room);
+        let pad = room.saturating_sub(why.chars().count());
+        let chosen = n == at;
+        let face = if chosen {
+            Style::new().bg(SELECTED_BG)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{name} "),
+                face.add_modifier(if chosen {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(format!(" {why}"), face.fg(DIM)),
+            Span::styled(" ".repeat(pad), face),
+            Span::styled(
+                format!(" {key}"),
+                face.fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    if found.is_empty() {
+        lines.push(Line::styled("nothing fits", Style::new().fg(DIM)));
+    }
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 3,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" commands ")
+        .style(Style::new().bg(PANEL_BG))
+        .padding(Padding::horizontal(1));
+    let face = block.inner(rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    app.hits.push((rect, Hit::Dialog));
+    for row in 0..u16::try_from(shown.min(found.len())).unwrap_or(0) {
+        let y = face.y + 2 + row;
+        if y < face.bottom() {
+            let n = skip + usize::from(row);
+            app.hits
+                .push((Rect::new(face.x, y, face.width, 1), Hit::Palette(n)));
+        }
+    }
+}
+
+/// The menu a right-click opens on a row (TU-12): the actions that fit
+/// its case, each with its key, at the pointer `at`, kept inside the
+/// screen.
+fn draw_menu(frame: &mut Frame, app: &mut App, at: ratatui::layout::Position) {
+    let found = Action::on_case(app);
+    let item = app.menu.as_ref().map_or(0, |menu| menu.item);
+    let wide = found
+        .iter()
+        .map(|action| action.name().chars().count() + action.key().chars().count() + 3)
+        .max()
+        .unwrap_or(0)
+        .max("nothing to do on it".len());
+    let area = frame.area();
+    let width = u16::try_from(wide + 4).unwrap_or(u16::MAX).min(area.width);
+    let height = u16::try_from(found.len().max(1) + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = menu_rect(area, at, width, height);
+    let inner = usize::from(width.saturating_sub(4));
+    let mut lines = Vec::new();
+    for (n, action) in found.iter().enumerate() {
+        let face = if n == item {
+            Style::new().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        let name = action.name();
+        let pad = inner.saturating_sub(name.chars().count() + action.key().chars().count());
+        lines.push(Line::from(vec![
+            Span::styled(format!("{name}{}", " ".repeat(pad)), face),
+            Span::styled(action.key(), face.fg(ACCENT)),
+        ]));
+    }
+    if found.is_empty() {
+        lines.push(Line::styled("nothing to do on it", Style::new().fg(DIM)));
+    }
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .style(Style::new().bg(PANEL_BG))
+        .padding(Padding::horizontal(1));
+    let face = block.inner(rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    app.hits.push((rect, Hit::Dialog));
+    for n in 0..found.len() {
+        let y = face.y + u16::try_from(n).unwrap_or(u16::MAX);
+        if y < face.bottom() {
+            app.hits
+                .push((Rect::new(face.x, y, face.width, 1), Hit::Menu(n)));
+        }
+    }
+}
+
+/// Where a menu `width` by `height` opens for a right-click at `at`:
+/// below and right of the pointer, moved up and left as far as it must
+/// be to stay inside `area`.
+pub(crate) fn menu_rect(
+    area: Rect,
+    at: ratatui::layout::Position,
+    width: u16,
+    height: u16,
+) -> Rect {
+    let x = at.x.min(area.right().saturating_sub(width)).max(area.x);
+    let y = (at.y + 1)
+        .min(area.bottom().saturating_sub(height))
+        .max(area.y);
+    Rect::new(x, y, width, height)
 }
 
 /// The case's bar: a button for each act its keys would do on it (TU-12).
@@ -2162,7 +2367,7 @@ fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: 
         form_keys = [("j/k", "scroll"), ("a", "answer")]
             .into_iter()
             .chain(park.then_some(("p", "park")))
-            .chain([("?", "keys"), ("q", "quit")])
+            .chain([("^k", "commands"), ("?", "keys"), ("q", "quit")])
             .collect();
         &form_keys
     } else {
@@ -2173,6 +2378,7 @@ fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: 
                 ("m", "message"),
                 ("tab", "filter"),
                 ("s", "stats"),
+                ("^k", "commands"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -2183,6 +2389,7 @@ fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: 
                 ("m", "message"),
                 ("tab", "filter"),
                 ("s", "stats"),
+                ("^k", "commands"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -2191,6 +2398,7 @@ fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: 
                 ("a", "answer"),
                 ("esc", "back"),
                 ("s", "stats"),
+                ("^k", "commands"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -2229,6 +2437,7 @@ fn pressed(label: &str) -> Option<KeyEvent> {
         "tab" => (KeyCode::Tab, KeyModifiers::NONE),
         "^s" => (KeyCode::Char('s'), KeyModifiers::CONTROL),
         "^e" => (KeyCode::Char('e'), KeyModifiers::CONTROL),
+        "^k" => (KeyCode::Char('k'), KeyModifiers::CONTROL),
         _ => {
             let mut chars = label.chars();
             match (chars.next(), chars.next()) {
@@ -2341,7 +2550,7 @@ fn panel_keys(form: &Form) -> Vec<(&'static str, &'static str)> {
 }
 
 /// The keys (TU-08).
-pub(crate) const KEYS: [(&str, &str); 23] = [
+pub(crate) const KEYS: [(&str, &str); 25] = [
     ("j k ↑ ↓", "move in the list, or scroll the case"),
     ("g G", "first or last case"),
     ("⏎ l →", "read the case"),
@@ -2359,9 +2568,11 @@ pub(crate) const KEYS: [(&str, &str); 23] = [
     ("^s ^e", "in a field: send, or open $EDITOR"),
     ("esc", "in a form: leave the field, then the form"),
     ("s", "show or hide the stats of the last 14 days"),
+    ("^k", "commands: what fits now, found by name"),
     ("?", "these keys"),
     ("q ^c", "quit"),
     ("click", "a tab, a case, a button, an option or a field"),
+    ("right-click", "a case: what can be done on it"),
     ("point", "lights what a click acts on"),
     ("wheel", "move in the list, or scroll the case"),
     ("⇧ drag", "select text, in most terminals"),
@@ -2369,7 +2580,7 @@ pub(crate) const KEYS: [(&str, &str); 23] = [
 
 /// The keys one case's screen takes (TU-11): what [`KEYS`] lists less
 /// the list's, the filters', a withdraw's, a resume's and messages'.
-pub(crate) const ONE_KEYS: [(&str, &str); 14] = [
+pub(crate) const ONE_KEYS: [(&str, &str); 15] = [
     ("j k ↑ ↓", "scroll the case"),
     ("space J K", "scroll the case a page"),
     ("^d ^u", "scroll the case a page"),
@@ -2378,6 +2589,7 @@ pub(crate) const ONE_KEYS: [(&str, &str); 14] = [
     ("p", "park it, when it is stuck"),
     ("^s ^e", "in a field: send, or open $EDITOR"),
     ("esc", "in a form: leave the field, then the form"),
+    ("^k", "commands: what fits now, found by name"),
     ("?", "these keys"),
     ("q ^c", "quit"),
     ("click", "a button, an option or a field"),
@@ -3695,7 +3907,7 @@ mod tests {
                 // And so do the keys: not s, with no room for the strip;
                 // a, with no case pane, but not m, with its button.
                 " j/k move   ⏎ read   a answer   tab filter        ".into(),
-                " ? keys   q quit                                  ".into(),
+                " ^k commands   ? keys   q quit                    ".into(),
             ]
         );
         // The blocking count is red, and so is the dot before it.
@@ -3742,7 +3954,10 @@ mod tests {
                 format!("{}│{}", " ".repeat(38), " ".repeat(61)),
                 // The answer's buttons, kept in sight.
                 format!("{}│   ^s Send   d Drop{}", " ".repeat(38), " ".repeat(42)),
-                format!(" j/k move   tab filter   ? keys   q quit{}", " ".repeat(60)),
+                format!(
+                    " j/k move   tab filter   ^k commands   ? keys   q quit{}",
+                    " ".repeat(46)
+                ),
             ]
         );
         // Scrolled past the end, the scroll stops at the last line, and
@@ -3867,9 +4082,9 @@ mod tests {
     fn help_is_a_box_in_the_middle() {
         let mut app = app(0);
         app.help = true;
-        let buffer = screen(&mut app, 80, 33);
+        let buffer = screen(&mut app, 80, 35);
         assert_eq!(buffer[(10, 3)].symbol(), "╭");
-        assert_eq!(buffer[(69, 29)].symbol(), "╯");
+        assert_eq!(buffer[(69, 31)].symbol(), "╯");
         assert_eq!(buffer[(10, 3)].fg, ACCENT);
         let rows = rows(&buffer);
         // The box is drawn over the empty inbox's line, from column 10.
