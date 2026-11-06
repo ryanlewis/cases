@@ -13,7 +13,7 @@ use ratatui::widgets::{
     Block, BorderType, Clear, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph,
 };
 
-use super::app::{App, Filter, Focus, Group, Hit};
+use super::app::{App, Filter, Focus, Group, Hit, Verb};
 use super::compose::{Compose, Part};
 use super::field::Field;
 use super::form::{Act, Confirm, Form, RowPick, Which, verdict_word};
@@ -44,7 +44,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let side_by_side = width >= SIDE_BY_SIDE;
     // The filters and the footer wrap onto more lines on a narrow terminal
     // rather than lose a tab or a key off the end.
-    let tabs = app.only.is_none().then(|| filter_lines(app, width));
+    let message = app.only.is_none().then(|| message_button(app));
+    let tabs = message
+        .as_ref()
+        .map(|message| filter_lines(app, width.saturating_sub(message.width() + 1)));
     app.strip.room = frame.area().height >= stats::MIN_ROWS;
     let keys = footer_lines(app, width, side_by_side);
     let rows = |lines: &[Line]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
@@ -76,6 +79,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(tabs) = tabs {
         let hits = draw_flow(frame, tabs, filters);
         app.hits.extend(hits);
+    }
+    if let Some(message) = message {
+        let x = filters.right().saturating_sub(message.width());
+        message.draw(frame, app, x, filters.y, filters);
     }
     draw_rule(frame, app, rule);
     let drawn = strip.is_some();
@@ -122,16 +129,16 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The layout may have moved under a pointer that has not: what it is
     // over now, for the next frame.
-    app.hover = app
-        .pointer
-        .and_then(|at| app.hit_at(at))
-        .filter(|hit| app.acts_on(*hit));
+    app.hover = app.hovered();
 }
 
-/// Lights the cells of what the pointer is over, unless it is a button,
-/// which lights itself (TU-12).
+/// Lights the cells of what the pointer is over, unless it is a button or
+/// a tab, which light themselves (TU-12).
 fn light(frame: &mut Frame, app: &App) {
-    let Some(hover) = app.hover.filter(|hit| !matches!(hit, Hit::Key(_))) else {
+    let Some(hover) = app
+        .hover
+        .filter(|hit| !matches!(hit, Hit::Key(_) | Hit::Tab(_)))
+    else {
         return;
     };
     let area = frame.area();
@@ -196,10 +203,6 @@ impl Button {
 
     /// The button with the first `letter` of its label underlined, in
     /// either case.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the case's buttons, which name their key so")
-    )]
     pub(crate) fn accel(self, letter: char) -> Button {
         Button {
             accel: Some(letter),
@@ -536,21 +539,18 @@ fn flow(chips: Vec<Chip>, width: u16, gap: &str, tight: &str) -> Flow {
         .sum::<usize>();
     let gap = if wide <= width { gap } else { tight };
     let mut lines = Vec::new();
-    let mut line = vec![Span::raw(" ")];
-    let mut used = 1;
+    let mut line = Vec::new();
+    let mut used = 0;
     let mut hits = Vec::new();
     for chip in chips {
         let size: usize = chip.spans.iter().map(Span::width).sum();
         let lead = between(gap, chip.bar);
         let lead_width = lead.chars().count();
-        if used > 1 && used + lead_width + size > width {
-            lines.push(Line::from(std::mem::replace(
-                &mut line,
-                vec![Span::raw(" ")],
-            )));
-            used = 1;
+        if used > 0 && used + lead_width + size > width {
+            lines.push(Line::from(std::mem::take(&mut line)));
+            used = 0;
         }
-        if used > 1 {
+        if used > 0 {
             line.push(Span::styled(lead, Style::new().fg(DIM)));
             used += lead_width;
         }
@@ -589,26 +589,72 @@ fn filter_lines(app: &App, width: u16) -> Flow {
             Filter::Briefings => app.briefings().0.len(),
             _ => app.shown(filter).len(),
         };
+        // A pill: the chosen one filled, any other lit under the pointer.
         let chosen = filter == app.filter;
-        let (name, count_style) = if chosen {
-            (
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                Style::new().fg(ACCENT),
-            )
+        let hit = Hit::Tab(filter);
+        let (face, quiet) = if chosen {
+            let face = Style::new().fg(Color::Black).bg(if app.hover == Some(hit) {
+                Color::LightCyan
+            } else {
+                ACCENT
+            });
+            (face.add_modifier(Modifier::BOLD), face)
+        } else if app.hover == Some(hit) {
+            let face = Style::new().bg(HOVER_BG).fg(Color::White);
+            (face, face)
         } else {
             (Style::new(), Style::new().fg(DIM))
         };
         chips.push(Chip {
             spans: vec![
-                Span::styled(format!("{n} "), Style::new().fg(DIM)),
-                Span::styled(filter.name(), name),
-                Span::styled(format!(" {count}"), count_style),
+                Span::styled(format!(" {n} "), quiet),
+                Span::styled(filter.name(), face),
+                Span::styled(format!(" {count} "), quiet),
             ],
             bar: filter == Filter::Briefings,
-            hit: Some(Hit::Tab(filter)),
+            hit: Some(hit),
         });
     }
-    flow(chips, width, "    ", "  ")
+    flow(chips, width, "  ", " ")
+}
+
+/// The button at the right of the filters' row that starts a message
+/// (TU-07, TU-12). While a form or a message is open, which takes the
+/// keys, it is drawn but does nothing, as m does nothing then.
+fn message_button(app: &App) -> Button {
+    let open = app.form.is_some() || app.compose.is_some();
+    let hit = (!open).then(|| Hit::Key(KeyEvent::from(KeyCode::Char('m'))));
+    Button::new("+ Message", hit).accel('m')
+}
+
+/// The case's bar: a button for each act its keys would do on it (TU-12).
+fn verb_chips(app: &App) -> Vec<Chip> {
+    app.verbs()
+        .into_iter()
+        .map(|verb| {
+            let look = if verb == Verb::Answer {
+                Look::Primary
+            } else {
+                Look::Plain
+            };
+            let button = Button::new(
+                verb.label(),
+                Some(Hit::Key(KeyEvent::from(KeyCode::Char(verb.key())))),
+            )
+            .accel(verb.key())
+            .look(look);
+            Chip {
+                spans: button.spans(button.lit(app)),
+                bar: false,
+                hit: button.hit,
+            }
+        })
+        .collect()
+}
+
+/// Whether the case pane is drawn: beside the list, or alone.
+fn case_drawn(app: &App, side_by_side: bool) -> bool {
+    app.only.is_some() || side_by_side || app.focus == Focus::Case
 }
 
 /// Says that a click on each line drawn in `area`, from line `skip` of
@@ -1061,8 +1107,31 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
-    let paras = case_paras(app, *key, case);
-    let (lines, hits) = wrap::wrap_hits(paras, usize::from(inner.width));
+    let mut paras = case_paras(app, *key, case);
+    // The title and the meta stay at the top, with the bar under them: the
+    // rest scrolls.
+    let rest = paras.split_off(2.min(paras.len()));
+    let head = wrap::wrap(paras, usize::from(inner.width));
+    let chips = verb_chips(app);
+    let bar = (!chips.is_empty()).then(|| flow(chips, inner.width, " ", " "));
+    let tall = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    let [head_area, bar_area, inner] = Layout::vertical([
+        Constraint::Length(tall(head.len())),
+        // The bar, and a row under it.
+        Constraint::Length(bar.as_ref().map_or(0, |(lines, _)| tall(lines.len() + 1))),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    frame.render_widget(Paragraph::new(head), head_area);
+    if let Some(bar) = bar {
+        let bar_area = Rect {
+            y: bar_area.y.saturating_add(1).min(bar_area.bottom()),
+            ..bar_area
+        };
+        let hits = draw_flow(frame, bar, bar_area);
+        app.hits.extend(hits);
+    }
+    let (lines, hits) = wrap::wrap_hits(rest, usize::from(inner.width));
     let max =
         u16::try_from(lines.len().saturating_sub(usize::from(inner.height))).unwrap_or(u16::MAX);
     app.scroll = app.scroll.min(max);
@@ -1763,6 +1832,18 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
     if let Some(line) = app.sending_line() {
         return said(line, Style::new().fg(Color::Yellow));
     }
+    // The keys that have a button on the screen are left to it: an answer
+    // and a park in the case's bar, a message at the right of the tabs. An
+    // answer is still offered when no button for it is drawn, as on a
+    // narrow screen showing the list.
+    let answer_shown = case_drawn(app, side_by_side) && app.verbs().contains(&Verb::Answer);
+    let park_shown = case_drawn(app, side_by_side) && app.verbs().contains(&Verb::Park);
+    let buttoned = |chip: &(&str, &str)| {
+        (chip.0 == "a" && answer_shown)
+            || (chip.0 == "p" && park_shown)
+            || (chip.0 == "m" && app.only.is_none())
+    };
+    let open = app.form.is_some() || app.compose.is_some();
     let form_keys;
     let keys: &[(&str, &str)] = if let Some(form) = &app.form {
         form_keys = keys_for(form);
@@ -1816,6 +1897,7 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
     let chips = keys
         .iter()
         .filter(|chip| app.strip.room || **chip != ("s", "stats"))
+        .filter(|chip| open || !buttoned(chip))
         .map(|(key, what)| {
             let look = if *what == "send" {
                 Look::Primary
@@ -1946,7 +2028,7 @@ fn keys_for(form: &Form) -> Vec<(&'static str, &'static str)> {
 }
 
 /// The keys (TU-08).
-pub(crate) const KEYS: [(&str, &str); 21] = [
+pub(crate) const KEYS: [(&str, &str); 22] = [
     ("j k ↑ ↓", "move in the list, or scroll the case"),
     ("g G", "first or last case"),
     ("⏎ l →", "read the case"),
@@ -1965,14 +2047,15 @@ pub(crate) const KEYS: [(&str, &str); 21] = [
     ("s", "show or hide the stats of the last 14 days"),
     ("?", "these keys"),
     ("q ^c", "quit"),
-    ("click", "a tab, a case, an option, a field or a key"),
+    ("click", "a tab, a case, a button, an option or a field"),
+    ("point", "lights what a click acts on"),
     ("wheel", "move in the list, or scroll the case"),
     ("⇧ drag", "select text, in most terminals"),
 ];
 
 /// The keys one case's screen takes (TU-11): what [`KEYS`] lists less
 /// the list's, the filters', a withdraw's, a resume's and messages'.
-pub(crate) const ONE_KEYS: [(&str, &str); 12] = [
+pub(crate) const ONE_KEYS: [(&str, &str); 13] = [
     ("j k ↑ ↓", "scroll the case"),
     ("space J K", "scroll the case a page"),
     ("^d ^u", "scroll the case a page"),
@@ -1982,7 +2065,8 @@ pub(crate) const ONE_KEYS: [(&str, &str); 12] = [
     ("esc", "in a form: leave the field, then cancel"),
     ("?", "these keys"),
     ("q ^c", "quit"),
-    ("click", "an option, a field or a key"),
+    ("click", "a button, an option or a field"),
+    ("point", "lights what a click acts on"),
     ("wheel", "scroll the case"),
     ("⇧ drag", "select text, in most terminals"),
 ];
@@ -3284,9 +3368,10 @@ mod tests {
             rows(&buffer),
             [
                 " cases   cases.db        ● 1 waiting · 1 blocking ".to_string(),
-                // The tabs wrap rather than lose Briefings off the end.
-                " 1 Inbox 2  2 In flight 1  3 Done 2  4 All 5      ".into(),
-                " 5 Briefings 0                                    ".into(),
+                // The tabs wrap rather than lose Briefings off the end,
+                // beside the message button.
+                " 1 Inbox 2   2 In flight 1   3 Done 2   + Message ".into(),
+                " 4 All 5  │ 5 Briefings 0                         ".into(),
                 "─".repeat(50),
                 " ".repeat(50),
                 "▌● Ship it                                        ".into(),
@@ -3304,17 +3389,18 @@ mod tests {
                 " ✓ Done one with a long title that is cut to t…   ".into(),
                 format!("   {} · fyi · worker                       1h  ", keys[3]),
                 " ".repeat(50),
-                // And so do the keys: not s, with no room for the strip.
-                "  j/k move   ⏎ read   a answer   m message        ".into(),
-                "  tab filter   ? keys   q quit                    ".into(),
+                // And so do the keys: not s, with no room for the strip;
+                // a, with no case pane, but not m, with its button.
+                " j/k move   ⏎ read   a answer   tab filter        ".into(),
+                " ? keys   q quit                                  ".into(),
             ]
         );
         // The blocking count is red, and so is the dot before it.
         assert_eq!(buffer[(col(&buffer, 0, "●"), 0)].fg, Color::Red);
         assert_eq!(buffer[(col(&buffer, 0, "1 blocking"), 0)].fg, Color::Red);
-        // The chosen filter is accented.
-        assert_eq!(buffer[(col(&buffer, 1, "All"), 1)].fg, ACCENT);
-        assert_eq!(buffer[(col(&buffer, 1, "Inbox"), 1)].fg, Color::Reset);
+        // The chosen filter is a filled pill; the others are not filled.
+        assert_eq!(buffer[(col(&buffer, 2, "All"), 2)].bg, ACCENT);
+        assert_eq!(buffer[(col(&buffer, 1, "Inbox"), 1)].bg, Color::Reset);
         // A done case's title recedes; the others are bold.
         assert_eq!(buffer[(col(&buffer, 17, "Done"), 17)].fg, DIM);
         let ship = col(&buffer, 5, "Ship");
@@ -3339,28 +3425,26 @@ mod tests {
                     "   {key} · decision · worker      2h  │  ● blocking · decision · worker · 2h ago · {key}            "
                 ),
                 format!("{}│{}", " ".repeat(38), " ".repeat(61)),
+                // The bar, its answer the footer's no more.
                 format!(
-                    " ◌ Stuck here                         │  OPTIONS{}",
-                    " ".repeat(52)
-                ),
-                format!(
-                    "   {} · stuck · parked · work… 1h  │   1  Ship{}",
-                    Key::new(2).unwrap(),
+                    " ◌ Stuck here                         │   Answer {}",
                     " ".repeat(51)
                 ),
-                format!("{}│   2  Wait{}", " ".repeat(38), " ".repeat(51)),
-                format!("{}│{} more ↓  ", " ".repeat(38), " ".repeat(52)),
                 format!(
-                    "  j/k move   a answer   m message   tab filter   ? keys   q quit{}",
-                    " ".repeat(36)
+                    "   {} · stuck · parked · work… 1h  │{}",
+                    Key::new(2).unwrap(),
+                    " ".repeat(61)
                 ),
+                format!("{}│  OPTIONS{}", " ".repeat(38), " ".repeat(52)),
+                format!("{}│   1  Ship{}more ↓  ", " ".repeat(38), " ".repeat(43)),
+                format!(" j/k move   tab filter   ? keys   q quit{}", " ".repeat(60)),
             ]
         );
         // Scrolled past the end, the scroll stops at the last line, and
         // there is no more to show.
         app.scroll = u16::MAX;
         let scrolled = super::tests::rows(&screen(&mut app, 100, 12));
-        assert_eq!(app.scroll, 2);
+        assert_eq!(app.scroll, 4);
         assert!(!scrolled.concat().contains("more"));
     }
 
@@ -3476,9 +3560,9 @@ mod tests {
     fn help_is_a_box_in_the_middle() {
         let mut app = app(0);
         app.help = true;
-        let buffer = screen(&mut app, 80, 31);
+        let buffer = screen(&mut app, 80, 32);
         assert_eq!(buffer[(10, 3)].symbol(), "╭");
-        assert_eq!(buffer[(69, 27)].symbol(), "╯");
+        assert_eq!(buffer[(69, 28)].symbol(), "╯");
         assert_eq!(buffer[(10, 3)].fg, ACCENT);
         let rows = rows(&buffer);
         // The box is drawn over the empty inbox's line, from column 10.

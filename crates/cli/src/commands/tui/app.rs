@@ -158,6 +158,58 @@ fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
     }
 }
 
+/// Whether r resumes `case`: only a parked one.
+fn resumes(case: &Case) -> bool {
+    case.state() == State::Parked
+}
+
+/// Whether e edits `case`: only a message no agent has picked up (HU-08).
+fn edits(case: &Case) -> bool {
+    case.kind() == Kind::Message && case.state() == State::Sent
+}
+
+/// An act on the selected case that the case's bar offers as a button,
+/// each pressing the key that does it (TU-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verb {
+    Answer,
+    Park,
+    Resume,
+    Withdraw,
+    Edit,
+}
+
+impl Verb {
+    pub(crate) const ALL: [Verb; 5] = [
+        Verb::Answer,
+        Verb::Park,
+        Verb::Resume,
+        Verb::Withdraw,
+        Verb::Edit,
+    ];
+
+    /// The key that does it, which its button underlines.
+    pub(crate) fn key(self) -> char {
+        match self {
+            Verb::Answer => 'a',
+            Verb::Park => 'p',
+            Verb::Resume => 'r',
+            Verb::Withdraw => 'w',
+            Verb::Edit => 'e',
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Verb::Answer => "Answer",
+            Verb::Park => "Park",
+            Verb::Resume => "Resume",
+            Verb::Withdraw => "Withdraw",
+            Verb::Edit => "Edit",
+        }
+    }
+}
+
 /// How far a turn of the wheel scrolls the case.
 const WHEEL: u16 = 3;
 
@@ -618,6 +670,39 @@ impl App {
         }
     }
 
+    /// What a click under the pointer would act on, from where the last
+    /// frame drew each part: what the view lights.
+    pub(crate) fn hovered(&self) -> Option<Hit> {
+        self.pointer
+            .and_then(|at| self.hit_at(at))
+            .filter(|hit| self.acts_on(*hit))
+    }
+
+    /// The acts the case's bar offers on the selected case, as buttons
+    /// (TU-12): those its keys would do, so that the bar and the keys
+    /// agree. None while a form or a message is open, which takes the keys;
+    /// on one case's screen (TU-11), only those it takes.
+    pub(crate) fn verbs(&self) -> Vec<Verb> {
+        if self.form.is_some() || self.compose.is_some() {
+            return Vec::new();
+        }
+        let Some((_, case)) = self.selected_case() else {
+            return Vec::new();
+        };
+        let fits = |verb: Verb| match verb {
+            Verb::Answer => Act::Answer.fits(case),
+            Verb::Park => Act::Park.fits(case),
+            Verb::Resume => resumes(case),
+            Verb::Withdraw => Act::Withdraw.fits(case),
+            Verb::Edit => edits(case),
+        };
+        Verb::ALL
+            .into_iter()
+            .filter(|verb| fits(*verb))
+            .filter(|verb| self.only.is_none() || one_case_takes(KeyCode::Char(verb.key()), false))
+            .collect()
+    }
+
     /// Whether a question is up, in a dialog: quitting, or the form's or
     /// the message's.
     pub(crate) fn asking(&self) -> bool {
@@ -664,7 +749,7 @@ impl App {
         let at = Position::new(event.column, event.row);
         let hit = self.hit_at(at);
         self.pointer = Some(at);
-        self.hover = hit.filter(|hit| self.acts_on(*hit));
+        self.hover = self.hovered();
         // A toast is not scrolled: the wheel over one scrolls what is
         // under it.
         let under = || {
@@ -951,7 +1036,7 @@ impl App {
             return;
         };
         let key = *key;
-        if case.state() != State::Parked {
+        if !resumes(case) {
             let line = format!("{key} is {}: only a parked case resumes", case.state());
             self.flash(&line);
             return;
@@ -981,7 +1066,7 @@ impl App {
             return;
         };
         let key = *key;
-        if case.kind() == Kind::Message && case.state() == State::Sent {
+        if edits(case) {
             self.compose = Some(Compose::edit(key, case));
             self.focus = Focus::Case;
         } else {
