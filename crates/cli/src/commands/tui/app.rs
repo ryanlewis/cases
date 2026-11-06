@@ -140,14 +140,16 @@ pub(crate) enum Hit {
     Verb(Verb),
     /// A dialog, behind its buttons: a click on it does nothing.
     Dialog,
-    /// A toast, by its place: a click puts it away.
-    Toast(usize),
+    /// A toast, by its id: a click puts it away.
+    Toast(u64),
 }
 
 /// A short-lived notice in a corner of the screen: what a write did, or
 /// why a key did nothing.
 #[derive(Debug, Clone)]
 pub(crate) struct Toast {
+    /// Which toast it is, while it is up: a click names it by this.
+    pub(crate) id: u64,
     pub(crate) text: String,
     /// Whether it says something was done, rather than not.
     pub(crate) done: bool,
@@ -258,6 +260,8 @@ pub(crate) struct App {
     pub(crate) list_offset: usize,
     /// The toasts shown, oldest first.
     pub(crate) toasts: Vec<Toast>,
+    /// The id the next toast takes.
+    next_toast: u64,
     pub(crate) help: bool,
     pub(crate) quit: bool,
     /// The form that has the keys, for the selected case (TU-05): an
@@ -343,6 +347,7 @@ impl App {
             scroll: 0,
             list_offset: 0,
             toasts: Vec::new(),
+            next_toast: 0,
             help: false,
             quit: false,
             form: None,
@@ -444,6 +449,12 @@ impl App {
     /// has moved to a state the form cannot write to, and otherwise
     /// following it as [`Form::follow`] says.
     fn follow_form(&mut self) {
+        // The write being sent moves its case on: how it went is said once
+        // it lands, by `sent`, not as a case that moved with nothing sent.
+        let sending = match &self.sending {
+            Some(Sending::Event(send)) => Some(send.key),
+            _ => None,
+        };
         // A draft follows its case quietly, and goes once its case can no
         // longer be answered, saying so as the form does.
         let cases = &self.cases;
@@ -454,6 +465,7 @@ impl App {
                     draft.follow(case);
                     true
                 }
+                _ if Some(draft.key) == sending => true,
                 Some((_, case)) => {
                     gone.push(format!(
                         "{} is now {}: nothing was sent",
@@ -485,6 +497,7 @@ impl App {
                     form.follow(case);
                 }
             }
+            _ if Some(form.key) == sending => {}
             Some(case) => {
                 let line = format!("{} is now {}: nothing was sent", form.key, case.state());
                 self.form = None;
@@ -652,14 +665,25 @@ impl App {
     }
 
     fn toast(&mut self, text: &str, done: bool) {
+        // The same again is the newest toast up for longer, not another.
+        if let Some(last) = self
+            .toasts
+            .last_mut()
+            .filter(|last| last.text == text && last.done == done)
+        {
+            last.at = Instant::now();
+            return;
+        }
         if self.toasts.len() >= TOASTS {
             self.toasts.remove(0);
         }
         self.toasts.push(Toast {
+            id: self.next_toast,
             text: text.into(),
             done,
             at: Instant::now(),
         });
+        self.next_toast += 1;
     }
 
     /// The newest toast's text.
@@ -677,9 +701,13 @@ impl App {
     }
 
     /// Puts away the toasts that have been up long enough.
-    pub(crate) fn expire_toasts(&mut self, now: Instant) {
+    ///
+    /// Gives whether any went, so that the screen is drawn without them.
+    pub(crate) fn expire_toasts(&mut self, now: Instant) -> bool {
+        let up = self.toasts.len();
         self.toasts
             .retain(|toast| now.duration_since(toast.at) <= TOAST_FOR);
+        self.toasts.len() != up
     }
 
     /// What a click at `at` acts on, from where the last frame drew it.
@@ -824,10 +852,14 @@ impl App {
     /// lit. While help is up, a click is any other key: it closes help.
     /// While a question is up, a click on one of its buttons presses its
     /// key, on the dialog does nothing, and anywhere else answers no.
-    pub(crate) fn mouse(&mut self, event: MouseEvent) {
+    ///
+    /// Gives whether the screen is to be drawn again: not for a move of
+    /// the pointer that leaves it over the same thing.
+    pub(crate) fn mouse(&mut self, event: MouseEvent) -> bool {
         let at = Position::new(event.column, event.row);
         let hit = self.hit_at(at);
         self.pointer = Some(at);
+        let was = self.hover;
         self.hover = self.hovered();
         // A toast is not scrolled: the wheel over one scrolls what is
         // under it.
@@ -840,11 +872,16 @@ impl App {
                 .map(|(_, hit)| *hit)
         };
         match event.kind {
+            MouseEventKind::Moved | MouseEventKind::Drag(_) => return self.hover != was,
             MouseEventKind::Down(MouseButton::Left) => self.click(hit),
             MouseEventKind::ScrollDown => self.wheel(under(), 1),
             MouseEventKind::ScrollUp => self.wheel(under(), -1),
             _ => {}
         }
+        // What the click or the wheel did may have put something over the
+        // pointer, as help, which nothing under it is lit through.
+        self.hover = self.hovered();
+        true
     }
 
     fn wheel(&mut self, hit: Option<Hit>, by: isize) {
@@ -906,10 +943,8 @@ impl App {
         let open = self.modal() || self.form.as_ref().is_some_and(|f| f.editing.is_some());
         match hit {
             Hit::Key(key) => self.key(key),
-            Hit::Toast(at) => {
-                if at < self.toasts.len() {
-                    self.toasts.remove(at);
-                }
+            Hit::Toast(id) => {
+                self.toasts.retain(|toast| toast.id != id);
             }
             // As the keys: the list and the filters wait while a form or a
             // message is open. A dialog's face does nothing.
@@ -1296,6 +1331,10 @@ impl App {
             // Not asked for here: nothing to say.
             _ => {}
         }
+        // With the write said, a form or a draft its read left open on a
+        // case it no longer fits, as when the write was refused because
+        // the case moved on meanwhile, goes, saying nothing was sent.
+        self.follow_form();
     }
 
     /// Queues a write for the loop, with the list as it stands, so that the

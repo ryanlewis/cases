@@ -460,20 +460,26 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
     let mut last_read = Instant::now();
     // The strip's image as the terminal has it (TU-13).
     let mut image = kitty::Shown::default();
+    // Whether the screen is drawn on this turn: not after only moves of
+    // the pointer that leave it over the same thing.
+    let mut draw = true;
     while !app.quit && !run.stop.load(Ordering::Relaxed) && !app.left() {
         if let Some(snapshot) = run.reader.take() {
             run.apply(app, snapshot)?;
             last_read = Instant::now();
+            draw = true;
             // The one case may have left with this read.
             continue;
         }
         if let Some(herdr) = run.herdr.as_deref_mut() {
             herdr.report(app.waiting());
         }
-        app.expire_toasts(Instant::now());
-        terminal.draw(|frame| view::draw(frame, app))?;
-        if app.strip.image {
-            show(&mut image, app)?;
+        draw |= app.expire_toasts(Instant::now());
+        if draw {
+            terminal.draw(|frame| view::draw(frame, app))?;
+            if app.strip.image {
+                show(&mut image, app)?;
+            }
         }
         // While a read runs, a look for it every tick.
         let wait = match run.every() {
@@ -490,18 +496,20 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
         // only where it ends up is lit. A few at most, so that a pointer
         // that keeps moving does not hold up the screen and the reads.
         let mut moves = 0;
+        let mut lit = false;
         while let Some(Event::Mouse(mouse)) = next
             && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
             && moves < MOVES
         {
             moves += 1;
-            app.mouse(mouse);
+            lit |= app.mouse(mouse);
             next = if event::poll(Duration::ZERO)? {
                 Some(event::read()?)
             } else {
                 None
             };
         }
+        draw = next.is_some() || moves == 0 || lit;
         if let Some(event) = next {
             match event {
                 Event::Key(key) => {
@@ -510,7 +518,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c');
                 }
-                Event::Mouse(mouse) => app.mouse(mouse),
+                Event::Mouse(mouse) => {
+                    app.mouse(mouse);
+                }
                 // The screen is drawn afresh: the image is deleted, so that
                 // none is left where the strip was, and sent again.
                 Event::Resize(..) => {
