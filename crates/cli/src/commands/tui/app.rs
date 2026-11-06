@@ -12,7 +12,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect};
 
 use super::compose::{self, Compose, Part};
-use super::form::{Act, Form, Outcome, Which};
+use super::form::{Act, Form, Outcome, Press, Which};
 use super::reader::Wrote;
 use crate::commands::list;
 use crate::output::Actors;
@@ -126,6 +126,18 @@ pub(crate) enum Hit {
     ApprovalRow(usize),
     /// A field of the form.
     Field(Which),
+    /// A signoff's or a briefing's answer, in the answer's panel.
+    Mark(&'static str),
+    /// An approval row's verdict, by the row's place, in the answer's panel.
+    Verdict(usize, &'static str),
+    /// A line of an approval row's verdicts, by the row's place, and
+    /// whether the human carries the step out: the view splits it into a
+    /// [`Hit::Verdict`] for each, so it is never where a click lands.
+    Verdicts(usize, bool),
+    /// One of the answer's panel's buttons.
+    Press(Press),
+    /// One of the case's bar's buttons.
+    Verb(Verb),
     /// A dialog, behind its buttons: a click on it does nothing.
     Dialog,
     /// A toast, by its place: a click puts it away.
@@ -248,8 +260,13 @@ pub(crate) struct App {
     pub(crate) toasts: Vec<Toast>,
     pub(crate) help: bool,
     pub(crate) quit: bool,
-    /// The form being filled in, for the selected case (TU-05).
+    /// The form that has the keys, for the selected case (TU-05): an
+    /// answer's, in the panel at the foot of the case, or a park's or a
+    /// withdraw's.
     pub(crate) form: Option<Form>,
+    /// What was chosen or typed in the answer's panels of other cases, or
+    /// of this one with the keys out of it: kept with each case.
+    pub(crate) drafts: Vec<Form>,
     /// A write for the loop to send.
     pub(crate) pending: Option<Send>,
     /// The write being sent, until the read after it lands (TU-04).
@@ -329,6 +346,7 @@ impl App {
             help: false,
             quit: false,
             form: None,
+            drafts: Vec::new(),
             pending: None,
             sending: None,
             edit: None,
@@ -426,6 +444,18 @@ impl App {
     /// has moved to a state the form cannot write to, and otherwise
     /// following it as [`Form::follow`] says.
     fn follow_form(&mut self) {
+        // A draft follows its case quietly, and goes once its case can no
+        // longer be answered.
+        let cases = &self.cases;
+        self.drafts.retain_mut(
+            |draft| match cases.iter().find(|(key, _)| *key == draft.key) {
+                Some((_, case)) if draft.act.fits(case) => {
+                    draft.follow(case);
+                    true
+                }
+                _ => false,
+            },
+        );
         let Some(form) = &self.form else {
             return;
         };
@@ -658,15 +688,49 @@ impl App {
         if self.asking() {
             return matches!(hit, Hit::Key(_));
         }
-        let open = self.form.is_some() || self.compose.is_some();
+        let modal = self.modal();
+        let typing = self.form.as_ref().is_some_and(|f| f.editing.is_some());
         match hit {
-            Hit::List | Hit::Case | Hit::Dialog => false,
-            Hit::Tab(_) => !open && self.only.is_none(),
-            Hit::Row(_) | Hit::Fold => !open,
-            Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
-                self.compose.is_none()
-            }
+            Hit::List | Hit::Case | Hit::Dialog | Hit::Verdicts(..) => false,
+            Hit::Tab(_) => !modal && !typing && self.only.is_none(),
+            Hit::Row(_) | Hit::Fold => !modal && !typing,
+            Hit::Choice(_)
+            | Hit::LeftOut(_)
+            | Hit::ApprovalRow(_)
+            | Hit::Field(_)
+            | Hit::Mark(_)
+            | Hit::Verdict(..)
+            | Hit::Press(_)
+            | Hit::Verb(_) => !modal,
             Hit::Key(_) | Hit::Toast(_) => true,
+        }
+    }
+
+    /// Whether a form that is not the answer's panel, or a message, has
+    /// the keys: a park's or a withdraw's, which the case's bar and its
+    /// panel wait for, as the list and the filters do.
+    pub(crate) fn modal(&self) -> bool {
+        self.compose.is_some() || self.form.as_ref().is_some_and(|f| f.act != Act::Answer)
+    }
+
+    /// The answer's panel of the case `key` as it stands: the form with
+    /// the keys, or the case's draft.
+    pub(crate) fn answer_of(&self, key: Key) -> Option<&Form> {
+        self.form
+            .iter()
+            .chain(&self.drafts)
+            .find(|form| form.key == key && form.act == Act::Answer)
+    }
+
+    /// Takes the keys out of the answer's panel, keeping what was chosen or
+    /// typed in it as its case's draft.
+    fn leave_panel(&mut self) {
+        if self.form.as_ref().is_some_and(|f| f.act == Act::Answer)
+            && let Some(form) = self.form.take()
+            && form.touched()
+        {
+            self.drafts.retain(|draft| draft.key != form.key);
+            self.drafts.push(form);
         }
     }
 
@@ -683,7 +747,7 @@ impl App {
     /// agree. None while a form or a message is open, which takes the keys;
     /// on one case's screen (TU-11), only those it takes.
     pub(crate) fn verbs(&self) -> Vec<Verb> {
-        if self.form.is_some() || self.compose.is_some() {
+        if self.modal() {
             return Vec::new();
         }
         let Some((_, case)) = self.selected_case() else {
@@ -824,7 +888,7 @@ impl App {
         let Some(hit) = hit else {
             return;
         };
-        let open = self.form.is_some() || self.compose.is_some();
+        let open = self.modal() || self.form.as_ref().is_some_and(|f| f.editing.is_some());
         match hit {
             Hit::Key(key) => self.key(key),
             Hit::Toast(at) => {
@@ -834,32 +898,71 @@ impl App {
             }
             // As the keys: the list and the filters wait while a form or a
             // message is open. A dialog's face does nothing.
-            Hit::List | Hit::Case | Hit::Dialog => {}
-            _ if open && self.form.is_none() => {}
-            Hit::Tab(filter) if !open && self.only.is_none() => self.set_filter(filter),
-            Hit::Fold if !open => self.pane_key(KeyCode::Char('f'), false),
+            // The list and the filters wait while a park, a withdraw or a
+            // message is open, or a field of the answer is typed in; with
+            // the keys only in the answer's panel, they take them out of it.
+            Hit::Tab(filter) if !open && self.only.is_none() => {
+                self.leave_panel();
+                self.set_filter(filter);
+            }
+            Hit::Fold if !open => {
+                self.leave_panel();
+                self.pane_key(KeyCode::Char('f'), false);
+            }
             Hit::Row(key) if !open => {
                 if self.selected == Some(key) {
                     self.focus = Focus::Case;
                 } else if let Some(at) = self.shown(self.filter).iter().position(|(k, _)| *k == key)
                 {
+                    self.leave_panel();
                     self.select(at);
                 }
             }
-            Hit::Tab(_) | Hit::Fold | Hit::Row(_) => {}
-            Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
-                // A choice or an item of a case with no form opens its answer;
-                // one of another case than the form's does nothing.
-                match &self.form {
-                    None => self.start(Act::Answer),
-                    Some(form) if Some(form.key) != self.selected => return,
-                    Some(_) => {}
+            Hit::Tab(_)
+            | Hit::Fold
+            | Hit::Row(_)
+            | Hit::List
+            | Hit::Case
+            | Hit::Dialog
+            | Hit::Verdicts(..) => {}
+            _ if self.modal() => {}
+            // The bar's buttons do what their keys do outside the panel.
+            Hit::Verb(verb) => {
+                self.leave_panel();
+                self.pane_key(KeyCode::Char(verb.key()), false);
+            }
+            Hit::Press(press) => {
+                if let Some(form) = self.enter_panel() {
+                    let outcome = form.press(press);
+                    self.form_outcome(outcome);
                 }
-                if let Some(form) = &mut self.form {
+            }
+            Hit::Choice(_)
+            | Hit::LeftOut(_)
+            | Hit::ApprovalRow(_)
+            | Hit::Field(_)
+            | Hit::Mark(_)
+            | Hit::Verdict(..) => {
+                // A click in the answer's panel puts the keys there, and
+                // does what it lands on.
+                if let Some(form) = self.enter_panel() {
                     form.click(hit);
                 }
             }
         }
+    }
+
+    /// Puts the keys in the selected case's answer's panel, with its draft,
+    /// and gives its form; none when the case cannot be answered.
+    fn enter_panel(&mut self) -> Option<&mut Form> {
+        let here = self
+            .form
+            .as_ref()
+            .is_some_and(|f| f.act == Act::Answer && Some(f.key) == self.selected);
+        if !here {
+            self.start(Act::Answer);
+        }
+        self.form.as_mut().filter(|form| form.act == Act::Answer)
     }
 
     /// Whether the key quits: ctrl+c always, and q unless a field of the
@@ -886,6 +989,7 @@ impl App {
             || self.compose.as_ref().is_some_and(|compose| {
                 compose.typed() && !sent(compose.editing.map(|(key, _)| key))
             })
+            || self.drafts.iter().any(Form::typed)
         {
             self.confirm_quit = true;
         } else {
@@ -952,7 +1056,13 @@ impl App {
             }
         }
         match code {
-            KeyCode::Char('a') => self.start(Act::Answer),
+            KeyCode::Char('a') => {
+                // The panel is at the foot of the case: scrolled to.
+                self.start(Act::Answer);
+                if self.form.is_some() {
+                    self.scroll = u16::MAX;
+                }
+            }
             KeyCode::Char('p') => self.start(Act::Park),
             KeyCode::Char('w') => self.start(Act::Withdraw),
             KeyCode::Char('r') => self.resume(),
@@ -1007,7 +1117,14 @@ impl App {
         };
         let key = *key;
         if act.fits(case) {
-            self.form = Some(Form::new(key, case, act));
+            let fresh = Form::new(key, case, act);
+            self.leave_panel();
+            let draft = self
+                .drafts
+                .iter()
+                .position(|draft| draft.key == key && act == Act::Answer)
+                .map(|at| self.drafts.remove(at));
+            self.form = Some(draft.unwrap_or(fresh));
             if self.focus == Focus::List {
                 self.focus = Focus::Case;
             }
@@ -1049,6 +1166,11 @@ impl App {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => self.form = None,
+            Outcome::Leave => self.leave_panel(),
+            Outcome::Park => {
+                self.leave_panel();
+                self.start(Act::Park);
+            }
             Outcome::Edit(which) => self.edit = Some(which),
             Outcome::Missing(what) => self.flash(&format!("nothing sent: {what}")),
             Outcome::Send(record) => {
@@ -1185,6 +1307,7 @@ impl App {
                 if self.form.as_ref().is_some_and(|f| f.key == send.key) {
                     self.form = None;
                 }
+                self.drafts.retain(|draft| draft.key != send.key);
                 if self
                     .compose
                     .as_ref()
