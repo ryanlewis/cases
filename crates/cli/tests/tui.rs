@@ -1558,7 +1558,7 @@ fn a_click_on_a_tab_switches_to_it() {
         "the pointer's moves are not reported"
     );
     tui.mark();
-    // "Done" is drawn from column 34, row 2, counted from 1.
+    // "Done" is drawn from column 34, row 2, counted from 1, in its pill.
     tui.keys(&[b"\x1b[<0;35;2M", b"\x1b[<0;35;2m"]);
     assert!(tui.shows("no cases here."), "{}", tui.drawn());
     tui.quits();

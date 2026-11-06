@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{
 };
 use tempfile::TempDir;
 
-use super::app::{App, Filter, Focus, Group, Refusal, Sending};
+use super::app::{App, Filter, Focus, Group, Refusal, Sending, Verb};
 use super::field::Field;
 use super::form::{Form, RowPick, Which};
 use super::reader::{Write, Wrote};
@@ -2106,7 +2106,7 @@ fn one_case_shows_only_it_and_has_left_once_answered() {
 }
 
 /// One case's screen (TU-11) is about that case: its header does not count
-/// what else waits in the store, its footer offers a park only on a stuck
+/// what else waits in the store, its bar offers a park only on a stuck
 /// case, and its help lists only the keys that work there.
 #[test]
 fn one_case_says_only_what_works_on_it() {
@@ -2123,15 +2123,20 @@ fn one_case_says_only_what_works_on_it() {
         assert!(!header.contains("blocking"), "{header}");
         assert!(!header.contains("nothing needs you"), "{header}");
         let footer = shown.lines().last().unwrap();
-        assert_eq!(footer.contains("p park"), park, "{footer}");
-        // p does what the footer says: nothing on a case that cannot park.
+        assert_eq!(shown.contains(" Park "), park, "{shown}");
+        // The bar's buttons are not the footer's too.
+        assert!(
+            !footer.contains("park") && !footer.contains("answer"),
+            "{footer}"
+        );
+        // p does what the bar says: nothing on a case that cannot park.
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.form.is_some(), park, "p on {key}");
         assert!(app.toasts.is_empty(), "p flashed {:?}", app.toasts);
         app.form = None;
         assert!(
-            footer.contains("a answer") && footer.contains("? keys"),
-            "{footer}"
+            shown.contains(" Answer ") && footer.contains("? keys"),
+            "{shown}"
         );
 
         press(&mut app, KeyCode::Char('?'));
@@ -2805,11 +2810,11 @@ fn an_image_strip_leaves_the_image_its_cells() {
         Some(ratatui::layout::Rect::new(10, 4, 28, 2))
     );
     // At a phone's width, a day a column, as the text, under the filters'
-    // two lines.
+    // three lines, beside the message button.
     screen(&mut app, 40, 30);
     assert_eq!(
         app.strip.area,
-        Some(ratatui::layout::Rect::new(10, 5, 14, 2))
+        Some(ratatui::layout::Rect::new(10, 6, 14, 2))
     );
     app.help = true;
     screen(&mut app, 100, 30);
@@ -2844,8 +2849,17 @@ fn an_image_strip_too_narrow_for_its_image_is_text() {
 }
 
 /// The background of the cell at `at`, as `app` is drawn now.
-fn bg_at(app: &mut App, (column, row): (u16, u16)) -> ratatui::style::Color {
-    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+fn bg_at(app: &mut App, at: (u16, u16)) -> ratatui::style::Color {
+    bg_in(app, (120, 40), at)
+}
+
+/// The background of the cell at `at`, as `app` is drawn now at `size`.
+fn bg_in(
+    app: &mut App,
+    (width, height): (u16, u16),
+    (column, row): (u16, u16),
+) -> ratatui::style::Color {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| view::draw(frame, app)).unwrap();
     terminal.backend().buffer()[(column, row)].bg
 }
@@ -3077,4 +3091,247 @@ fn a_dialog_on_a_short_terminal_keeps_its_buttons() {
         spot(&shown, "y Drop"),
     );
     assert!(app.pending.is_some(), "{shown}");
+}
+
+/// A message from the human to `worker`, sent: no agent has picked it up.
+fn message(store: &Store, title: &str) -> Key {
+    let mut message = Open::default();
+    "message".clone_into(&mut message.kind);
+    "whenever".clone_into(&mut message.urgency);
+    title.clone_into(&mut message.title);
+    "worker".clone_into(&mut message.worker);
+    let append = Append::new(Author::Human, &Record::Open(message));
+    store
+        .db
+        .create(&append, &Writer::new(Some("ryan")))
+        .unwrap()
+        .0
+}
+
+/// A store with a case of each kind and state the bar tells apart, and
+/// the acts its bar offers on each, as its keys would do them.
+fn every_state() -> (Store, Vec<(Key, Vec<Verb>)>) {
+    use Verb::{Answer, Edit, Park, Resume, Withdraw};
+    let store = Store::new();
+    let decision_open = store.open("decision", "today", "decision open", decision);
+    let stuck_open = store.open("stuck", "today", "stuck open", |_| {});
+    let stuck_parked = store.open("stuck", "today", "stuck parked", |_| {});
+    store.human(stuck_parked, &Record::Park(cases_core::Park::default()));
+    let briefing = store.open("briefing", "today", "briefing open", |open| {
+        "What landed.".clone_into(&mut open.body);
+    });
+    let answered = store.open("question", "today", "answered", |_| {});
+    store.answer(answered, |a| "yes".clone_into(&mut a.text));
+    let picked = store.open("fyi", "today", "picked up", |_| {});
+    store.answer(picked, |a| a.ack = true);
+    store.pickup(picked);
+    let closed = store.open("fyi", "today", "closed", |_| {});
+    store.answer(closed, |a| a.ack = true);
+    store.pickup(closed);
+    store.close(closed, "done");
+    let sent = message(&store, "message sent");
+    let message_picked = message(&store, "message picked up");
+    store.pickup(message_picked);
+    let verbs = vec![
+        (decision_open, vec![Answer]),
+        (stuck_open, vec![Answer, Park]),
+        (stuck_parked, vec![Resume]),
+        (briefing, vec![Answer]),
+        (answered, vec![Withdraw]),
+        (picked, vec![Withdraw]),
+        (closed, vec![]),
+        (sent, vec![Withdraw, Edit]),
+        (message_picked, vec![Withdraw]),
+    ];
+    (store, verbs)
+}
+
+/// The case's bar offers a button for each act its keys do on the case,
+/// by its kind and state, and none while a form is open (TU-12).
+#[test]
+fn the_bar_offers_what_the_keys_do_by_kind_and_state() {
+    let (store, verbs) = every_state();
+    let mut app = store.app();
+    app.filter = Filter::All;
+    for (key, want) in verbs {
+        app.selected = Some(key);
+        assert_eq!(app.verbs(), want, "{key}");
+        let shown = screen(&mut app, 120, 40);
+        for verb in Verb::ALL {
+            let drawn = shown.contains(&format!(" {} ", verb.label()));
+            assert_eq!(drawn, want.contains(&verb), "{verb:?} on {key}:\n{shown}");
+        }
+    }
+    let (store, verbs) = every_state();
+    let mut app = store.app();
+    app.selected = Some(verbs[0].0);
+    press(&mut app, KeyCode::Char('a'));
+    assert!(app.verbs().is_empty(), "a bar beside the form");
+}
+
+/// A click on each of the bar's buttons does what its key does.
+#[test]
+fn a_click_on_each_of_the_bars_buttons_presses_its_key() {
+    use super::form::Act;
+    let (store, verbs) = every_state();
+    for (key, want) in verbs {
+        for verb in want {
+            let mut app = store.app();
+            app.filter = Filter::All;
+            app.selected = Some(key);
+            click(&mut app, &format!(" {} ", verb.label()));
+            let done = match verb {
+                Verb::Answer => app.form.as_ref().is_some_and(|f| f.act == Act::Answer),
+                Verb::Park => app.form.as_ref().is_some_and(|f| f.act == Act::Park),
+                Verb::Withdraw => app.form.as_ref().is_some_and(|f| f.act == Act::Withdraw),
+                Verb::Resume => app
+                    .pending
+                    .as_ref()
+                    .is_some_and(|send| matches!(send.record, Record::Resume(_))),
+                Verb::Edit => app
+                    .compose
+                    .as_ref()
+                    .is_some_and(|c| c.editing.is_some_and(|(k, _)| k == key)),
+            };
+            assert!(done, "a click on {verb:?} on {key}");
+        }
+    }
+}
+
+/// One case's bar has only what that screen takes: an answer, and a
+/// park on a stuck case (TU-11).
+#[test]
+fn one_cases_bar_offers_only_what_its_screen_takes() {
+    let store = Store::new();
+    let stuck = store.open("stuck", "today", "Stuck here", |_| {});
+    let mut app = App::one("cases.db".into(), stuck);
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert_eq!(app.verbs(), [Verb::Answer, Verb::Park]);
+    click(&mut app, " Park ");
+    assert!(app.form.is_some(), "a click on park");
+}
+
+/// The tabs are pills: the chosen one filled, another lit under the
+/// pointer, and a click on one switches to it. The message button at the
+/// end of their row starts a message, and does nothing while a form is
+/// open (TU-12).
+#[test]
+fn the_tabs_are_pills_beside_a_message_button() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let inbox = spot(&shown, "Inbox");
+    assert_eq!(bg_at(&mut app, inbox), super::view::ACCENT);
+    let done = spot(&shown, "Done");
+    assert_eq!(bg_at(&mut app, done), ratatui::style::Color::Reset);
+    mouse(&mut app, MouseEventKind::Moved, done);
+    assert_eq!(bg_at(&mut app, done), view::HOVER_BG);
+    let row = shown.lines().nth(1).unwrap();
+    assert!(row.trim_end().ends_with("+ Message"), "{row}");
+    click(&mut app, "+ Message");
+    assert!(app.compose.is_some(), "a click on + Message");
+    app.compose = None;
+    press(&mut app, KeyCode::Char('a'));
+    click(&mut app, "+ Message");
+    assert!(app.compose.is_none(), "+ Message with a form open");
+    press(&mut app, KeyCode::Esc);
+    click(&mut app, "Done");
+    assert_eq!(app.filter, Filter::Done);
+}
+
+/// At 80 columns, one pane at a time: the list's footer says how to
+/// answer, as no button for it is drawn; the case's bar has the answer,
+/// and its footer leaves it to the bar. At 20, the bar wraps rather than
+/// lose a button.
+#[test]
+fn at_80_columns_the_bar_and_the_footer_share_the_keys() {
+    let store = Store::new();
+    store.open("stuck", "today", "Stuck here", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    let row = shown.lines().nth(1).unwrap();
+    assert!(
+        row.contains("5 Briefings") && row.contains("+ Message"),
+        "{shown}"
+    );
+    let footer = shown.lines().last().unwrap();
+    assert!(
+        footer.contains("a answer") && footer.starts_with(" j/k"),
+        "{shown}"
+    );
+    assert!(!shown.contains(" Answer "), "{shown}");
+    press(&mut app, KeyCode::Enter);
+    let shown = screen(&mut app, 80, 24);
+    assert!(shown.contains(" Answer   Park "), "{shown}");
+    assert!(!shown.lines().last().unwrap().contains("answer"), "{shown}");
+
+    let store = Store::new();
+    message(&store, "A message");
+    let mut app = store.app();
+    app.filter = Filter::Flight;
+    app.selected = app.shown(Filter::Flight).first().map(|(k, _)| *k);
+    app.focus = Focus::Case;
+    let shown = screen(&mut app, 20, 30);
+    assert!(
+        shown.contains(" Withdraw ") && shown.contains(" Edit "),
+        "{shown}"
+    );
+    assert_ne!(
+        spot(&shown, " Withdraw ").1,
+        spot(&shown, " Edit ").1,
+        "{shown}"
+    );
+}
+
+/// The pointer over one of the bar's buttons lights it.
+#[test]
+fn the_pointer_lights_a_button_of_the_bar() {
+    let store = Store::new();
+    store.open("stuck", "today", "Stuck here", |_| {});
+    let mut app = store.app();
+    for at in [" Answer ", " Park "] {
+        let shown = screen(&mut app, 120, 40);
+        let (x, y) = spot(&shown, at);
+        let before = bg_at(&mut app, (x + 2, y));
+        mouse(&mut app, MouseEventKind::Moved, (x + 2, y));
+        assert_ne!(bg_at(&mut app, (x + 2, y)), before, "{at:?} is not lit");
+    }
+    // One pane at a time, the case read.
+    press(&mut app, KeyCode::Enter);
+    for at in [" Answer ", " Park "] {
+        let shown = screen(&mut app, 80, 24);
+        let (x, y) = spot(&shown, at);
+        let before = bg_in(&mut app, (80, 24), (x + 2, y));
+        mouse(&mut app, MouseEventKind::Moved, (x + 2, y));
+        let after = bg_in(&mut app, (80, 24), (x + 2, y));
+        assert_ne!(after, before, "{at:?} is not lit at 80 columns:\n{shown}");
+    }
+}
+
+/// On a pane too short for the title, the bar and some of the case, the
+/// case still scrolls to its options; and the footer offers what no
+/// button on the screen does.
+#[test]
+fn a_short_pane_keeps_the_case_in_reach_and_the_keys_said() {
+    let store = Store::new();
+    store.open(
+        "stuck",
+        "today",
+        &"A long title that wraps ".repeat(8),
+        |open| {
+            "the body".clone_into(&mut open.body);
+        },
+    );
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Enter);
+    app.scroll = u16::MAX;
+    let shown = screen(&mut app, 40, 14);
+    assert!(
+        shown.contains("the body"),
+        "the body is out of reach:\n{shown}"
+    );
+    let answer = shown.contains(" Answer ") || shown.contains("a answer");
+    assert!(answer, "nothing says how to answer:\n{shown}");
 }
