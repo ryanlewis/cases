@@ -86,6 +86,33 @@ pub(crate) enum Confirm {
     Discard,
 }
 
+/// A part of the answer's panel the keys can be on (TU-05, TU-12): tab
+/// and shift-tab move between them, in the order [`Form::parts`] gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spot {
+    /// A decision's options, a signoff's or a briefing's two answers.
+    Choices,
+    /// An approval's rows, with their verdicts.
+    Rows,
+    /// A briefing's left-out items, to file.
+    Items,
+    /// A field to type in.
+    Field(Which),
+    /// One of the panel's buttons.
+    Button(Press),
+}
+
+/// A button of the answer's panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Press {
+    /// Send the answer: acknowledge, for an fyi.
+    Send,
+    /// Park a stuck case instead, in the park's form.
+    Park,
+    /// Drop the case, after asking.
+    Drop,
+}
+
 /// What a key did to the form.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Outcome {
@@ -99,6 +126,10 @@ pub(crate) enum Outcome {
     Edit(Which),
     /// Nothing was sent: this is missing.
     Missing(&'static str),
+    /// Leave the answer's panel, keeping what is in it as a draft.
+    Leave,
+    /// Park the case instead, in the park's form.
+    Park,
 }
 
 /// A form for one case.
@@ -132,6 +163,15 @@ pub(crate) struct Form {
     pub(crate) row: usize,
     pub(crate) editing: Option<Which>,
     pub(crate) confirm: Option<Confirm>,
+    /// The part of the answer's panel the keys are on, when no field has
+    /// them: see [`Form::spot`].
+    spot: Option<Spot>,
+    /// The left-out item the keys are on, among a briefing's items.
+    pub(crate) item: usize,
+    /// Whether the next frame brings the part of the answer's panel the
+    /// keys are on into sight: after a key, which may have moved or grown
+    /// it.
+    pub(crate) reveal: bool,
 }
 
 impl Form {
@@ -173,7 +213,113 @@ impl Form {
             row: 0,
             editing,
             confirm: None,
+            spot: None,
+            item: 0,
+            reveal: false,
         }
+    }
+
+    /// How many options a decision has.
+    pub(crate) fn options(&self) -> i64 {
+        self.options
+    }
+
+    /// The part of the answer's panel the keys are on: the field being
+    /// typed in, a row's note being on the rows; or else the part tab last
+    /// moved to or a click last landed on; or else the first.
+    pub(crate) fn spot(&self) -> Spot {
+        match self.being_edited() {
+            Some(Which::Row(_)) => Spot::Rows,
+            Some(which) => Spot::Field(which),
+            None => self
+                .spot
+                .or_else(|| self.parts().first().copied())
+                .unwrap_or(Spot::Button(Press::Send)),
+        }
+    }
+
+    /// The parts of the answer's panel, in the order tab moves through
+    /// them: what its kind asks for, the note, then its buttons.
+    pub(crate) fn parts(&self) -> Vec<Spot> {
+        let mut parts = Vec::new();
+        match self.kind {
+            Kind::Decision | Kind::Signoff => parts.push(Spot::Choices),
+            Kind::Briefing => {
+                parts.push(Spot::Choices);
+                if !self.file.is_empty() {
+                    parts.push(Spot::Items);
+                }
+            }
+            Kind::Approval if !self.rows.is_empty() => parts.push(Spot::Rows),
+            Kind::Question | Kind::Stuck => parts.push(Spot::Field(Which::Text)),
+            _ => {}
+        }
+        parts.push(Spot::Field(Which::Note));
+        parts.extend(self.presses().into_iter().map(Spot::Button));
+        parts
+    }
+
+    /// The buttons of the answer's panel, as the web inbox has them: send,
+    /// then park on a stuck case, and drop.
+    pub(crate) fn presses(&self) -> Vec<Press> {
+        let mut presses = vec![Press::Send];
+        if self.kind == Kind::Stuck {
+            presses.push(Press::Park);
+        }
+        presses.push(Press::Drop);
+        presses
+    }
+
+    /// Moves the keys `by` parts along the panel, round from the end to the
+    /// start: into a field to type in it, or onto anything else.
+    pub(crate) fn tab(&mut self, by: isize) {
+        let parts = self.parts();
+        let len = parts.len().cast_signed();
+        let at = parts
+            .iter()
+            .position(|part| *part == self.spot())
+            .map_or(if by > 0 { -1 } else { 0 }, usize::cast_signed);
+        let next = usize::try_from((at + by).rem_euclid(len.max(1))).unwrap_or(0);
+        let part = parts
+            .get(next)
+            .copied()
+            .unwrap_or(Spot::Button(Press::Send));
+        self.go(part);
+    }
+
+    /// Puts the keys on `part`: in its field, when it is one.
+    fn go(&mut self, part: Spot) {
+        self.spot = Some(part);
+        self.editing = match part {
+            Spot::Field(which) => Some(which),
+            _ => None,
+        };
+    }
+
+    /// Presses one of the panel's buttons.
+    pub(crate) fn press(&mut self, press: Press) -> Outcome {
+        self.spot = Some(Spot::Button(press));
+        self.editing = None;
+        match press {
+            Press::Send => self.send(),
+            Press::Park => Outcome::Park,
+            Press::Drop => {
+                self.confirm = Some(Confirm::Drop);
+                Outcome::Stay
+            }
+        }
+    }
+
+    /// Whether anything was chosen or typed, which leaving the panel keeps
+    /// as a draft.
+    pub(crate) fn touched(&self) -> bool {
+        self.typed()
+            || self.choice.is_some()
+            || self.other
+            || self.signoff.is_some()
+            || self.briefing.is_some()
+            || self.file.iter().any(|tick| *tick)
+            || self.rows.iter().any(|row| row.verdict.is_some())
     }
 
     /// Whether anything was typed that a cancel would lose.
@@ -287,6 +433,7 @@ impl Form {
 
     /// Takes a key.
     pub(crate) fn key(&mut self, key: KeyEvent) -> Outcome {
+        self.reveal = self.act == Act::Answer;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if let Some(confirm) = self.confirm.take() {
             return self.confirmed(confirm, key);
@@ -299,6 +446,14 @@ impl Form {
         }
         if let Some(which) = self.editing {
             match key.code {
+                // In the answer's panel tab moves on to the next part, and
+                // esc leaves the field for the panel.
+                KeyCode::Tab if self.act == Act::Answer => self.tab(1),
+                KeyCode::BackTab if self.act == Act::Answer => self.tab(-1),
+                KeyCode::Esc if self.act == Act::Answer => {
+                    self.spot = Some(self.spot());
+                    self.editing = None;
+                }
                 KeyCode::Esc | KeyCode::Tab => self.editing = None,
                 _ => {
                     self.field(which).key(key);
@@ -306,7 +461,66 @@ impl Form {
             }
             return Outcome::Stay;
         }
+        if self.act == Act::Answer {
+            return self.panel_key(key.code);
+        }
         self.command(key.code)
+    }
+
+    /// A key in the answer's panel with no field typing: tab and shift-tab
+    /// move between its parts, esc leaves it, a part's own keys move on it
+    /// or press it, and the form's other keys are as they were (TU-05).
+    fn panel_key(&mut self, code: KeyCode) -> Outcome {
+        match (code, self.spot()) {
+            (KeyCode::Tab, _) => self.tab(1),
+            (KeyCode::BackTab, _) => self.tab(-1),
+            (KeyCode::Esc, _) => return Outcome::Leave,
+            (KeyCode::Enter | KeyCode::Char(' '), Spot::Button(press)) => return self.press(press),
+            (KeyCode::Char('j') | KeyCode::Down, Spot::Choices) => self.move_choice(1),
+            (KeyCode::Char('k') | KeyCode::Up, Spot::Choices) => self.move_choice(-1),
+            (KeyCode::Char('j') | KeyCode::Down, Spot::Items) => {
+                self.item = (self.item + 1).min(self.file.len().saturating_sub(1));
+            }
+            (KeyCode::Char('k') | KeyCode::Up, Spot::Items) => {
+                self.item = self.item.saturating_sub(1);
+            }
+            (KeyCode::Char(' '), Spot::Items) => {
+                if let Some(tick) = self.file.get_mut(self.item) {
+                    *tick = !*tick;
+                }
+            }
+            _ => return self.command(code),
+        }
+        Outcome::Stay
+    }
+
+    /// Moves the choice `by` one along the panel's choices: a decision's
+    /// options then other; a signoff's or a briefing's two answers.
+    fn move_choice(&mut self, by: i64) {
+        match self.kind {
+            Kind::Decision => {
+                let at = match (self.choice, self.other) {
+                    (_, true) => self.options + 1,
+                    (Some(n), _) => n,
+                    (None, false) => 0,
+                };
+                let next = (at + by).clamp(1, self.options + 1);
+                if next > self.options {
+                    self.choice = None;
+                    self.other = true;
+                } else {
+                    self.choice = Some(next);
+                    self.other = false;
+                }
+            }
+            Kind::Signoff => {
+                self.signoff = Some(if by > 0 { "changes" } else { "accept" });
+            }
+            Kind::Briefing => {
+                self.briefing = Some(if by > 0 { "send_back" } else { "accept" });
+            }
+            _ => {}
+        }
     }
 
     /// A click on a part of the form or its case (TU-12): as the key that
@@ -323,15 +537,39 @@ impl Form {
             Hit::Choice(n) if self.kind == Kind::Decision && (1..=self.options).contains(&n) => {
                 self.choice = Some(n);
                 self.other = false;
+                self.go(Spot::Choices);
+            }
+            // Other, after the options: its note is where it is said.
+            Hit::Choice(n) if self.kind == Kind::Decision && n == self.options + 1 => {
+                self.choice = None;
+                self.other = true;
+                self.go(Spot::Field(Which::Note));
+            }
+            Hit::Mark(mark) if self.kind == Kind::Signoff => {
+                self.signoff = Some(mark);
+                self.go(Spot::Choices);
+            }
+            Hit::Mark(mark) if self.kind == Kind::Briefing => {
+                self.briefing = Some(mark);
+                self.go(Spot::Choices);
             }
             Hit::LeftOut(at) if self.kind == Kind::Briefing => {
                 if let Some(tick) = self.file.get_mut(at) {
                     *tick = !*tick;
                 }
+                self.item = at;
+                self.go(Spot::Items);
             }
             Hit::ApprovalRow(at) if at < self.rows.len() => {
                 self.row = at;
-                self.editing = None;
+                self.go(Spot::Rows);
+            }
+            Hit::Verdict(at, verdict) if at < self.rows.len() => {
+                self.row = at;
+                if let Some(row) = self.rows.get_mut(at) {
+                    row.verdict = Some(verdict);
+                }
+                self.go(Spot::Rows);
             }
             Hit::Field(Which::Text) if matches!(self.kind, Kind::Question | Kind::Stuck) => {
                 self.editing = Some(Which::Text);
@@ -667,8 +905,66 @@ mod tests {
         Outcome::Send(Box::new(Record::Answer(answer)))
     }
 
+    /// Tab and shift-tab go round the panel's parts, by its kind: into a
+    /// field to type in it, onto a button to press it with enter.
     #[test]
-    fn a_reply_is_typed_in_place_until_esc_or_tab() {
+    fn tab_goes_round_the_panels_parts() {
+        let mut decision = form("decision", Act::Answer);
+        assert_eq!(
+            decision.parts(),
+            [
+                Spot::Choices,
+                Spot::Field(Which::Note),
+                Spot::Button(Press::Send),
+                Spot::Button(Press::Drop)
+            ]
+        );
+        assert_eq!(decision.spot(), Spot::Choices);
+        // On the choices, j and k move the choice, other after the options.
+        press(&mut decision, KeyCode::Char('j'));
+        assert_eq!(decision.choice, Some(1));
+        press(&mut decision, KeyCode::Down);
+        press(&mut decision, KeyCode::Down);
+        assert!(decision.other && decision.choice.is_none());
+        press(&mut decision, KeyCode::Up);
+        assert_eq!((decision.choice, decision.other), (Some(2), false));
+        press(&mut decision, KeyCode::Tab);
+        assert_eq!(decision.editing, Some(Which::Note));
+        typing(&mut decision, "x");
+        press(&mut decision, KeyCode::Tab);
+        assert_eq!(
+            (decision.spot(), decision.editing),
+            (Spot::Button(Press::Send), None)
+        );
+        press(&mut decision, KeyCode::Tab);
+        assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
+        assert_eq!(decision.confirm, Some(Confirm::Drop));
+        decision.confirm = None;
+        press(&mut decision, KeyCode::Tab);
+        assert_eq!(decision.spot(), Spot::Choices, "round to the start");
+        press(&mut decision, KeyCode::BackTab);
+        assert_eq!(decision.spot(), Spot::Button(Press::Drop));
+        press(&mut decision, KeyCode::BackTab);
+        assert_eq!(
+            press(&mut decision, KeyCode::Char(' ')),
+            answer(|a| {
+                a.choice = 2;
+                "x".clone_into(&mut a.note);
+            })
+        );
+        // A stuck case parks from its panel; an fyi has only its note.
+        let stuck = form("stuck", Act::Answer);
+        assert_eq!(stuck.presses(), [Press::Send, Press::Park, Press::Drop]);
+        assert_eq!(stuck.parts()[0], Spot::Field(Which::Text));
+        let mut fyi = form("fyi", Act::Answer);
+        assert_eq!(fyi.parts()[0], Spot::Field(Which::Note));
+        assert_eq!(fyi.press(Press::Park), Outcome::Park);
+        let approval = form("approval", Act::Answer);
+        assert_eq!(approval.parts()[0], Spot::Rows);
+    }
+
+    #[test]
+    fn a_reply_is_typed_in_place_until_esc_or_tab_moves_on() {
         let missing = [
             ("question", "write the reply first"),
             ("stuck", "write the guidance first"),
@@ -683,14 +979,19 @@ mod tests {
             assert_eq!(form.text.text(), " nd ");
             assert_eq!(form.confirm, None);
             assert_eq!(ctrl(&mut form, 'e'), Outcome::Edit(Which::Text));
-            for leave in [KeyCode::Esc, KeyCode::Tab] {
-                assert_eq!(press(&mut form, leave), Outcome::Stay);
-                assert_eq!(form.editing, None);
-                // Out of the field, Ctrl-E still opens the reply.
-                assert_eq!(ctrl(&mut form, 'e'), Outcome::Edit(Which::Text));
-                press(&mut form, KeyCode::Char('t'));
-                assert_eq!(form.editing, Some(Which::Text), "{kind}");
-            }
+            // Esc leaves the field; tab goes on to the next part, the
+            // note, and shift-tab back.
+            assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Stay);
+            assert_eq!(form.editing, None);
+            assert_eq!(form.spot(), Spot::Field(Which::Text));
+            // Out of the field, Ctrl-E still opens the reply.
+            assert_eq!(ctrl(&mut form, 'e'), Outcome::Edit(Which::Text));
+            press(&mut form, KeyCode::Char('t'));
+            assert_eq!(form.editing, Some(Which::Text), "{kind}");
+            press(&mut form, KeyCode::Tab);
+            assert_eq!(form.editing, Some(Which::Note));
+            press(&mut form, KeyCode::BackTab);
+            assert_eq!(form.editing, Some(Which::Text));
             press(&mut form, KeyCode::Esc);
             press(&mut form, KeyCode::Char('i'));
             assert_eq!(form.editing, Some(Which::Text));
@@ -790,8 +1091,8 @@ mod tests {
     #[test]
     fn an_approval_moves_between_rows_and_goes_on_to_the_next_without_a_verdict() {
         let mut form = form("approval", Act::Answer);
-        // Nothing typed yet: Esc closes the form.
-        assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Cancel);
+        // Esc leaves the answer's panel, keeping what is in it.
+        assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Leave);
         let verdicts = |form: &Form| form.rows.iter().map(|r| r.verdict).collect::<Vec<_>>();
         for code in [KeyCode::Char('j'), KeyCode::Down, KeyCode::Char('j')] {
             press(&mut form, code);
@@ -849,16 +1150,16 @@ mod tests {
             ]
         );
 
-        // A note on a row alone is typed: Esc asks first.
+        // A note on a row alone is typed: Esc leaves the field, then the
+        // panel, which keeps it.
         let mut form = self::form("approval", Act::Answer);
         press(&mut form, KeyCode::Char('r'));
         typing(&mut form, "why");
         press(&mut form, KeyCode::Esc);
-        assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Stay);
-        assert_eq!(form.confirm, Some(Confirm::Discard));
+        assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Leave);
+        assert!(form.touched());
         // A row past the end types into the last row's note, not the
         // case's.
-        form.confirm = None;
         form.editing = Some(Which::Row(3));
         typing(&mut form, "x");
         assert_eq!((form.note.text(), form.rows[2].note.text()), ("", "x"));

@@ -323,6 +323,9 @@ fn a_form_or_a_message_takes_the_keys_but_the_case_still_scrolls() {
     let mut app = store.app();
     press(&mut app, KeyCode::Char('a'));
     assert!(app.form.is_some());
+    // a scrolls to the answer, at the foot of the case: from the top.
+    assert_eq!(app.scroll, u16::MAX);
+    app.scroll = 0;
     press(&mut app, KeyCode::PageDown);
     press(&mut app, KeyCode::PageDown);
     press(&mut app, KeyCode::PageUp);
@@ -470,7 +473,7 @@ fn a_note_after_an_answer_shows_the_follow_up_first() {
     let follow = text
         .find("FOLLOW-UP, NEW SINCE YOUR ANSWER")
         .unwrap_or_else(|| panic!("{text}"));
-    let options = text.find("OPTIONS").unwrap_or_else(|| panic!("{text}"));
+    let options = text.find("YOUR ANSWER").unwrap_or_else(|| panic!("{text}"));
     assert!(follow < options, "{text}");
     assert!(text.contains("Float to what, 1.x?"), "{text}");
     assert!(text.contains("chose 2  Float it"), "{text}");
@@ -599,8 +602,8 @@ fn a_decision_is_answered_with_its_option_and_note_then_the_next_case_shows() {
     typing(&mut app, "  float is fine ");
     press(&mut app, KeyCode::Esc);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("ANSWER"), "{text}");
-    assert!(text.contains("option 2"), "{text}");
+    assert!(text.contains("YOUR ANSWER"), "{text}");
+    assert!(text.contains("● 2  Float it"), "{text}");
     assert!(text.contains("float is fine"), "{text}");
     press(&mut app, KeyCode::Enter);
     send(&mut app, &store);
@@ -1065,8 +1068,8 @@ fn a_row_the_human_carries_out_is_theirs_and_its_approve_reads_done() {
     assert!(text.contains("x reject"), "{text}");
     press(&mut app, KeyCode::Char('x'));
     let text = screen(&mut app, 120, 50);
-    assert!(text.contains("dns    done"), "{text}");
-    assert!(text.contains("tag    reject"), "{text}");
+    assert!(text.contains("● done  ○ hold  ○ won't do"), "{text}");
+    assert!(text.contains("○ approve  ○ hold  ● reject"), "{text}");
     press(&mut app, KeyCode::Enter);
     send(&mut app, &store);
     let rows = case(&store, key).answer().unwrap().rows.clone();
@@ -1934,8 +1937,9 @@ fn a_briefing_is_accepted_with_the_left_out_items_ticked_to_file() {
     press(&mut app, KeyCode::Char('5'));
     let text = screen(&mut app, 120, 40);
     assert!(text.contains("waiting to land"), "{text}");
-    assert!(text.contains("LEFT OUT"), "{text}");
-    assert!(text.contains(" 3  fuzz"), "{text}");
+    // Its left-out items are in its answer, to tick.
+    assert!(text.contains("file what was left out"), "{text}");
+    assert!(text.contains("[ ] 3  fuzz"), "{text}");
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Enter);
     assert!(app.pending.is_none(), "sent with no verdict");
@@ -1950,9 +1954,10 @@ fn a_briefing_is_accepted_with_the_left_out_items_ticked_to_file() {
     }
     press(&mut app, KeyCode::Char('y'));
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("briefing accept"), "{text}");
-    assert!(text.contains("file     1, 3"), "{text}");
-    assert!(text.contains("fuzz  to file"), "{text}");
+    assert!(text.contains("● accept"), "{text}");
+    assert!(text.contains("[x] 1  docs"), "{text}");
+    assert!(text.contains("[ ] 2  bench"), "{text}");
+    assert!(text.contains("[x] 3  fuzz"), "{text}");
     press(&mut app, KeyCode::Enter);
     send(&mut app, &store);
     let answered = case(&store, key);
@@ -1980,7 +1985,7 @@ fn sending_a_briefing_back_needs_a_reason() {
     assert_eq!(app.form.as_ref().unwrap().editing, Some(Which::Note));
     typing(&mut app, "   ");
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("send back, with the reason below"), "{text}");
+    assert!(text.contains("● send back (reason required)"), "{text}");
     assert!(text.contains("reason"), "{text}");
     ctrl(&mut app, 's');
     assert!(app.pending.is_none(), "sent with no reason");
@@ -2152,7 +2157,7 @@ fn one_case_says_only_what_works_on_it() {
         ] {
             assert!(!help.contains(gone), "help lists {gone:?}:\n{help}");
         }
-        for listed in ["answer the case", "park it", "scroll the case", "quit"] {
+        for listed in ["into the answer", "park it", "scroll the case", "quit"] {
             assert!(help.contains(listed), "help leaves out {listed:?}:\n{help}");
         }
     }
@@ -2418,8 +2423,9 @@ fn the_wheel_moves_in_the_list_and_scrolls_the_case() {
     assert_eq!(app.scroll, 3);
 }
 
-/// In the answer, a click on an option chooses it, on the note gives it
-/// the keys, and on a key in the footer presses it: here, send.
+/// In the answer's panel, a click on an option chooses it, on the note
+/// gives it the keys, and on its send button sends it: nothing to open
+/// first.
 #[test]
 fn a_click_in_the_answer_chooses_types_and_sends() {
     let store = Store::new();
@@ -2430,11 +2436,10 @@ fn a_click_in_the_answer_chooses_types_and_sends() {
     assert_eq!(app.form.as_ref().map(|f| f.choice), Some(Some(2)));
     click(&mut app, "Pin it");
     assert_eq!(app.form.as_ref().map(|f| f.choice), Some(Some(1)));
-    click(&mut app, "note");
+    click(&mut app, "note     empty");
     assert_eq!(app.form.as_ref().and_then(|f| f.editing), Some(Which::Note));
     typing(&mut app, "pinned");
-    press(&mut app, KeyCode::Esc);
-    click(&mut app, "send");
+    click(&mut app, "^s Send");
     send(&mut app, &store);
     let answer = case(&store, key).answer().cloned().unwrap();
     assert_eq!(answer.choice, 1);
@@ -2492,8 +2497,9 @@ fn a_click_closes_help() {
     assert_eq!(app.filter, Filter::Inbox);
 }
 
-/// A click on another case's option never reaches the form open on the
-/// first one.
+/// A click on another case's option never reaches the answer of the
+/// first one: it goes to the case it is drawn on, and the first case's
+/// answer is kept as its draft.
 #[test]
 fn a_click_on_another_cases_option_leaves_the_form_alone() {
     let store = Store::new();
@@ -2502,12 +2508,14 @@ fn a_click_on_another_cases_option_leaves_the_form_alone() {
     let mut app = store.app();
     assert_eq!(app.selected, Some(first));
     press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('1'));
     // The selection moves while the form stays, as a read can move it.
     app.selected = Some(second);
     click(&mut app, "Float it");
     let form = app.form.as_ref().unwrap();
-    assert_eq!(form.key, first);
-    assert_eq!(form.choice, None, "the click chose on the first case");
+    assert_eq!((form.key, form.choice), (second, Some(2)));
+    let draft = app.answer_of(first).unwrap();
+    assert_eq!(draft.choice, Some(1), "the click chose on the first case");
 }
 
 /// A click while the form or the message asks a question takes it back,
@@ -2566,14 +2574,14 @@ fn a_narrow_screen_wraps_the_tabs_and_keys_and_each_still_clicks() {
 
         press(&mut app, KeyCode::Char('a'));
         let shown = screen(&mut app, width, 24);
-        for keys in ["1-9 choose", "⏎ send", "esc cancel"] {
+        for keys in ["1-9 choose", "tab next part", "esc leave"] {
             assert!(shown.contains(keys), "{keys:?} at {width}:\n{shown}");
         }
-        let at = spot(&shown, "esc cancel");
+        let at = spot(&shown, "esc leave");
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
         assert!(
             app.form.is_none(),
-            "a click on esc at {width} left the form"
+            "a click on esc at {width} left the panel"
         );
 
         let at = spot(&screen(&mut app, width, 24), "q quit");
@@ -2892,7 +2900,7 @@ fn the_pointer_lights_what_a_click_acts_on() {
         assert_eq!(bg_at(&mut app, at), view::HOVER_BG, "{text:?} is not lit");
     }
     // The case pane's text is not clicked: nothing is lit over it.
-    mouse(&mut app, MouseEventKind::Moved, spot(&shown, "OPTIONS"));
+    mouse(&mut app, MouseEventKind::Moved, spot(&shown, "THREAD"));
     assert_eq!(app.hover, None);
     assert!(!lit_anywhere(&mut app), "lit over the case's text");
     // The pointer stays, the footer under it changes: what is lit follows
@@ -3033,7 +3041,7 @@ fn a_toast_says_what_happened_then_goes() {
 }
 
 /// What a click would not act on is not lit: the list and the tabs while
-/// a form is open, and anything under help (TU-12).
+/// a field of the answer is typed in, and anything under help (TU-12).
 #[test]
 fn the_pointer_lights_nothing_a_click_would_not_act_on() {
     let store = Store::new();
@@ -3041,11 +3049,13 @@ fn the_pointer_lights_nothing_a_click_would_not_act_on() {
     store.open("fyi", "today", "Other one", |_| {});
     let mut app = store.app();
     press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('n'));
     let shown = screen(&mut app, 120, 40);
     for text in ["In flight", "Other one"] {
         mouse(&mut app, MouseEventKind::Moved, spot(&shown, text));
-        assert!(!lit_anywhere(&mut app), "{text:?} is lit with a form open");
+        assert!(!lit_anywhere(&mut app), "{text:?} is lit while typing");
     }
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('?'));
     let shown = screen(&mut app, 120, 40);
@@ -3164,9 +3174,14 @@ fn the_bar_offers_what_the_keys_do_by_kind_and_state() {
     }
     let (store, verbs) = every_state();
     let mut app = store.app();
+    // The answer's panel keeps the bar; a park's form does not.
     app.selected = Some(verbs[0].0);
     press(&mut app, KeyCode::Char('a'));
-    assert!(app.verbs().is_empty(), "a bar beside the form");
+    assert_eq!(app.verbs(), [Verb::Answer], "no bar beside the answer");
+    app.form = None;
+    app.selected = Some(verbs[1].0);
+    press(&mut app, KeyCode::Char('p'));
+    assert!(app.verbs().is_empty(), "a bar beside the park");
 }
 
 /// A click on each of the bar's buttons does what its key does.
@@ -3326,12 +3341,357 @@ fn a_short_pane_keeps_the_case_in_reach_and_the_keys_said() {
     let mut app = store.app();
     app.strip.shown = false;
     press(&mut app, KeyCode::Enter);
-    app.scroll = u16::MAX;
+    // Somewhere above the answer at its foot.
+    let reached = (0..30).any(|at| {
+        app.scroll = at;
+        screen(&mut app, 40, 14).contains("the body")
+    });
     let shown = screen(&mut app, 40, 14);
-    assert!(
-        shown.contains("the body"),
-        "the body is out of reach:\n{shown}"
-    );
+    assert!(reached, "the body is out of reach:\n{shown}");
     let answer = shown.contains(" Answer ") || shown.contains("a answer");
     assert!(answer, "nothing says how to answer:\n{shown}");
+}
+
+/// An approval row, `id`, its step run by `by`.
+fn step(id: &str, by: &str) -> cases_core::ApprovalRow {
+    let mut row = cases_core::ApprovalRow::default();
+    id.clone_into(&mut row.id);
+    format!("Run {id}").clone_into(&mut row.label);
+    by.clone_into(&mut row.by);
+    "true".clone_into(&mut row.script);
+    "https://example.com".clone_into(&mut row.link);
+    row
+}
+
+/// Clicks the `n`th place on the screen where `text` is drawn, from 0.
+fn click_nth(app: &mut App, text: &str, n: usize) {
+    let shown = screen(app, 120, 50);
+    let at = shown
+        .lines()
+        .enumerate()
+        .flat_map(|(row, line)| {
+            line.match_indices(text).map(move |(at, _)| {
+                let column = line[..at].chars().count();
+                (u16::try_from(column).unwrap(), u16::try_from(row).unwrap())
+            })
+        })
+        .nth(n)
+        .unwrap_or_else(|| panic!("{text:?} is not on the screen {n} times:\n{shown}"));
+    mouse(app, MouseEventKind::Down(MouseButton::Left), at);
+}
+
+/// An approval is answered by clicks alone: a verdict for each row,
+/// then send, with nothing opened first (TU-05, TU-12).
+#[test]
+fn an_approvals_row_verdicts_are_picked_by_click() {
+    let store = Store::new();
+    let key = store.open("approval", "today", "Move the host?", |open| {
+        open.rows = vec![step("dns", "human"), step("tag", ""), step("post", "")];
+    });
+    let mut app = store.app();
+    assert!(app.form.is_none());
+    click_nth(&mut app, "○ done", 0);
+    assert!(
+        app.form.is_some(),
+        "a click on a verdict did not enter the answer"
+    );
+    click_nth(&mut app, "○ hold", 1);
+    click_nth(&mut app, "○ reject", 1);
+    click(&mut app, "^s Send");
+    send(&mut app, &store);
+    let rows: Vec<(String, String)> = case(&store, key)
+        .answer()
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| (r.id.clone(), r.verdict.clone()))
+        .collect();
+    let want = [("dns", "approve"), ("tag", "hold"), ("post", "reject")];
+    assert_eq!(
+        rows,
+        want.map(|(id, verdict)| (id.to_string(), verdict.to_string()))
+    );
+}
+
+/// The keys go into the answer by a, its button, or a click in it. In
+/// it, tab and shift-tab move between its parts and esc leaves the field,
+/// then the answer; out of it, tab and the numbers switch filters again
+/// (TU-05, TU-08).
+#[test]
+fn tab_and_esc_move_the_keys_in_and_out_of_the_answer() {
+    use super::form::{Press, Spot};
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    // Out of it, tab is the filters'.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.filter, Filter::Flight);
+    press(&mut app, KeyCode::Char('1'));
+    assert_eq!(app.filter, Filter::Inbox);
+    press(&mut app, KeyCode::Char('a'));
+    let spot = |app: &App| app.form.as_ref().map(super::form::Form::spot);
+    assert_eq!(spot(&app), Some(Spot::Choices));
+    // In it, a number chooses, and tab moves to the note, typing there.
+    press(&mut app, KeyCode::Char('2'));
+    assert_eq!(app.filter, Filter::Inbox);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(spot(&app), Some(Spot::Field(Which::Note)));
+    typing(&mut app, "q1");
+    assert!(!app.quit, "q typed into the note quit");
+    // Clicking a pill while typing does nothing.
+    click(&mut app, "In flight");
+    assert_eq!(app.filter, Filter::Inbox);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Send)));
+    press(&mut app, KeyCode::BackTab);
+    press(&mut app, KeyCode::BackTab);
+    assert_eq!(spot(&app), Some(Spot::Choices));
+    press(&mut app, KeyCode::Tab);
+    // Esc leaves the field, then the answer, which keeps what is in it.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.form.as_ref().is_some_and(|f| f.editing.is_none()));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.form.is_none());
+    let draft = app.answer_of(app.selected.unwrap()).unwrap();
+    assert_eq!((draft.choice, draft.note.text()), (Some(2), "q1"));
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.filter, Filter::Flight, "tab out of the answer");
+    press(&mut app, KeyCode::Char('1'));
+    // The bar's Answer, and a click in the answer, put the keys back.
+    click(&mut app, " Answer ");
+    assert!(app.form.is_some());
+    press(&mut app, KeyCode::Esc);
+    click(&mut app, "Pin it");
+    assert_eq!(app.form.as_ref().and_then(|f| f.choice), Some(1));
+    assert_eq!(app.form.as_ref().unwrap().note.text(), "q1");
+}
+
+/// What is chosen or typed in a case's answer stays with that case when
+/// another is selected, and through the reads of the store.
+#[test]
+fn a_draft_stays_with_its_case_across_a_switch_and_a_read() {
+    let store = Store::new();
+    let first = store.open("decision", "blocking", "First?", decision);
+    let second = store.open("question", "today", "Second?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('2'));
+    press(&mut app, KeyCode::Char('n'));
+    typing(&mut app, "half a thought");
+    press(&mut app, KeyCode::Esc);
+    // A click on the other case in the list takes the keys out.
+    click(&mut app, "Second?");
+    assert_eq!(app.selected, Some(second));
+    assert!(app.form.is_none());
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("half a thought"), "{shown}");
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "the reply");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    // A read later, both drafts are there.
+    let mut note = Note::default();
+    "still deciding".clone_into(&mut note.body);
+    store.agent(first, &Record::Note(note));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert_eq!(app.answer_of(second).unwrap().text.text(), "the reply");
+    // Back to the list, and up to the first case.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.selected, Some(first));
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("● 2  Float it"), "{shown}");
+    assert!(shown.contains("half a thought"), "{shown}");
+    // Quitting with typed drafts asks first.
+    press(&mut app, KeyCode::Char('q'));
+    assert!(app.confirm_quit && !app.quit);
+    // And a draft sent after the read goes, with the note's revision.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('a'));
+    ctrl(&mut app, 's');
+    send(&mut app, &store);
+    assert_eq!(case(&store, first).state(), State::Answered);
+    assert!(app.answer_of(first).is_none());
+}
+
+/// At 80 columns, the case read: its bar, its answer at its foot with the
+/// buttons under it, and a footer that says how to get in.
+#[test]
+fn at_80_columns_the_answer_is_at_the_foot_of_the_case() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Enter);
+    let shown = screen(&mut app, 80, 24);
+    for text in [
+        "Answer",
+        "YOUR ANSWER",
+        "○ 1  Pin it",
+        "Other, see note",
+        "^s Send   d Drop",
+    ] {
+        assert!(shown.contains(text), "{text:?}:\n{shown}");
+    }
+    press(&mut app, KeyCode::Char('a'));
+    let shown = screen(&mut app, 80, 24);
+    let footer = shown.lines().last().unwrap();
+    assert!(
+        footer.contains("tab next part") || shown.contains("esc leave"),
+        "{shown}"
+    );
+    assert!(shown.contains("▸ ○ 1  Pin it"), "{shown}");
+}
+
+/// The answer sent by clicks alone is the answer the keys send: the same
+/// events in the store, kind by kind.
+#[test]
+fn an_answer_by_clicks_records_what_the_keys_record() {
+    let answers = |by_click: bool| {
+        let store = Store::new();
+        let key = store.open("decision", "today", "Pin?", decision);
+        let mut app = store.app();
+        if by_click {
+            click(&mut app, "Float it");
+            click(&mut app, "note     empty");
+            typing(&mut app, " fine ");
+            click(&mut app, "^s Send");
+        } else {
+            press(&mut app, KeyCode::Char('a'));
+            press(&mut app, KeyCode::Char('2'));
+            press(&mut app, KeyCode::Char('n'));
+            typing(&mut app, " fine ");
+            ctrl(&mut app, 's');
+        }
+        let pending = app.pending.as_ref().map(|send| send.record.clone());
+        send(&mut app, &store);
+        let mut answer = case(&store, key).answer().cloned().unwrap();
+        // When, and the actor's id, which each store makes afresh.
+        answer.answered_at = None;
+        answer.actor = None;
+        (pending, answer)
+    };
+    assert_eq!(answers(true), answers(false));
+}
+
+/// Review repro: on a pane too narrow for an approval row's verdicts on
+/// one line, a click on one never records another.
+#[test]
+fn a_click_on_a_wrapped_verdict_never_records_another() {
+    let store = Store::new();
+    store.open("approval", "today", "Move?", |open| {
+        open.rows = vec![step("tag", "")];
+    });
+    let mut app = store.app();
+    app.focus = Focus::Case;
+    app.strip.shown = false;
+    let mut seen = false;
+    for scroll in 0..40 {
+        app.scroll = scroll;
+        let shown = screen(&mut app, 30, 30);
+        if let Some(at) = shown
+            .lines()
+            .position(|l| l.trim_start().starts_with("reject"))
+        {
+            let column = shown.lines().nth(at).unwrap().find("reject").unwrap();
+            let column =
+                u16::try_from(shown.lines().nth(at).unwrap()[..column].chars().count()).unwrap();
+            // Inside "reject", where approve's cell is on the first line.
+            mouse(
+                &mut app,
+                MouseEventKind::Down(MouseButton::Left),
+                (column + 6, u16::try_from(at).unwrap()),
+            );
+            let verdict = app.form.as_ref().and_then(|f| f.rows[0].verdict);
+            assert!(
+                matches!(verdict, None | Some("reject")),
+                "{verdict:?}:\n{shown}"
+            );
+            seen = true;
+            break;
+        }
+    }
+    app.scroll = u16::MAX;
+    let shown = screen(&mut app, 30, 30);
+    assert!(seen, "the verdicts did not wrap:\n{shown}");
+}
+
+/// Review repro: a draft whose case can no longer be answered goes, and
+/// says so, as the form does.
+#[test]
+fn a_draft_whose_case_leaves_says_so() {
+    let store = Store::new();
+    let first = store.open("question", "blocking", "First?", |_| {});
+    store.open("question", "today", "Second?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a long reply");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    store.answer(first, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert!(app.answer_of(first).is_none());
+    assert!(flash(&app).contains("nothing was sent"), "{}", flash(&app));
+}
+
+/// Review repro: a send refused as stale takes the case as amended into
+/// its draft too, when the keys left the answer while it was sent; and
+/// quitting then does not ask about it while it is being sent.
+#[test]
+fn a_draft_sent_then_left_is_not_asked_about_and_takes_a_refusal() {
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a reply");
+    ctrl(&mut app, 's');
+    let pending = app.pending.take().unwrap();
+    app.sending = Some(Sending::Event(Box::new(pending)));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.form.is_none() && app.answer_of(key).is_some());
+    press(&mut app, KeyCode::Char('q'));
+    assert!(
+        app.quit && !app.confirm_quit,
+        "asked about a draft being sent"
+    );
+    // Refused as stale: the draft takes the case as it is now.
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a reply");
+    ctrl(&mut app, 's');
+    let send = app.pending.take().unwrap();
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    let mut amend = Amend::default();
+    "Name it, please?".clone_into(&mut amend.title);
+    store.agent(key, &Record::Amend(amend));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    app.sent(&send, Err(Refusal::Stale));
+    let revision = case(&store, key).revision();
+    assert_eq!(app.answer_of(key).unwrap().revision, revision);
+}
+
+/// Review repro: what is typed into the answer stays in sight as it
+/// grows, on a case longer than its pane.
+#[test]
+fn the_field_being_typed_in_stays_in_sight() {
+    let store = Store::new();
+    store.open("question", "today", "Name?", |open| {
+        open.body = (0..40)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    });
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Char('a'));
+    screen(&mut app, 80, 24);
+    for n in 0..8 {
+        typing(&mut app, &format!("typed {n}"));
+        press(&mut app, KeyCode::Enter);
+    }
+    typing(&mut app, "the last");
+    let shown = screen(&mut app, 80, 24);
+    assert!(shown.contains("the last"), "{shown}");
 }
