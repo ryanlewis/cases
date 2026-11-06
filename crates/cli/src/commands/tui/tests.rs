@@ -581,10 +581,7 @@ fn case(store: &Store, key: Key) -> cases_core::Case {
 }
 
 fn flash(app: &App) -> String {
-    app.flash
-        .as_ref()
-        .map(|(text, _)| text.clone())
-        .unwrap_or_default()
+    app.said().unwrap_or_default().to_string()
 }
 
 #[test]
@@ -2130,7 +2127,7 @@ fn one_case_says_only_what_works_on_it() {
         // p does what the footer says: nothing on a case that cannot park.
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.form.is_some(), park, "p on {key}");
-        assert!(app.flash.is_none(), "p flashed {:?}", app.flash);
+        assert!(app.toasts.is_empty(), "p flashed {:?}", app.toasts);
         app.form = None;
         assert!(
             footer.contains("a answer") && footer.contains("? keys"),
@@ -2197,7 +2194,7 @@ fn one_case_takes_only_its_own_keys() {
             app.form.is_none() && app.compose.is_none(),
             "{code:?} opened a form"
         );
-        assert!(app.flash.is_none(), "{code:?} flashed {:?}", app.flash);
+        assert!(app.toasts.is_empty(), "{code:?} flashed {:?}", app.toasts);
         assert_eq!(
             (app.filter, app.focus),
             (Filter::Inbox, Focus::Case),
@@ -2457,9 +2454,9 @@ fn a_click_on_a_closed_cases_option_or_item_does_nothing() {
         click(&mut app, text);
         assert!(app.form.is_none(), "a click on {text:?} opened the answer");
         assert!(
-            app.flash.is_none(),
+            app.toasts.is_empty(),
             "a click on {text:?} flashed {:?}",
-            app.flash
+            app.toasts
         );
     }
 }
@@ -2844,4 +2841,240 @@ fn an_image_strip_too_narrow_for_its_image_is_text() {
     // The text's sparkline, cut at the edge as text is.
     let opened = rows_with(&shown, " opened ");
     assert!(opened[0].contains('·'), "{shown}");
+}
+
+/// The background of the cell at `at`, as `app` is drawn now.
+fn bg_at(app: &mut App, (column, row): (u16, u16)) -> ratatui::style::Color {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| view::draw(frame, app)).unwrap();
+    terminal.backend().buffer()[(column, row)].bg
+}
+
+/// Whether any cell of the screen is lit, as what the pointer is over.
+fn lit_anywhere(app: &mut App) -> bool {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| view::draw(frame, app)).unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .any(|cell| cell.bg == view::HOVER_BG)
+}
+
+/// The pointer over a key in the footer, a tab or a case lights it, and
+/// over nothing a click acts on lights nothing (TU-12).
+#[test]
+fn the_pointer_lights_what_a_click_acts_on() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    store.open("fyi", "today", "Other one", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    assert!(!lit_anywhere(&mut app), "lit before the pointer moved");
+    for text in ["q quit", "In flight", "Other one"] {
+        let at = spot(&shown, text);
+        mouse(&mut app, MouseEventKind::Moved, at);
+        assert_eq!(bg_at(&mut app, at), view::HOVER_BG, "{text:?} is not lit");
+    }
+    // The case pane's text is not clicked: nothing is lit over it.
+    mouse(&mut app, MouseEventKind::Moved, spot(&shown, "OPTIONS"));
+    assert_eq!(app.hover, None);
+    assert!(!lit_anywhere(&mut app), "lit over the case's text");
+    // The pointer stays, the footer under it changes: what is lit follows
+    // the frame drawn, not the one the pointer moved over.
+    let quit = spot(&shown, "q quit");
+    mouse(&mut app, MouseEventKind::Moved, quit);
+    press(&mut app, KeyCode::Char('a'));
+    screen(&mut app, 120, 40);
+    let lit = app.hover;
+    let shown = screen(&mut app, 120, 40);
+    let under = shown.lines().nth(usize::from(quit.1)).unwrap();
+    assert!(!under.contains("q quit"), "{shown}");
+    assert_ne!(
+        lit,
+        Some(super::app::Hit::Key(KeyEvent::from(KeyCode::Char('q'))))
+    );
+}
+
+/// A question is a dialog with a button for each answer: a click on one
+/// answers it, on the dialog's face does nothing, and anywhere else is
+/// the safe answer, as any key but y is (TU-08, TU-12).
+#[test]
+fn a_question_is_a_dialog_whose_buttons_answer_it() {
+    let store = Store::new();
+    store.open("question", "today", "Name?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "draft");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('q'));
+    let shown = screen(&mut app, 120, 40);
+    assert!(app.confirm_quit, "{shown}");
+    for text in [
+        "Quit and throw away what you typed?",
+        "esc Keep typing",
+        "y Quit",
+    ] {
+        assert!(shown.contains(text), "{text:?}:\n{shown}");
+    }
+    // The pointer over a button lights it.
+    let keep = spot(&shown, "esc Keep typing");
+    let before = bg_at(&mut app, keep);
+    mouse(&mut app, MouseEventKind::Moved, keep);
+    assert_ne!(bg_at(&mut app, keep), before, "the button is not lit");
+    // Its face: still asking.
+    let title = spot(&shown, "Quit and throw");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), title);
+    assert!(app.confirm_quit && !app.quit);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), keep);
+    assert!(!app.confirm_quit && !app.quit);
+    assert!(app.form.is_some(), "keep typing lost the form");
+    // Off the dialog: no.
+    press(&mut app, KeyCode::Char('q'));
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (0, 0));
+    assert!(!app.confirm_quit && !app.quit);
+    press(&mut app, KeyCode::Char('q'));
+    click(&mut app, "y Quit");
+    assert!(app.quit);
+
+    // The form's: a drop.
+    let store = Store::new();
+    store.open("fyi", "today", "FYI", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('d'));
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("The agent stops the work."), "{shown}");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (0, 0));
+    assert!(app.form.as_ref().unwrap().confirm.is_none());
+    assert!(app.pending.is_none(), "a drop went without a yes");
+    press(&mut app, KeyCode::Char('d'));
+    click(&mut app, "y Drop");
+    assert!(app.pending.as_ref().is_some_and(|send| matches!(
+        &send.record,
+        Record::Answer(answer) if answer.drop
+    )));
+
+    // The message's: throw it away.
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('m'));
+    press(&mut app, KeyCode::Char('i'));
+    typing(&mut app, "A title");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    click(&mut app, "esc Keep typing");
+    assert!(app.compose.as_ref().is_some_and(|c| !c.confirm));
+    press(&mut app, KeyCode::Esc);
+    click(&mut app, "y Discard");
+    assert!(app.compose.is_none());
+}
+
+/// What a write did, or why a key did nothing, is a toast in the corner,
+/// which goes after a few seconds or on a click; three at most (TU-12).
+#[test]
+fn a_toast_says_what_happened_then_goes() {
+    use std::time::{Duration, Instant};
+    let store = Store::new();
+    store.open("fyi", "today", "FYI", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('r'));
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("only a parked case resumes"), "{shown}");
+    // The footer's keys stay.
+    assert!(shown.contains("q quit"), "{shown}");
+    app.expire_toasts(Instant::now() + Duration::from_secs(3));
+    assert_eq!(app.toasts.len(), 1, "gone too soon");
+    app.expire_toasts(Instant::now() + Duration::from_secs(5));
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("only a parked case resumes"), "{shown}");
+
+    for n in 1..=4 {
+        app.flash(&format!("toast {n}"));
+    }
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("toast 1"), "{shown}");
+    assert!(
+        spot(&shown, "toast 4").1 < spot(&shown, "toast 2").1,
+        "{shown}"
+    );
+    click(&mut app, "toast 3");
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("toast 3"), "{shown}");
+    assert!(
+        shown.contains("toast 4") && shown.contains("toast 2"),
+        "{shown}"
+    );
+
+    // A write that lands says so.
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Enter);
+    send(&mut app, &store);
+    assert!(
+        app.toasts.last().is_some_and(|t| t.done),
+        "{:?}",
+        app.toasts
+    );
+    assert!(screen(&mut app, 120, 40).contains("✓ recorded answer"));
+}
+
+/// What a click would not act on is not lit: the list and the tabs while
+/// a form is open, and anything under help (TU-12).
+#[test]
+fn the_pointer_lights_nothing_a_click_would_not_act_on() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    store.open("fyi", "today", "Other one", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    let shown = screen(&mut app, 120, 40);
+    for text in ["In flight", "Other one"] {
+        mouse(&mut app, MouseEventKind::Moved, spot(&shown, text));
+        assert!(!lit_anywhere(&mut app), "{text:?} is lit with a form open");
+    }
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('?'));
+    let shown = screen(&mut app, 120, 40);
+    mouse(&mut app, MouseEventKind::Moved, spot(&shown, "q quit"));
+    assert!(!lit_anywhere(&mut app), "a footer key is lit under help");
+}
+
+/// The wheel over a toast scrolls what is under it.
+#[test]
+fn the_wheel_over_a_toast_scrolls_what_is_under_it() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    app.focus = Focus::Case;
+    app.flash("a toast over the case");
+    let shown = screen(&mut app, 120, 40);
+    mouse(
+        &mut app,
+        MouseEventKind::ScrollDown,
+        spot(&shown, "a toast over"),
+    );
+    assert!(app.scroll > 0, "the wheel over a toast did nothing");
+}
+
+/// On a terminal too short for the whole dialog, its buttons are still
+/// drawn, and clicked.
+#[test]
+fn a_dialog_on_a_short_terminal_keeps_its_buttons() {
+    let store = Store::new();
+    store.open("fyi", "today", "FYI", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('d'));
+    let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+    terminal.draw(|frame| view::draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let shown: String = (0..6)
+        .map(|y| (0..30).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n")
+        .collect();
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        spot(&shown, "y Drop"),
+    );
+    assert!(app.pending.is_some(), "{shown}");
 }

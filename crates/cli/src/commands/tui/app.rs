@@ -23,8 +23,11 @@ fn filter_of(filter: Filter, states: &[State]) -> impl Fn(&Case) -> bool + '_ {
     move |case| filter.takes(case) && states.contains(&case.state())
 }
 
-/// How long a line in the footer stays.
-const FLASH_FOR: Duration = Duration::from_secs(4);
+/// How long a toast stays.
+const TOAST_FOR: Duration = Duration::from_secs(4);
+
+/// The most toasts shown at once: a new one pushes out the oldest.
+const TOASTS: usize = 3;
 
 /// The list's filters, as the web inbox has them (IN-01, IN-07), and the
 /// briefings' tab beside them (TU-10).
@@ -123,6 +126,20 @@ pub(crate) enum Hit {
     ApprovalRow(usize),
     /// A field of the form.
     Field(Which),
+    /// A dialog, behind its buttons: a click on it does nothing.
+    Dialog,
+    /// A toast, by its place: a click puts it away.
+    Toast(usize),
+}
+
+/// A short-lived notice in a corner of the screen: what a write did, or
+/// why a key did nothing.
+#[derive(Debug, Clone)]
+pub(crate) struct Toast {
+    pub(crate) text: String,
+    /// Whether it says something was done, rather than not.
+    pub(crate) done: bool,
+    at: Instant,
 }
 
 /// Whether one case's screen (TU-11) takes a key that reaches
@@ -175,8 +192,8 @@ pub(crate) struct App {
     pub(crate) scroll: u16,
     /// The list's scroll, kept between frames.
     pub(crate) list_offset: usize,
-    /// A line for the footer, and when it was set.
-    pub(crate) flash: Option<(String, Instant)>,
+    /// The toasts shown, oldest first.
+    pub(crate) toasts: Vec<Toast>,
     pub(crate) help: bool,
     pub(crate) quit: bool,
     /// The form being filled in, for the selected case (TU-05).
@@ -206,6 +223,10 @@ pub(crate) struct App {
     pub(crate) only: Option<One>,
     /// Where the last frame drew each part a click acts on, latest on top.
     pub(crate) hits: Vec<(Rect, Hit)>,
+    /// Where the pointer was last seen, when the terminal reports it.
+    pub(crate) pointer: Option<Position>,
+    /// What a click under the pointer would act on, which the view lights.
+    pub(crate) hover: Option<Hit>,
     /// The stats strip (TU-13).
     pub(crate) strip: Strip,
 }
@@ -252,7 +273,7 @@ impl App {
             focus: Focus::List,
             scroll: 0,
             list_offset: 0,
-            flash: None,
+            toasts: Vec::new(),
             help: false,
             quit: false,
             form: None,
@@ -267,6 +288,8 @@ impl App {
             answered: Group::Folded,
             only: None,
             hits: Vec::new(),
+            pointer: None,
+            hover: None,
             strip: Strip {
                 stats: None,
                 shown: true,
@@ -521,18 +544,86 @@ impl App {
         })
     }
 
+    /// Says why something was not done, or what to do, in a toast.
     pub(crate) fn flash(&mut self, text: &str) {
-        self.flash = Some((text.into(), Instant::now()));
+        self.toast(text, false);
     }
 
-    pub(crate) fn expire_flash(&mut self, now: Instant) {
-        if self
-            .flash
-            .as_ref()
-            .is_some_and(|(_, at)| now.duration_since(*at) > FLASH_FOR)
-        {
-            self.flash = None;
+    /// Says that something was done, in a toast.
+    pub(crate) fn done(&mut self, text: &str) {
+        self.toast(text, true);
+    }
+
+    fn toast(&mut self, text: &str, done: bool) {
+        if self.toasts.len() >= TOASTS {
+            self.toasts.remove(0);
         }
+        self.toasts.push(Toast {
+            text: text.into(),
+            done,
+            at: Instant::now(),
+        });
+    }
+
+    /// The newest toast's text.
+    pub(crate) fn said(&self) -> Option<&str> {
+        self.toasts.last().map(|toast| toast.text.as_str())
+    }
+
+    /// The newest text of a toast that says something was done.
+    pub(crate) fn said_done(&self) -> Option<&str> {
+        self.toasts
+            .iter()
+            .rev()
+            .find(|toast| toast.done)
+            .map(|toast| toast.text.as_str())
+    }
+
+    /// Puts away the toasts that have been up long enough.
+    pub(crate) fn expire_toasts(&mut self, now: Instant) {
+        self.toasts
+            .retain(|toast| now.duration_since(toast.at) <= TOAST_FOR);
+    }
+
+    /// What a click at `at` acts on, from where the last frame drew it.
+    pub(crate) fn hit_at(&self, at: Position) -> Option<Hit> {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(rect, _)| rect.contains(at))
+            .map(|(_, hit)| *hit)
+    }
+
+    /// Whether a click on `hit` would act, as [`App::click`] has it, so
+    /// that the pointer over it lights it: not a pane, which only the wheel
+    /// acts on, nor a dialog's face; nothing under help, which a click only
+    /// closes; only a dialog's buttons while it asks; and not the list or
+    /// the tabs while a form or a message is open.
+    pub(crate) fn acts_on(&self, hit: Hit) -> bool {
+        if self.help {
+            return false;
+        }
+        if self.asking() {
+            return matches!(hit, Hit::Key(_));
+        }
+        let open = self.form.is_some() || self.compose.is_some();
+        match hit {
+            Hit::List | Hit::Case | Hit::Dialog => false,
+            Hit::Tab(_) => !open && self.only.is_none(),
+            Hit::Row(_) | Hit::Fold => !open,
+            Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
+                self.compose.is_none()
+            }
+            Hit::Key(_) | Hit::Toast(_) => true,
+        }
+    }
+
+    /// Whether a question is up, in a dialog: quitting, or the form's or
+    /// the message's.
+    pub(crate) fn asking(&self) -> bool {
+        self.confirm_quit
+            || self.form.as_ref().is_some_and(|f| f.confirm.is_some())
+            || self.compose.as_ref().is_some_and(|c| c.confirm)
     }
 
     /// Does what `key` asks (TU-08).
@@ -565,20 +656,29 @@ impl App {
     }
 
     /// Does what the mouse asks (TU-12): a click acts on what it lands on,
-    /// and the wheel scrolls what it is over. While help or a question is
-    /// up, a click is any other key: it closes help, or answers no.
+    /// the wheel scrolls what it is over, and what the pointer is over is
+    /// lit. While help is up, a click is any other key: it closes help.
+    /// While a question is up, a click on one of its buttons presses its
+    /// key, on the dialog does nothing, and anywhere else answers no.
     pub(crate) fn mouse(&mut self, event: MouseEvent) {
         let at = Position::new(event.column, event.row);
-        let hit = self
-            .hits
-            .iter()
-            .rev()
-            .find(|(rect, _)| rect.contains(at))
-            .map(|(_, hit)| *hit);
+        let hit = self.hit_at(at);
+        self.pointer = Some(at);
+        self.hover = hit.filter(|hit| self.acts_on(*hit));
+        // A toast is not scrolled: the wheel over one scrolls what is
+        // under it.
+        let under = || {
+            self.hits
+                .iter()
+                .rev()
+                .filter(|(_, hit)| !matches!(hit, Hit::Toast(_)))
+                .find(|(rect, _)| rect.contains(at))
+                .map(|(_, hit)| *hit)
+        };
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(hit),
-            MouseEventKind::ScrollDown => self.wheel(hit, 1),
-            MouseEventKind::ScrollUp => self.wheel(hit, -1),
+            MouseEventKind::ScrollDown => self.wheel(under(), 1),
+            MouseEventKind::ScrollUp => self.wheel(under(), -1),
             _ => {}
         }
     }
@@ -593,7 +693,16 @@ impl App {
             {
                 self.move_by(by);
             }
-            Some(Hit::List | Hit::Row(_) | Hit::Fold | Hit::Tab(_) | Hit::Key(_)) | None => {}
+            Some(
+                Hit::List
+                | Hit::Row(_)
+                | Hit::Fold
+                | Hit::Tab(_)
+                | Hit::Key(_)
+                | Hit::Dialog
+                | Hit::Toast(_),
+            )
+            | None => {}
             Some(_) if by > 0 => self.scroll = self.scroll.saturating_add(WHEEL),
             Some(_) => self.scroll = self.scroll.saturating_sub(WHEEL),
         }
@@ -603,20 +712,21 @@ impl App {
         if self.help || self.confirm_quit {
             if let Some(Hit::Key(key)) = hit {
                 self.key(key);
-            } else {
+            } else if !(self.confirm_quit && hit == Some(Hit::Dialog)) {
                 self.help = false;
                 self.confirm_quit = false;
             }
             return;
         }
-        // A question the form or the message asks: a click is any key but
-        // the y drawn in the footer.
+        // A question the form or the message asks: a click on one of the
+        // dialog's buttons presses its key, and one off the dialog is any
+        // other key, which answers no.
         if self.form.as_ref().is_some_and(|f| f.confirm.is_some())
             || self.compose.as_ref().is_some_and(|c| c.confirm)
         {
             if let Some(Hit::Key(key)) = hit {
                 self.key(key);
-            } else {
+            } else if hit != Some(Hit::Dialog) {
                 if let Some(form) = &mut self.form {
                     form.confirm = None;
                 }
@@ -632,9 +742,14 @@ impl App {
         let open = self.form.is_some() || self.compose.is_some();
         match hit {
             Hit::Key(key) => self.key(key),
+            Hit::Toast(at) => {
+                if at < self.toasts.len() {
+                    self.toasts.remove(at);
+                }
+            }
             // As the keys: the list and the filters wait while a form or a
-            // message is open.
-            Hit::List | Hit::Case => {}
+            // message is open. A dialog's face does nothing.
+            Hit::List | Hit::Case | Hit::Dialog => {}
             _ if open && self.form.is_none() => {}
             Hit::Tab(filter) if !open && self.only.is_none() => self.set_filter(filter),
             Hit::Fold if !open => self.pane_key(KeyCode::Char('f'), false),
@@ -917,7 +1032,7 @@ impl App {
                         "sent message {key}; no session is listening for it now, so it waits until one is"
                     )
                 };
-                self.flash(&line);
+                self.done(&line);
             }
             Err(why) => self.flash(&format!("nothing sent: {why}")),
         }
@@ -1006,7 +1121,7 @@ impl App {
                 if self.form.is_none() && self.selected != Some(send.key) {
                     self.focus = Focus::List;
                 }
-                self.flash(&format!("recorded {} on {}", send.what, send.key));
+                self.done(&format!("recorded {} on {}", send.what, send.key));
             }
             Err(Refusal::Stale) => {
                 // The case as it is now is on screen. A form keeps what was
