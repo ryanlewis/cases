@@ -919,6 +919,10 @@ impl Tui {
             .expect("the TUI took the mouse");
         self.from = captured;
         assert!(self.shows("\x1b[?1000l"), "the mouse was not given back");
+        assert!(
+            self.shows("\x1b[?1003l"),
+            "the pointer's moves are still reported"
+        );
     }
 
     /// Types q, and checks that it quits.
@@ -1033,7 +1037,9 @@ fn an_edit_refused_as_stale_shows_the_message_as_it_is_now() {
     // A second send has nothing to save: the old draft is gone.
     tui.mark();
     tui.keys(&[SEND]);
-    assert!(tui.shows("the body is as"), "{}", tui.drawn());
+    // Its toast takes the place of the last one, which shares its first
+    // words: only the cells that differ are drawn again.
+    assert!(tui.shows("as it was"), "{}", tui.drawn());
     assert_eq!(env.case(&id).body(), "From the web.");
     tui.keys(&[ESC]);
     tui.quits();
@@ -1546,6 +1552,11 @@ fn a_click_on_a_tab_switches_to_it() {
     let mut tui = Tui::start(&mut script(&env));
     assert!(tui.shows("FYI"), "{}", tui.drawn());
     assert!(tui.shows("\x1b[?1000h"), "the mouse is not reported");
+    // Its moves too, which light what the pointer is over.
+    assert!(
+        tui.shows("\x1b[?1003h"),
+        "the pointer's moves are not reported"
+    );
     tui.mark();
     // "Done" is drawn from column 34, row 2, counted from 1.
     tui.keys(&[b"\x1b[<0;35;2M", b"\x1b[<0;35;2m"]);

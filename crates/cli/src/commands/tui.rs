@@ -30,7 +30,9 @@ use std::time::{Duration, Instant};
 use cases_core::{Kind, State};
 use cases_store_sqlite::{Db, Key};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+};
 use ratatui::crossterm::execute;
 
 use crate::commands::write;
@@ -158,7 +160,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         return ended(ctx, &store, &app, key, args.json);
     }
     // The screen is gone: that the write was recorded is said here instead.
-    if let (Some(true), Some((said, _))) = (landed, &app.flash) {
+    if let (Some(true), Some(said)) = (landed, app.said()) {
         eprintln!("{said}");
     }
     Ok(())
@@ -199,7 +201,7 @@ fn land(reader: &mut Reader, app: &mut App, stop: &AtomicBool) -> Result<Option<
     match landed {
         Some(true) => return Ok(Some(true)),
         Some(false) => {
-            if let Some((said, _)) = &app.flash {
+            if let Some(said) = app.said() {
                 eprintln!("{said}");
             }
         }
@@ -303,10 +305,11 @@ fn init() -> io::Result<DefaultTerminal> {
             hook(info);
         }));
     });
-    // Clicks and the wheel only, in SGR form: not every move of the mouse,
-    // which would draw the screen again for each one.
+    // Clicks, the wheel and every move of the pointer, in SGR form: the
+    // moves light what the pointer is over. The loop takes the moves that
+    // queue up as one, so that the screen is not drawn again for each.
     if let Err(error) = io::stdout()
-        .write_all(b"\x1b[?1000h\x1b[?1006h")
+        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h")
         .and_then(|()| io::stdout().flush())
     {
         restore();
@@ -395,7 +398,10 @@ fn put_back() {
     if IMAGES.load(Ordering::SeqCst) {
         let _ = rustix::io::write(io::stdout(), &kitty::delete(kitty::id()));
     }
-    let _ = rustix::io::write(io::stdout(), b"\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h");
+    let _ = rustix::io::write(
+        io::stdout(),
+        b"\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+    );
     let _ = ratatui::crossterm::terminal::disable_raw_mode();
 }
 
@@ -429,8 +435,9 @@ impl Run<'_> {
     /// Hands `write` to the reads' thread; the app waits for how it went.
     fn send(&mut self, app: &mut App, write: Write, sending: Sending) {
         self.reader.write(write);
-        // An older line would hide the one that says it is being sent.
-        app.flash = None;
+        // What the toasts said was before this write: what it does is said
+        // after it, alone, so that q tells it on the way out.
+        app.toasts.clear();
         app.sending = Some(sending);
     }
 
@@ -460,7 +467,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
         if let Some(herdr) = run.herdr.as_deref_mut() {
             herdr.report(app.waiting());
         }
-        app.expire_flash(Instant::now());
+        app.expire_toasts(Instant::now());
         terminal.draw(|frame| view::draw(frame, app))?;
         if app.strip.image {
             show(&mut image, app)?;
@@ -471,8 +478,25 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
             Some(every) => every.saturating_sub(last_read.elapsed()).min(TICK),
             None => TICK,
         };
-        if event::poll(wait)? {
-            match event::read()? {
+        let mut next = if event::poll(wait)? {
+            Some(event::read()?)
+        } else {
+            None
+        };
+        // The pointer's moves that queue up are taken as one: only where it
+        // ends up is lit.
+        while let Some(Event::Mouse(mouse)) = next
+            && matches!(mouse.kind, MouseEventKind::Moved)
+        {
+            app.mouse(mouse);
+            next = if event::poll(Duration::ZERO)? {
+                Some(event::read()?)
+            } else {
+                None
+            };
+        }
+        if let Some(event) = next {
+            match event {
                 Event::Key(key) => {
                     app.key(key);
                     run.interrupted = app.quit
