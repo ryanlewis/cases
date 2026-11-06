@@ -3573,3 +3573,125 @@ fn an_answer_by_clicks_records_what_the_keys_record() {
     };
     assert_eq!(answers(true), answers(false));
 }
+
+/// Review repro: on a pane too narrow for an approval row's verdicts on
+/// one line, a click on one never records another.
+#[test]
+fn a_click_on_a_wrapped_verdict_never_records_another() {
+    let store = Store::new();
+    store.open("approval", "today", "Move?", |open| {
+        open.rows = vec![step("tag", "")];
+    });
+    let mut app = store.app();
+    app.focus = Focus::Case;
+    app.strip.shown = false;
+    let mut seen = false;
+    for scroll in 0..40 {
+        app.scroll = scroll;
+        let shown = screen(&mut app, 30, 30);
+        if let Some(at) = shown
+            .lines()
+            .position(|l| l.trim_start().starts_with("reject"))
+        {
+            let column = shown.lines().nth(at).unwrap().find("reject").unwrap();
+            let column =
+                u16::try_from(shown.lines().nth(at).unwrap()[..column].chars().count()).unwrap();
+            // Inside "reject", where approve's cell is on the first line.
+            mouse(
+                &mut app,
+                MouseEventKind::Down(MouseButton::Left),
+                (column + 6, u16::try_from(at).unwrap()),
+            );
+            let verdict = app.form.as_ref().and_then(|f| f.rows[0].verdict);
+            assert!(
+                matches!(verdict, None | Some("reject")),
+                "{verdict:?}:\n{shown}"
+            );
+            seen = true;
+            break;
+        }
+    }
+    app.scroll = u16::MAX;
+    let shown = screen(&mut app, 30, 30);
+    assert!(seen, "the verdicts did not wrap:\n{shown}");
+}
+
+/// Review repro: a draft whose case can no longer be answered goes, and
+/// says so, as the form does.
+#[test]
+fn a_draft_whose_case_leaves_says_so() {
+    let store = Store::new();
+    let first = store.open("question", "blocking", "First?", |_| {});
+    store.open("question", "today", "Second?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a long reply");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    store.answer(first, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert!(app.answer_of(first).is_none());
+    assert!(flash(&app).contains("nothing was sent"), "{}", flash(&app));
+}
+
+/// Review repro: a send refused as stale takes the case as amended into
+/// its draft too, when the keys left the answer while it was sent; and
+/// quitting then does not ask about it while it is being sent.
+#[test]
+fn a_draft_sent_then_left_is_not_asked_about_and_takes_a_refusal() {
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a reply");
+    ctrl(&mut app, 's');
+    let pending = app.pending.take().unwrap();
+    app.sending = Some(Sending::Event(Box::new(pending)));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.form.is_none() && app.answer_of(key).is_some());
+    press(&mut app, KeyCode::Char('q'));
+    assert!(
+        app.quit && !app.confirm_quit,
+        "asked about a draft being sent"
+    );
+    // Refused as stale: the draft takes the case as it is now.
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a reply");
+    ctrl(&mut app, 's');
+    let send = app.pending.take().unwrap();
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    let mut amend = Amend::default();
+    "Name it, please?".clone_into(&mut amend.title);
+    store.agent(key, &Record::Amend(amend));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    app.sent(&send, Err(Refusal::Stale));
+    let revision = case(&store, key).revision();
+    assert_eq!(app.answer_of(key).unwrap().revision, revision);
+}
+
+/// Review repro: what is typed into the answer stays in sight as it
+/// grows, on a case longer than its pane.
+#[test]
+fn the_field_being_typed_in_stays_in_sight() {
+    let store = Store::new();
+    store.open("question", "today", "Name?", |open| {
+        open.body = (0..40)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    });
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Char('a'));
+    screen(&mut app, 80, 24);
+    for n in 0..8 {
+        typing(&mut app, &format!("typed {n}"));
+        press(&mut app, KeyCode::Enter);
+    }
+    typing(&mut app, "the last");
+    let shown = screen(&mut app, 80, 24);
+    assert!(shown.contains("the last"), "{shown}");
+}

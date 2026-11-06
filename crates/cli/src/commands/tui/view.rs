@@ -713,6 +713,21 @@ fn case_fit(app: &App, inner: Rect) -> (Option<Flow>, bool) {
 fn line_hits(app: &mut App, area: Rect, hits: &[Option<Hit>], skip: usize) {
     for row in 0..area.height {
         match hits.get(skip + usize::from(row)) {
+            // A row's verdicts, wrapped on a narrow pane: the cells are
+            // not where they are drawn, so a click picks the row.
+            Some(Some(Hit::Verdicts(at, _)))
+                if [
+                    skip + usize::from(row) + 1,
+                    (skip + usize::from(row)).wrapping_sub(1),
+                ]
+                .iter()
+                .any(|near| hits.get(*near) == Some(&hits[skip + usize::from(row)])) =>
+            {
+                app.hits.push((
+                    Rect::new(area.x, area.y + row, area.width, 1),
+                    Hit::ApprovalRow(*at),
+                ));
+            }
             // A row's verdicts: a click on each picks it.
             Some(Some(Hit::Verdicts(at, human))) => {
                 for (x, wide, verdict) in verdict_cells(*human) {
@@ -726,6 +741,40 @@ fn line_hits(app: &mut App, area: Rect, hits: &[Option<Hit>], skip: usize) {
             _ => {}
         }
     }
+}
+
+/// The lines of the case that the part of its answer the keys are on is
+/// drawn over, first and last, from what a click on each does.
+fn reveal_lines(app: &App, hits: &[Option<Hit>]) -> Option<(usize, usize)> {
+    let form = app.form.as_ref().filter(|form| form.act == Act::Answer)?;
+    let spot = form.spot();
+    let lines: Vec<usize> = hits
+        .iter()
+        .enumerate()
+        .filter(|(_, hit)| match (spot, hit) {
+            (Spot::Field(which), Some(Hit::Field(field))) => which == *field,
+            (Spot::Choices, Some(Hit::Choice(_) | Hit::Mark(_))) => true,
+            (
+                Spot::Rows,
+                Some(Hit::ApprovalRow(at) | Hit::Verdicts(at, _) | Hit::Field(Which::Row(at))),
+            ) => *at == form.row,
+            (Spot::Items, Some(Hit::LeftOut(at))) => *at == form.item,
+            _ => false,
+        })
+        .map(|(at, _)| at)
+        .collect();
+    Some((*lines.first()?, *lines.last()?))
+}
+
+/// The scroll nearest `scroll` that shows the lines `first` to `last` in
+/// `height` rows: their end, when they are taller than that.
+fn in_sight(scroll: u16, height: u16, first: usize, last: usize) -> u16 {
+    let line = |at: usize| u16::try_from(at).unwrap_or(u16::MAX);
+    let mut scroll = scroll.max(line(last + 1).saturating_sub(height));
+    if line(last) - line(first) < height {
+        scroll = scroll.min(line(first));
+    }
+    scroll
 }
 
 /// Where a line of a row's verdicts draws each: its column, its width,
@@ -1236,6 +1285,13 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
     let max =
         u16::try_from(lines.len().saturating_sub(usize::from(inner.height))).unwrap_or(u16::MAX);
     app.scroll = app.scroll.min(max);
+    let reveal = app
+        .form
+        .as_mut()
+        .is_some_and(|form| std::mem::take(&mut form.reveal));
+    if reveal && let Some((first, last)) = reveal_lines(app, &hits) {
+        app.scroll = in_sight(app.scroll, inner.height, first, last).min(max);
+    }
     line_hits(app, inner, &hits, usize::from(app.scroll));
     let more = app.scroll < max;
     frame.render_widget(Paragraph::new(lines).scroll((app.scroll, 0)), inner);

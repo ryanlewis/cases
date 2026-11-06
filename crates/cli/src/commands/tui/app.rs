@@ -445,17 +445,32 @@ impl App {
     /// following it as [`Form::follow`] says.
     fn follow_form(&mut self) {
         // A draft follows its case quietly, and goes once its case can no
-        // longer be answered.
+        // longer be answered, saying so as the form does.
         let cases = &self.cases;
+        let mut gone = Vec::new();
         self.drafts.retain_mut(
             |draft| match cases.iter().find(|(key, _)| *key == draft.key) {
                 Some((_, case)) if draft.act.fits(case) => {
                     draft.follow(case);
                     true
                 }
-                _ => false,
+                Some((_, case)) => {
+                    gone.push(format!(
+                        "{} is now {}: nothing was sent",
+                        draft.key,
+                        case.state()
+                    ));
+                    false
+                }
+                None => {
+                    gone.push(format!("{} is gone: nothing was sent", draft.key));
+                    false
+                }
             },
         );
+        for line in gone {
+            self.flash(&line);
+        }
         let Some(form) = &self.form else {
             return;
         };
@@ -989,7 +1004,10 @@ impl App {
             || self.compose.as_ref().is_some_and(|compose| {
                 compose.typed() && !sent(compose.editing.map(|(key, _)| key))
             })
-            || self.drafts.iter().any(Form::typed)
+            || self
+                .drafts
+                .iter()
+                .any(|draft| draft.typed() && !sent(Some(draft.key)))
         {
             self.confirm_quit = true;
         } else {
@@ -1351,6 +1369,14 @@ impl App {
                     && form.key == send.key
                 {
                     form.amended(case);
+                }
+                // Or its draft, when the keys left the answer while it was
+                // being sent.
+                if let Some(case) = now
+                    && !edit
+                    && let Some(draft) = self.drafts.iter_mut().find(|d| d.key == send.key)
+                {
+                    draft.amended(case);
                 }
                 let mut replaced = false;
                 if let (Some(compose), Some(case)) = (&mut self.compose, now)

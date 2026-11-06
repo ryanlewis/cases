@@ -168,6 +168,10 @@ pub(crate) struct Form {
     spot: Option<Spot>,
     /// The left-out item the keys are on, among a briefing's items.
     pub(crate) item: usize,
+    /// Whether the next frame brings the part of the answer's panel the
+    /// keys are on into sight: after a key, which may have moved or grown
+    /// it.
+    pub(crate) reveal: bool,
 }
 
 impl Form {
@@ -211,6 +215,7 @@ impl Form {
             confirm: None,
             spot: None,
             item: 0,
+            reveal: false,
         }
     }
 
@@ -428,6 +433,7 @@ impl Form {
 
     /// Takes a key.
     pub(crate) fn key(&mut self, key: KeyEvent) -> Outcome {
+        self.reveal = self.act == Act::Answer;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if let Some(confirm) = self.confirm.take() {
             return self.confirmed(confirm, key);
