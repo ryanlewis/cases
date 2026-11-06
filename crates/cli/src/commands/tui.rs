@@ -72,6 +72,9 @@ const RETRY_EVERY: Duration = Duration::from_secs(2);
 /// The longest the loop waits for a key, so that a signal is seen soon.
 const TICK: Duration = Duration::from_millis(100);
 
+/// The most moves of the pointer taken as one before the screen is drawn.
+const MOVES: usize = 64;
+
 /// Runs the inbox until the human quits or a signal stops it; or, given an
 /// id, the one case until it leaves open (TU-11).
 pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
@@ -160,7 +163,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         return ended(ctx, &store, &app, key, args.json);
     }
     // The screen is gone: that the write was recorded is said here instead.
-    if let (Some(true), Some(said)) = (landed, app.said()) {
+    if let (Some(true), Some(said)) = (landed, app.said_done()) {
         eprintln!("{said}");
     }
     Ok(())
@@ -483,11 +486,15 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
         } else {
             None
         };
-        // The pointer's moves that queue up are taken as one: only where it
-        // ends up is lit.
+        // The pointer's moves and drags that queue up are taken as one:
+        // only where it ends up is lit. A few at most, so that a pointer
+        // that keeps moving does not hold up the screen and the reads.
+        let mut moves = 0;
         while let Some(Event::Mouse(mouse)) = next
-            && matches!(mouse.kind, MouseEventKind::Moved)
+            && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+            && moves < MOVES
         {
+            moves += 1;
             app.mouse(mouse);
             next = if event::poll(Duration::ZERO)? {
                 Some(event::read()?)

@@ -132,15 +132,6 @@ pub(crate) enum Hit {
     Toast(usize),
 }
 
-impl Hit {
-    /// Whether a click on it does anything, so that the pointer over it
-    /// lights it: not a pane, which only the wheel acts on, nor a dialog's
-    /// face.
-    pub(crate) fn clickable(self) -> bool {
-        !matches!(self, Hit::List | Hit::Case | Hit::Dialog)
-    }
-}
-
 /// A short-lived notice in a corner of the screen: what a write did, or
 /// why a key did nothing.
 #[derive(Debug, Clone)]
@@ -579,6 +570,15 @@ impl App {
         self.toasts.last().map(|toast| toast.text.as_str())
     }
 
+    /// The newest text of a toast that says something was done.
+    pub(crate) fn said_done(&self) -> Option<&str> {
+        self.toasts
+            .iter()
+            .rev()
+            .find(|toast| toast.done)
+            .map(|toast| toast.text.as_str())
+    }
+
     /// Puts away the toasts that have been up long enough.
     pub(crate) fn expire_toasts(&mut self, now: Instant) {
         self.toasts
@@ -592,6 +592,30 @@ impl App {
             .rev()
             .find(|(rect, _)| rect.contains(at))
             .map(|(_, hit)| *hit)
+    }
+
+    /// Whether a click on `hit` would act, as [`App::click`] has it, so
+    /// that the pointer over it lights it: not a pane, which only the wheel
+    /// acts on, nor a dialog's face; nothing under help, which a click only
+    /// closes; only a dialog's buttons while it asks; and not the list or
+    /// the tabs while a form or a message is open.
+    pub(crate) fn acts_on(&self, hit: Hit) -> bool {
+        if self.help {
+            return false;
+        }
+        if self.asking() {
+            return matches!(hit, Hit::Key(_));
+        }
+        let open = self.form.is_some() || self.compose.is_some();
+        match hit {
+            Hit::List | Hit::Case | Hit::Dialog => false,
+            Hit::Tab(_) => !open && self.only.is_none(),
+            Hit::Row(_) | Hit::Fold => !open,
+            Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
+                self.compose.is_none()
+            }
+            Hit::Key(_) | Hit::Toast(_) => true,
+        }
     }
 
     /// Whether a question is up, in a dialog: quitting, or the form's or
@@ -640,11 +664,21 @@ impl App {
         let at = Position::new(event.column, event.row);
         let hit = self.hit_at(at);
         self.pointer = Some(at);
-        self.hover = hit.filter(|hit| hit.clickable());
+        self.hover = hit.filter(|hit| self.acts_on(*hit));
+        // A toast is not scrolled: the wheel over one scrolls what is
+        // under it.
+        let under = || {
+            self.hits
+                .iter()
+                .rev()
+                .filter(|(_, hit)| !matches!(hit, Hit::Toast(_)))
+                .find(|(rect, _)| rect.contains(at))
+                .map(|(_, hit)| *hit)
+        };
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(hit),
-            MouseEventKind::ScrollDown => self.wheel(hit, 1),
-            MouseEventKind::ScrollUp => self.wheel(hit, -1),
+            MouseEventKind::ScrollDown => self.wheel(under(), 1),
+            MouseEventKind::ScrollUp => self.wheel(under(), -1),
             _ => {}
         }
     }

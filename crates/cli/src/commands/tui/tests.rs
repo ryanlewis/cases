@@ -3017,3 +3017,64 @@ fn a_toast_says_what_happened_then_goes() {
     );
     assert!(screen(&mut app, 120, 40).contains("✓ recorded answer"));
 }
+
+/// What a click would not act on is not lit: the list and the tabs while
+/// a form is open, and anything under help (TU-12).
+#[test]
+fn the_pointer_lights_nothing_a_click_would_not_act_on() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    store.open("fyi", "today", "Other one", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    let shown = screen(&mut app, 120, 40);
+    for text in ["In flight", "Other one"] {
+        mouse(&mut app, MouseEventKind::Moved, spot(&shown, text));
+        assert!(!lit_anywhere(&mut app), "{text:?} is lit with a form open");
+    }
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('?'));
+    let shown = screen(&mut app, 120, 40);
+    mouse(&mut app, MouseEventKind::Moved, spot(&shown, "q quit"));
+    assert!(!lit_anywhere(&mut app), "a footer key is lit under help");
+}
+
+/// The wheel over a toast scrolls what is under it.
+#[test]
+fn the_wheel_over_a_toast_scrolls_what_is_under_it() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    app.focus = Focus::Case;
+    app.flash("a toast over the case");
+    let shown = screen(&mut app, 120, 40);
+    mouse(
+        &mut app,
+        MouseEventKind::ScrollDown,
+        spot(&shown, "a toast over"),
+    );
+    assert!(app.scroll > 0, "the wheel over a toast did nothing");
+}
+
+/// On a terminal too short for the whole dialog, its buttons are still
+/// drawn, and clicked.
+#[test]
+fn a_dialog_on_a_short_terminal_keeps_its_buttons() {
+    let store = Store::new();
+    store.open("fyi", "today", "FYI", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('d'));
+    let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+    terminal.draw(|frame| view::draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let shown: String = (0..6)
+        .map(|y| (0..30).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n")
+        .collect();
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        spot(&shown, "y Drop"),
+    );
+    assert!(app.pending.is_some(), "{shown}");
+}

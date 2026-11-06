@@ -125,7 +125,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     app.hover = app
         .pointer
         .and_then(|at| app.hit_at(at))
-        .filter(|hit| hit.clickable());
+        .filter(|hit| app.acts_on(*hit));
 }
 
 /// Lights the cells of what the pointer is over, unless it is a button,
@@ -394,11 +394,12 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, dialog: &Dialog) {
         .style(Style::new().bg(PANEL_BG));
     let face = block.inner(rect);
     frame.render_widget(block, rect);
+    // On a short screen the text is cut, not the buttons under it.
     let text_area = Rect::new(
         face.x.saturating_add(2),
         face.y.saturating_add(1),
         face.width.saturating_sub(4),
-        tall,
+        tall.min(face.height.saturating_sub(2)),
     )
     .intersection(face);
     frame.render_widget(Paragraph::new(lines), text_area);
