@@ -11,6 +11,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 
+use super::actions::{self, Action};
 use super::compose::{self, Compose, Part};
 use super::form::{Act, Form, Outcome, Press, Which};
 use super::reader::Wrote;
@@ -138,10 +139,31 @@ pub(crate) enum Hit {
     Press(Press),
     /// One of the case's bar's buttons.
     Verb(Verb),
+    /// An action the palette lists.
+    Palette(Action),
+    /// An action a row's menu lists.
+    Menu(Action),
     /// A dialog, behind its buttons: a click on it does nothing.
     Dialog,
     /// A toast, by its id: a click puts it away.
     Toast(u64),
+}
+
+/// The palette: what is typed to find an action, and the one of those
+/// found the keys are on.
+#[derive(Debug, Default)]
+pub(crate) struct Palette {
+    pub(crate) query: String,
+    pub(crate) at: usize,
+}
+
+/// A row's menu: the case it is on, where the right-click was, and the
+/// action the keys are on.
+#[derive(Debug)]
+pub(crate) struct Menu {
+    pub(crate) key: Key,
+    pub(crate) at: Position,
+    pub(crate) item: usize,
 }
 
 /// A short-lived notice in a corner of the screen: what a write did, or
@@ -162,7 +184,7 @@ pub(crate) struct Toast {
 /// that. The list's, the filters' and messages' keys do nothing there,
 /// and nor does a withdraw or a resume, as the screen ends once the case
 /// leaves open. The help it shows is [`super::view::ONE_KEYS`].
-fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
+pub(crate) fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
     match code {
         KeyCode::Char('d' | 'u') => ctrl,
         KeyCode::Char('a' | 'p' | '?' | ' ' | 'J' | 'K') | KeyCode::PageDown | KeyCode::PageUp => {
@@ -173,12 +195,12 @@ fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
 }
 
 /// Whether r resumes `case`: only a parked one.
-fn resumes(case: &Case) -> bool {
+pub(crate) fn resumes(case: &Case) -> bool {
     case.state() == State::Parked
 }
 
 /// Whether e edits `case`: only a message no agent has picked up (HU-08).
-fn edits(case: &Case) -> bool {
+pub(crate) fn edits(case: &Case) -> bool {
     case.kind() == Kind::Message && case.state() == State::Sent
 }
 
@@ -194,6 +216,7 @@ pub(crate) enum Verb {
 }
 
 impl Verb {
+    #[cfg(test)]
     pub(crate) const ALL: [Verb; 5] = [
         Verb::Answer,
         Verb::Park,
@@ -258,6 +281,11 @@ pub(crate) struct App {
     pub(crate) scroll: u16,
     /// The list's scroll, kept between frames.
     pub(crate) list_offset: usize,
+    /// The palette, while it is open (TU-12).
+    pub(crate) palette: Option<Palette>,
+    /// A row's menu, while it is open: where it was asked for, and the
+    /// action the keys are on.
+    pub(crate) menu: Option<Menu>,
     /// The toasts shown, oldest first.
     pub(crate) toasts: Vec<Toast>,
     /// The id the next toast takes.
@@ -346,6 +374,8 @@ impl App {
             focus: Focus::List,
             scroll: 0,
             list_offset: 0,
+            palette: None,
+            menu: None,
             toasts: Vec::new(),
             next_toast: 0,
             help: false,
@@ -417,6 +447,14 @@ impl App {
         self.now = now;
         self.problem = None;
         self.keep_selection();
+        // A row's menu is on its case: one the selection left goes.
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|menu| Some(menu.key) != self.selected)
+        {
+            self.menu = None;
+        }
         self.follow_form();
         self.follow_compose();
     }
@@ -731,10 +769,18 @@ impl App {
         if self.asking() {
             return matches!(hit, Hit::Key(_));
         }
+        if self.palette.is_some() || self.menu.is_some() {
+            return matches!(hit, Hit::Palette(_) | Hit::Menu(_));
+        }
         let modal = self.modal();
         let typing = self.form.as_ref().is_some_and(|f| f.editing.is_some());
         match hit {
-            Hit::List | Hit::Case | Hit::Dialog | Hit::Verdicts(..) => false,
+            Hit::List
+            | Hit::Case
+            | Hit::Dialog
+            | Hit::Verdicts(..)
+            | Hit::Palette(_)
+            | Hit::Menu(_) => false,
             Hit::Tab(_) => !modal && !typing && self.only.is_none(),
             Hit::Row(_) | Hit::Fold => !modal && !typing,
             Hit::Choice(_)
@@ -745,6 +791,8 @@ impl App {
             | Hit::Verdict(..)
             | Hit::Press(_)
             | Hit::Verb(_) => !modal,
+            // ^k is the field's while one is typed in.
+            Hit::Key(key) if key.code == KeyCode::Char('k') => !self.typing(),
             Hit::Key(_) | Hit::Toast(_) => true,
         }
     }
@@ -793,21 +841,131 @@ impl App {
         if self.modal() {
             return Vec::new();
         }
-        let Some((_, case)) = self.selected_case() else {
-            return Vec::new();
-        };
-        let fits = |verb: Verb| match verb {
-            Verb::Answer => Act::Answer.fits(case),
-            Verb::Park => Act::Park.fits(case),
-            Verb::Resume => resumes(case),
-            Verb::Withdraw => Act::Withdraw.fits(case),
-            Verb::Edit => edits(case),
-        };
-        Verb::ALL
+        // As the table of actions has them, so that the bar, the palette,
+        // a row's menu and the keys agree.
+        Action::ALL
             .into_iter()
-            .filter(|verb| fits(*verb))
-            .filter(|verb| self.only.is_none() || one_case_takes(KeyCode::Char(verb.key()), false))
+            .filter(|action| action.verb().is_some() && action.fits(self))
+            .filter_map(Action::verb)
             .collect()
+    }
+
+    /// Whether a field of the answer, a park's or a withdraw's form, or of
+    /// a message, is being typed in.
+    pub(crate) fn typing(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.editing.is_some())
+            || self.compose.as_ref().is_some_and(|c| c.part.is_some())
+    }
+
+    /// A key while the palette is open: typing finds, the arrows choose,
+    /// enter runs, and esc closes it.
+    fn palette_key(&mut self, code: KeyCode, ctrl: bool) {
+        let found = self
+            .palette
+            .as_ref()
+            .map_or(0, |palette| actions::ranked(self, &palette.query).len());
+        let Some(palette) = &mut self.palette else {
+            return;
+        };
+        // Fewer may fit now than when the keys moved: the last is marked.
+        palette.at = palette.at.min(found.saturating_sub(1));
+        match code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Up => palette.at = palette.at.saturating_sub(1),
+            KeyCode::Down => palette.at = (palette.at + 1).min(found.saturating_sub(1)),
+            KeyCode::Enter => {
+                let at = palette.at;
+                self.run_found(at);
+            }
+            KeyCode::Backspace => {
+                palette.query.pop();
+                palette.at = 0;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                palette.query.push(c);
+                palette.at = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Runs the `at`th action the palette finds.
+    fn run_found(&mut self, at: usize) {
+        let query = self
+            .palette
+            .as_ref()
+            .map(|p| p.query.clone())
+            .unwrap_or_default();
+        if let Some(action) = actions::ranked(self, &query).get(at).copied() {
+            self.run(action);
+        }
+    }
+
+    /// A key while a row's menu is open: the arrows choose, enter runs,
+    /// and esc closes it.
+    fn menu_key(&mut self, code: KeyCode) {
+        let items = Action::on_case(self).len();
+        let Some(menu) = &mut self.menu else {
+            return;
+        };
+        menu.item = menu.item.min(items.saturating_sub(1));
+        match code {
+            KeyCode::Esc => self.menu = None,
+            KeyCode::Up | KeyCode::Char('k') => menu.item = menu.item.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                menu.item = (menu.item + 1).min(items.saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                let item = menu.item;
+                if let Some(action) = Action::on_case(self).get(item).copied() {
+                    self.run(action);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Does `action`, from the palette or a row's menu, as its key does
+    /// outside the answer's panel: closed first, and the keys taken out
+    /// of the panel, keeping its draft. Quit asks first when something
+    /// typed would be lost.
+    pub(crate) fn run(&mut self, action: Action) {
+        self.palette = None;
+        self.menu = None;
+        if action == Action::Quit {
+            self.ask_quit();
+            return;
+        }
+        self.leave_panel();
+        self.pane_key(action.code(), false);
+    }
+
+    /// A right-click (TU-12): on a row of the list, selects it and opens
+    /// its menu where the pointer is; anywhere else, or while anything is
+    /// open over the screen, it does nothing.
+    fn right_click(&mut self, hit: Option<Hit>, at: Position) {
+        if self.help
+            || self.asking()
+            || self.modal()
+            || self.typing()
+            || self.palette.is_some()
+            || self.only.is_some()
+        {
+            return;
+        }
+        if let Some(Hit::Row(key)) = hit
+            && let Some(row) = self.shown(self.filter).iter().position(|(k, _)| *k == key)
+        {
+            self.menu = None;
+            if self.selected != Some(key) {
+                self.leave_panel();
+                self.select(row);
+            }
+            self.menu = Some(Menu { key, at, item: 0 });
+        } else {
+            // A right-click off a row is any click off the menu.
+            self.menu = None;
+        }
     }
 
     /// Whether a question is up, in a dialog: quitting, or the form's or
@@ -831,6 +989,24 @@ impl App {
         }
         if self.help && !(ctrl && key.code == KeyCode::Char('c')) {
             self.help = false;
+            return;
+        }
+        if self.palette.is_some() || self.menu.is_some() {
+            if ctrl && key.code == KeyCode::Char('c') {
+                self.palette = None;
+                self.menu = None;
+                self.ask_quit();
+            } else if self.palette.is_some() {
+                self.palette_key(key.code, ctrl);
+            } else {
+                self.menu_key(key.code);
+            }
+            return;
+        }
+        // ^k opens the palette from anywhere a field is not typed in, and
+        // no question is up; in a field, the field has it.
+        if ctrl && key.code == KeyCode::Char('k') && !self.typing() && !self.asking() {
+            self.palette = Some(Palette::default());
             return;
         }
         if self.quits(key.code, ctrl) {
@@ -873,6 +1049,31 @@ impl App {
         };
         match event.kind {
             MouseEventKind::Moved | MouseEventKind::Drag(_) => return self.hover != was,
+            // The palette and a row's menu take a click: on one of their
+            // actions, runs it; on their face, nothing; anywhere else,
+            // closes them.
+            MouseEventKind::Down(MouseButton::Left)
+                if self.palette.is_some() || self.menu.is_some() =>
+            {
+                // What was drawn under the click, if it still fits; a row's
+                // menu, on its own case.
+                match hit {
+                    Some(Hit::Palette(action)) if action.fits(self) => self.run(action),
+                    Some(Hit::Menu(action))
+                        if action.fits(self)
+                            && self.menu.as_ref().map(|menu| menu.key) == self.selected =>
+                    {
+                        self.run(action);
+                    }
+                    Some(Hit::Dialog) => {}
+                    _ => {
+                        self.palette = None;
+                        self.menu = None;
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => self.right_click(hit, at),
+            _ if self.palette.is_some() || self.menu.is_some() => {}
             MouseEventKind::Down(MouseButton::Left) => self.click(hit),
             MouseEventKind::ScrollDown => self.wheel(under(), 1),
             MouseEventKind::ScrollUp => self.wheel(under(), -1),
@@ -974,7 +1175,9 @@ impl App {
             | Hit::List
             | Hit::Case
             | Hit::Dialog
-            | Hit::Verdicts(..) => {}
+            | Hit::Verdicts(..)
+            | Hit::Palette(_)
+            | Hit::Menu(_) => {}
             _ if self.modal() => {}
             // The bar's buttons do what their keys do outside the panel.
             Hit::Verb(verb) => {

@@ -6,6 +6,7 @@
 //! screen. `cases tui ID` shows that one case, and ends once it is no longer
 //! open (TU-11).
 
+mod actions;
 mod app;
 mod compose;
 mod editor;

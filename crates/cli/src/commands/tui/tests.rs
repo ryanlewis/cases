@@ -3270,9 +3270,14 @@ fn at_80_columns_the_bar_and_the_footer_share_the_keys() {
         row.contains("5 Briefings") && row.contains("+ Message"),
         "{shown}"
     );
-    let footer = shown.lines().last().unwrap();
+    // The footer, over its two lines.
+    let footer = shown.lines().rev().take(2).collect::<Vec<_>>().concat();
     assert!(
-        footer.contains("a answer") && footer.starts_with(" j/k"),
+        footer.contains("a answer") && footer.contains("^k commands"),
+        "{shown}"
+    );
+    assert!(
+        shown.lines().next().unwrap().contains("^k Commands"),
         "{shown}"
     );
     assert!(!shown.contains(" Answer "), "{shown}");
@@ -3896,4 +3901,329 @@ fn the_keys_leave_a_discard_that_is_gone() {
     assert_eq!(form.spot(), Spot::Button(Press::Discard));
     form.other = false;
     assert_ne!(form.spot(), Spot::Button(Press::Discard));
+}
+
+/// The palette's match: the typed characters in order, in any case; a
+/// match from the start, then one with them together, first.
+#[test]
+fn the_palette_matches_in_order_and_ranks_starts_first() {
+    use super::actions::{Action, fuzzy, ranked};
+    assert_eq!(fuzzy("", "Answer"), Some(0));
+    assert_eq!(fuzzy("ANS", "Answer"), Some(0));
+    assert!(fuzzy("pk", "Park").is_some());
+    assert_eq!(fuzzy("kp", "Park"), None);
+    assert_eq!(fuzzy("x", "Park"), None);
+    assert!(fuzzy("pa", "Park") < fuzzy("pk", "Park"), "together first");
+    assert!(
+        fuzzy("s", "Stats") < fuzzy("s", "First case"),
+        "from the start first"
+    );
+    let store = Store::new();
+    store.open("stuck", "today", "Stuck here", |_| {});
+    let app = store.app();
+    // Nothing typed: the table's order, the case's acts first.
+    let all = ranked(&app, "");
+    assert_eq!(all[..2], [Action::Answer, Action::Park]);
+    assert_eq!(ranked(&app, "par")[0], Action::Park);
+    assert_eq!(ranked(&app, "show d")[0], Action::Filter(Filter::Done));
+    assert!(ranked(&app, "zzz").is_empty());
+}
+
+/// What fits, by kind, state and screen, is what the bar offers and the
+/// keys do: each act that fits is done by its key, and one that does not
+/// fit does nothing but say why.
+#[test]
+fn the_actions_that_fit_are_the_bars_and_the_keys() {
+    use super::actions::Action;
+    let (store, verbs) = every_state();
+    for (key, want) in verbs {
+        let mut app = store.app();
+        app.filter = Filter::All;
+        app.selected = Some(key);
+        let acts: Vec<Verb> = Action::fitting(&app)
+            .into_iter()
+            .filter_map(Action::verb)
+            .collect();
+        assert_eq!(acts, want, "{key}");
+        assert_eq!(app.verbs(), want, "{key}");
+        for action in Action::ALL.into_iter().filter(|a| a.verb().is_some()) {
+            let mut app = store.app();
+            app.filter = Filter::All;
+            app.selected = Some(key);
+            app.key(KeyEvent::from(action.code()));
+            let acted = app.form.is_some() || app.compose.is_some() || app.pending.is_some();
+            assert_eq!(
+                acted,
+                want.contains(&action.verb().unwrap()),
+                "{action:?} on {key}"
+            );
+        }
+    }
+    // The rest: filters but the one shown, fold only on briefings, first
+    // and last with a list, and help and quit always.
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let app = store.app();
+    let fits = Action::fitting(&app);
+    assert!(!fits.contains(&Action::Filter(Filter::Inbox)));
+    assert!(fits.contains(&Action::Filter(Filter::Done)));
+    assert!(!fits.contains(&Action::Fold));
+    for action in [
+        Action::First,
+        Action::Last,
+        Action::Help,
+        Action::Quit,
+        Action::Message,
+    ] {
+        assert!(fits.contains(&action), "{action:?}");
+    }
+    // One case's screen: only its own.
+    let stuck = store.open("stuck", "today", "Stuck", |_| {});
+    let mut one = App::one("cases.db".into(), stuck);
+    read(&mut one, &mut store.db.poller(), &store.db).unwrap();
+    assert_eq!(
+        Action::fitting(&one),
+        [Action::Answer, Action::Park, Action::Help, Action::Quit]
+    );
+}
+
+/// ^k opens the palette; typing finds, the arrows choose, enter runs,
+/// esc closes. A click runs a row; a click off it closes it. It names
+/// the case it acts on (TU-12).
+#[test]
+fn the_palette_finds_chooses_and_runs() {
+    use super::form::Act;
+    let store = Store::new();
+    store.open("stuck", "today", "Cannot reach the cache", |_| {});
+    let mut app = store.app();
+    ctrl(&mut app, 'k');
+    assert!(app.palette.is_some());
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("on: Cannot reach the cache"), "{shown}");
+    assert!(shown.contains("commands"), "{shown}");
+    typing(&mut app, "park");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.palette.is_none());
+    assert_eq!(app.form.as_ref().map(|f| f.act), Some(Act::Park));
+    // Out of its field, then closed.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    // The arrows, then esc.
+    ctrl(&mut app, 'k');
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.palette.is_none() && app.form.is_none());
+    // By click: a row runs; hover lights it.
+    ctrl(&mut app, 'k');
+    let shown = screen(&mut app, 120, 40);
+    let at = spot(&shown, "Show done");
+    mouse(&mut app, MouseEventKind::Moved, at);
+    assert_eq!(bg_at(&mut app, at), view::HOVER_BG, "not lit");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+    assert_eq!(app.filter, Filter::Done);
+    assert!(app.palette.is_none());
+    // A click off it closes it, and does nothing under it.
+    ctrl(&mut app, 'k');
+    screen(&mut app, 120, 40);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (1, 1));
+    assert!(app.palette.is_none());
+    assert_eq!(app.filter, Filter::Done, "the click went through");
+    // The button opens it too.
+    click(&mut app, "^k Commands");
+    assert!(app.palette.is_some());
+}
+
+/// ^k is the field's while one is typed in, and opens nothing over a
+/// question.
+#[test]
+fn ctrl_k_opens_nothing_while_typing_or_asked() {
+    let store = Store::new();
+    store.open("question", "today", "Name?", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    assert!(app.form.as_ref().is_some_and(|f| f.editing.is_some()));
+    ctrl(&mut app, 'k');
+    assert!(app.palette.is_none(), "opened while typing");
+    typing(&mut app, "x");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('q'));
+    assert!(app.confirm_quit);
+    ctrl(&mut app, 'k');
+    assert!(app.palette.is_none(), "opened over a question");
+}
+
+/// A right-click on a row selects it and opens its menu at the pointer,
+/// kept inside the screen; a click or enter runs an item, esc or a click
+/// off it closes it, and a right-click elsewhere does nothing (TU-12).
+#[test]
+fn a_right_click_on_a_row_opens_its_menu() {
+    use super::form::Act;
+    let store = Store::new();
+    store.open("decision", "blocking", "First?", decision);
+    let stuck = store.open("stuck", "today", "Stuck here", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    let row = spot(&shown, "Stuck here");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Right), row);
+    assert_eq!(app.selected, Some(stuck));
+    assert!(app.menu.is_some());
+    let shown = screen(&mut app, 80, 24);
+    assert!(
+        shown.contains("Answer") && shown.contains("Park"),
+        "{shown}"
+    );
+    // Enter runs the item the keys are on: answer, the first.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.form.as_ref().map(|f| f.act), Some(Act::Park));
+    app.form = None;
+    // Esc, and a click off it, close it.
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Right), row);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.menu.is_none());
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Right), row);
+    screen(&mut app, 80, 24);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (79, 0));
+    assert!(app.menu.is_none());
+    // A click runs one, lit under the pointer.
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Right), row);
+    let shown = screen(&mut app, 80, 24);
+    let park = shown
+        .lines()
+        .enumerate()
+        .filter_map(|(y, l)| {
+            l.find("Park").map(|x| {
+                (
+                    u16::try_from(l[..x].chars().count()).unwrap(),
+                    u16::try_from(y).unwrap(),
+                )
+            })
+        })
+        .last()
+        .unwrap();
+    mouse(&mut app, MouseEventKind::Moved, park);
+    assert_eq!(bg_in(&mut app, (80, 24), park), view::HOVER_BG);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), park);
+    assert_eq!(app.form.as_ref().map(|f| f.act), Some(Act::Park));
+    app.form = None;
+    // Elsewhere, a right-click does nothing.
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Right), (2, 0));
+    assert!(app.menu.is_none());
+    // At the screen's corner, the menu is kept inside it.
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let rect = view::menu_rect(area, ratatui::layout::Position::new(78, 23), 20, 5);
+    assert_eq!(
+        (rect.x, rect.y, rect.right(), rect.bottom()),
+        (60, 19, 80, 24)
+    );
+    let rect = view::menu_rect(area, ratatui::layout::Position::new(3, 4), 20, 5);
+    assert_eq!((rect.x, rect.y), (3, 5), "below and right of the pointer");
+}
+
+/// One case's screen has the palette, with only its own actions, and no
+/// menu, as it has no list.
+#[test]
+fn one_cases_screen_has_the_palette_and_no_menu() {
+    use super::actions::{Action, ranked};
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    let mut app = App::one("cases.db".into(), key);
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    let shown = screen(&mut app, 80, 24);
+    assert!(
+        shown.lines().next().unwrap().contains("^k Commands"),
+        "{shown}"
+    );
+    ctrl(&mut app, 'k');
+    assert_eq!(
+        ranked(&app, ""),
+        [Action::Answer, Action::Help, Action::Quit]
+    );
+    press(&mut app, KeyCode::Esc);
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Right),
+        spot(&shown, "Name?"),
+    );
+    assert!(app.menu.is_none());
+}
+
+/// Review repro: a row's menu acts on the case it was opened on, or on
+/// none: when a read moves the selection off it, it closes.
+#[test]
+fn a_menu_closes_when_its_case_leaves() {
+    let store = Store::new();
+    let first = store.open("stuck", "blocking", "First stuck", |_| {});
+    store.open("stuck", "today", "Second stuck", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Right),
+        spot(&shown, "First stuck"),
+    );
+    assert_eq!(app.selected, Some(first));
+    store.answer(first, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.form.is_none(), "the menu acted on another case");
+}
+
+/// Review repro: when fewer actions fit than the one the palette's keys
+/// were on, enter runs the last, which is the one marked.
+#[test]
+fn the_palette_runs_the_marked_action_when_fewer_fit() {
+    use super::form::Act;
+    let store = Store::new();
+    let key = store.open("stuck", "today", "Stuck", |_| {});
+    let mut app = store.app();
+    ctrl(&mut app, 'k');
+    typing(&mut app, "a");
+    let before = super::actions::ranked(&app, "a").len();
+    for _ in 0..before {
+        press(&mut app, KeyCode::Down);
+    }
+    store.answer(key, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert!(super::actions::ranked(&app, "a").len() < before);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.palette.is_none(), "enter did nothing");
+    assert_ne!(app.form.as_ref().map(|f| f.act), Some(Act::Answer));
+}
+
+/// Review repro: a click on a menu's item runs what was drawn there, or
+/// nothing, never another that took its place.
+#[test]
+fn a_click_on_a_menu_item_runs_what_was_drawn() {
+    let store = Store::new();
+    let key = store.open("stuck", "today", "Stuck", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Right),
+        spot(&shown, "Stuck"),
+    );
+    let shown = screen(&mut app, 80, 24);
+    // Answer is the menu's first item, drawn below the row.
+    let answer = shown
+        .lines()
+        .enumerate()
+        .filter_map(|(y, l)| {
+            l.find("Answer ").map(|x| {
+                (
+                    u16::try_from(l[..x].chars().count()).unwrap(),
+                    u16::try_from(y).unwrap(),
+                )
+            })
+        })
+        .last()
+        .unwrap();
+    // Parked elsewhere: answer no longer fits, resume does.
+    store.human(key, &Record::Park(cases_core::Park::default()));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), answer);
+    assert!(app.pending.is_none(), "a click on answer resumed the case");
 }
