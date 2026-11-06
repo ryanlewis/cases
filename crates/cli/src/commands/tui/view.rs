@@ -49,7 +49,6 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .as_ref()
         .map(|message| filter_lines(app, width.saturating_sub(message.width() + 1)));
     app.strip.room = frame.area().height >= stats::MIN_ROWS;
-    let keys = footer_lines(app, width, side_by_side);
     let rows = |lines: &[Line]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
     // The stats strip (TU-13), under the filters: not on one case's screen,
     // and not on a screen too short to spare it.
@@ -65,15 +64,29 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .as_ref()
         .filter(|_| app.strip.shown && app.strip.room && app.only.is_none())
         .map(|stats| stats::lines(stats, image));
-    let [header, filters, rule, band, body, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(tabs.as_ref().map_or(1, |(lines, _)| rows(lines))),
-        Constraint::Length(1),
-        Constraint::Length(if strip.is_some() { stats::HEIGHT } else { 0 }),
-        Constraint::Min(1),
-        Constraint::Length(rows(&keys.0)),
-    ])
-    .areas(frame.area());
+    let layout = |keys: &Flow| -> [Rect; 6] {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(tabs.as_ref().map_or(1, |(lines, _)| rows(lines))),
+            Constraint::Length(1),
+            Constraint::Length(if strip.is_some() { stats::HEIGHT } else { 0 }),
+            Constraint::Min(1),
+            Constraint::Length(rows(&keys.0)),
+        ])
+        .areas(frame.area())
+    };
+    // The footer leaves to the case's bar the keys it has buttons for, when
+    // the bar is drawn: worked out with the footer that leaves them, as
+    // one that has them is no shorter, and leaves the bar no more room.
+    let trimmed = footer_lines(app, width, side_by_side, true);
+    let bar = case_pane(app, layout(&trimmed)[4], side_by_side)
+        .is_some_and(|pane| case_fit(app, inset(pane, 2, 1)).0.is_some());
+    let keys = if bar {
+        trimmed
+    } else {
+        footer_lines(app, width, side_by_side, false)
+    };
+    let [header, filters, rule, band, body, footer] = layout(&keys);
     app.hits.clear();
     draw_header(frame, app, header);
     if let Some(tabs) = tabs {
@@ -97,13 +110,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         // One case (TU-11): no list beside it.
         draw_case(frame, app, body);
     } else if side_by_side {
-        let list_width = (body.width * 38 / 100).clamp(36, 58);
-        let [list, gap, case] = Layout::horizontal([
-            Constraint::Length(list_width),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .areas(body);
+        let [list, gap, case] = side_by_side_panes(body);
         draw_list(frame, app, list, true);
         let bar: Vec<Line> = (0..gap.height).map(|_| Line::from("│")).collect();
         frame.render_widget(Paragraph::new(bar).style(Style::new().fg(DIM)), gap);
@@ -652,9 +659,53 @@ fn verb_chips(app: &App) -> Vec<Chip> {
         .collect()
 }
 
-/// Whether the case pane is drawn: beside the list, or alone.
-fn case_drawn(app: &App, side_by_side: bool) -> bool {
-    app.only.is_some() || side_by_side || app.focus == Focus::Case
+/// The fewest rows of the case, under its bar, that the bar leaves.
+const MIN_BODY: u16 = 3;
+
+/// Where the case pane is drawn in `body`: beside the list, or alone; or
+/// nowhere, on a narrow screen showing the list.
+fn case_pane(app: &App, body: Rect, side_by_side: bool) -> Option<Rect> {
+    if app.only.is_some() || (!side_by_side && app.focus == Focus::Case) {
+        Some(body)
+    } else if side_by_side {
+        let [_, _, case] = side_by_side_panes(body);
+        Some(case)
+    } else {
+        None
+    }
+}
+
+/// The list, the bar between, and the case, side by side.
+fn side_by_side_panes(body: Rect) -> [Rect; 3] {
+    let list_width = (body.width * 38 / 100).clamp(36, 58);
+    Layout::horizontal([
+        Constraint::Length(list_width),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(body)
+}
+
+/// How the case's bar fits the case pane's `inner` area: the bar, when
+/// there is room for it and [`MIN_BODY`] rows of the case under it; and
+/// whether the title and the meta are held above it too, when there is
+/// room for them as well. Otherwise they scroll with the rest.
+fn case_fit(app: &App, inner: Rect) -> (Option<Flow>, bool) {
+    let chips = verb_chips(app);
+    let Some((key, case)) = app.selected_case().filter(|_| !chips.is_empty()) else {
+        return (None, false);
+    };
+    let bar = flow(chips, inner.width, " ", " ");
+    let tall = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    let bar_rows = tall(bar.0.len() + 1);
+    if inner.height < bar_rows.saturating_add(MIN_BODY) {
+        return (None, false);
+    }
+    let mut paras = case_paras(app, *key, case);
+    paras.truncate(2);
+    let head = tall(wrap::wrap(paras, usize::from(inner.width)).len());
+    let fixed = inner.height >= head.saturating_add(bar_rows).saturating_add(MIN_BODY);
+    (Some(bar), fixed)
 }
 
 /// Says that a click on each line drawn in `area`, from line `skip` of
@@ -1108,12 +1159,16 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let mut paras = case_paras(app, *key, case);
-    // The title and the meta stay at the top, with the bar under them: the
-    // rest scrolls.
-    let rest = paras.split_off(2.min(paras.len()));
+    // The title and the meta stay at the top, with the bar under them, and
+    // the rest scrolls; on a pane with no room for that and some of the
+    // rest, the bar and then the title give way, as [`case_fit`] says.
+    let (bar, fixed) = case_fit(app, inner);
+    let rest = if fixed {
+        paras.split_off(2.min(paras.len()))
+    } else {
+        std::mem::take(&mut paras)
+    };
     let head = wrap::wrap(paras, usize::from(inner.width));
-    let chips = verb_chips(app);
-    let bar = (!chips.is_empty()).then(|| flow(chips, inner.width, " ", " "));
     let tall = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
     let [head_area, bar_area, inner] = Layout::vertical([
         Constraint::Length(tall(head.len())),
@@ -1124,8 +1179,12 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
     .areas(inner);
     frame.render_widget(Paragraph::new(head), head_area);
     if let Some(bar) = bar {
+        // A row between the title and the bar, or under the bar.
         let bar_area = Rect {
-            y: bar_area.y.saturating_add(1).min(bar_area.bottom()),
+            y: bar_area
+                .y
+                .saturating_add(u16::from(fixed))
+                .min(bar_area.bottom()),
             ..bar_area
         };
         let hits = draw_flow(frame, bar, bar_area);
@@ -1819,7 +1878,7 @@ fn field_paras(label: &str, field: &Field, editing: bool) -> Vec<Para> {
 
 /// The footer: the keys, over as many lines as `width` needs, each a
 /// button a click presses (TU-12); or a line the screen says, wrapped.
-fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
+fn footer_lines(app: &App, width: u16, side_by_side: bool, bar: bool) -> Flow {
     let said = |text: String, style: Style| {
         let para = Para::hanging(vec![Span::raw(" ")], vec![Span::styled(text, style)]);
         (wrap::wrap(vec![para], usize::from(width)), Vec::new())
@@ -1836,8 +1895,8 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
     // and a park in the case's bar, a message at the right of the tabs. An
     // answer is still offered when no button for it is drawn, as on a
     // narrow screen showing the list.
-    let answer_shown = case_drawn(app, side_by_side) && app.verbs().contains(&Verb::Answer);
-    let park_shown = case_drawn(app, side_by_side) && app.verbs().contains(&Verb::Park);
+    let answer_shown = bar && app.verbs().contains(&Verb::Answer);
+    let park_shown = bar && app.verbs().contains(&Verb::Park);
     let buttoned = |chip: &(&str, &str)| {
         (chip.0 == "a" && answer_shown)
             || (chip.0 == "p" && park_shown)

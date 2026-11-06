@@ -3308,3 +3308,30 @@ fn the_pointer_lights_a_button_of_the_bar() {
         assert_ne!(after, before, "{at:?} is not lit at 80 columns:\n{shown}");
     }
 }
+
+/// On a pane too short for the title, the bar and some of the case, the
+/// case still scrolls to its options; and the footer offers what no
+/// button on the screen does.
+#[test]
+fn a_short_pane_keeps_the_case_in_reach_and_the_keys_said() {
+    let store = Store::new();
+    store.open(
+        "stuck",
+        "today",
+        &"A long title that wraps ".repeat(8),
+        |open| {
+            "the body".clone_into(&mut open.body);
+        },
+    );
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Enter);
+    app.scroll = u16::MAX;
+    let shown = screen(&mut app, 40, 14);
+    assert!(
+        shown.contains("the body"),
+        "the body is out of reach:\n{shown}"
+    );
+    let answer = shown.contains(" Answer ") || shown.contains("a answer");
+    assert!(answer, "nothing says how to answer:\n{shown}");
+}
