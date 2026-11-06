@@ -109,8 +109,28 @@ pub(crate) enum Press {
     Send,
     /// Park a stuck case instead, in the park's form.
     Park,
-    /// Drop the case, after asking.
+    /// Drop the case, after asking: the agent stops the work.
     Drop,
+    /// Throw away what was chosen or typed, after asking: the case stays
+    /// as it is, and its answer starts again.
+    Discard,
+}
+
+impl Press {
+    /// The buttons of the answer's panel of a case of `kind`, as the web
+    /// inbox has them: send, then park on a stuck case, and drop; and
+    /// discard, once something was chosen or typed.
+    pub(crate) fn of(kind: Kind, touched: bool) -> Vec<Press> {
+        let mut presses = vec![Press::Send];
+        if kind == Kind::Stuck {
+            presses.push(Press::Park);
+        }
+        presses.push(Press::Drop);
+        if touched {
+            presses.push(Press::Discard);
+        }
+        presses
+    }
 }
 
 /// What a key did to the form.
@@ -259,15 +279,9 @@ impl Form {
         parts
     }
 
-    /// The buttons of the answer's panel, as the web inbox has them: send,
-    /// then park on a stuck case, and drop.
+    /// The buttons of the answer's panel, as [`Press::of`] gives them.
     pub(crate) fn presses(&self) -> Vec<Press> {
-        let mut presses = vec![Press::Send];
-        if self.kind == Kind::Stuck {
-            presses.push(Press::Park);
-        }
-        presses.push(Press::Drop);
-        presses
+        Press::of(self.kind, self.touched())
     }
 
     /// Moves the keys `by` parts along the panel, round from the end to the
@@ -305,6 +319,10 @@ impl Form {
             Press::Park => Outcome::Park,
             Press::Drop => {
                 self.confirm = Some(Confirm::Drop);
+                Outcome::Stay
+            }
+            Press::Discard => {
+                self.confirm = Some(Confirm::Discard);
                 Outcome::Stay
             }
         }
@@ -940,10 +958,17 @@ mod tests {
         assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
         assert_eq!(decision.confirm, Some(Confirm::Drop));
         decision.confirm = None;
+        // With something chosen or typed, discard is the last button.
+        press(&mut decision, KeyCode::Tab);
+        assert_eq!(decision.spot(), Spot::Button(Press::Discard));
+        assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
+        assert_eq!(decision.confirm, Some(Confirm::Discard));
+        assert_eq!(press(&mut decision, KeyCode::Char('y')), Outcome::Cancel);
         press(&mut decision, KeyCode::Tab);
         assert_eq!(decision.spot(), Spot::Choices, "round to the start");
         press(&mut decision, KeyCode::BackTab);
-        assert_eq!(decision.spot(), Spot::Button(Press::Drop));
+        assert_eq!(decision.spot(), Spot::Button(Press::Discard));
+        press(&mut decision, KeyCode::BackTab);
         press(&mut decision, KeyCode::BackTab);
         assert_eq!(
             press(&mut decision, KeyCode::Char(' ')),

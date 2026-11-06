@@ -67,7 +67,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let layout = |keys: &Flow| -> [Rect; 6] {
         Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(tabs.as_ref().map_or(1, |(lines, _)| rows(lines))),
+            // One case's screen (TU-11) has no filters: no row for them.
+            Constraint::Length(tabs.as_ref().map_or(0, |(lines, _)| rows(lines))),
             Constraint::Length(1),
             Constraint::Length(if strip.is_some() { stats::HEIGHT } else { 0 }),
             Constraint::Min(1),
@@ -78,16 +79,21 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // The footer leaves to the case's bar the keys it has buttons for, when
     // the bar is drawn: worked out with the footer that leaves them, as
     // one that has them is no shorter, and leaves the bar no more room.
-    let trimmed = footer_lines(app, width, side_by_side, true);
-    let bar = case_pane(app, layout(&trimmed)[4], side_by_side).is_some_and(|pane| {
-        case_fit(app, scroll_area(app, inset(pane, 2, 1)))
+    // Worked out once a frame: the acts the case's bar offers, and the
+    // answer's panel's buttons, as wide as the case pane.
+    let verbs = app.verbs();
+    let trimmed = footer_lines(app, &verbs, width, side_by_side, true);
+    let pane = case_pane(app, layout(&trimmed)[4], side_by_side).map(|pane| inset(pane, 2, 1));
+    let mut buttons = pane.and_then(|inner| panel_buttons(app, inner.width));
+    let bar = pane.is_some_and(|inner| {
+        case_fit(app, &verbs, scroll_area(inner, buttons.as_ref()))
             .0
             .is_some()
     });
     let keys = if bar {
         trimmed
     } else {
-        footer_lines(app, width, side_by_side, false)
+        footer_lines(app, &verbs, width, side_by_side, false)
     };
     let [header, filters, rule, band, body, footer] = layout(&keys);
     app.hits.clear();
@@ -111,17 +117,17 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .map(|wide| stats::image_area(band, wide));
     if app.only.is_some() {
         // One case (TU-11): no list beside it.
-        draw_case(frame, app, body);
+        draw_case(frame, app, body, &verbs, buttons.take());
     } else if side_by_side {
         let [list, gap, case] = side_by_side_panes(body);
         draw_list(frame, app, list, true);
         let bar: Vec<Line> = (0..gap.height).map(|_| Line::from("│")).collect();
         frame.render_widget(Paragraph::new(bar).style(Style::new().fg(DIM)), gap);
-        draw_case(frame, app, case);
+        draw_case(frame, app, case, &verbs, buttons.take());
     } else if app.focus == Focus::List {
         draw_list(frame, app, body, false);
     } else {
-        draw_case(frame, app, body);
+        draw_case(frame, app, body, &verbs, buttons.take());
     }
     let hits = draw_flow(frame, keys, footer);
     app.hits.extend(hits);
@@ -152,11 +158,22 @@ fn light(frame: &mut Frame, app: &App) {
         return;
     };
     let area = frame.area();
+    // A toast over what is lit stays as it is.
+    let toasts: Vec<Rect> = app
+        .hits
+        .iter()
+        .filter(|(_, hit)| matches!(hit, Hit::Toast(_)) && *hit != hover)
+        .map(|(rect, _)| *rect)
+        .collect();
     let buffer = frame.buffer_mut();
     for (rect, _) in app.hits.iter().filter(|(_, hit)| *hit == hover) {
         let rect = rect.intersection(area);
         for y in rect.top()..rect.bottom() {
             for x in rect.left()..rect.right() {
+                let at = ratatui::layout::Position::new(x, y);
+                if toasts.iter().any(|toast| toast.contains(at)) {
+                    continue;
+                }
                 if let Some(cell) = buffer.cell_mut((x, y)) {
                     cell.set_bg(HOVER_BG);
                 }
@@ -433,7 +450,7 @@ fn draw_toasts(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let mut top = area.y;
-    for (at, toast) in app.toasts.iter().enumerate().rev() {
+    for toast in app.toasts.iter().rev() {
         let (mark, colour) = if toast.done {
             ("✓ ", Color::Green)
         } else {
@@ -456,7 +473,7 @@ fn draw_toasts(frame: &mut Frame, app: &mut App, area: Rect) {
         let rect = Rect::new(area.right() - wide - 1, top, wide, tall);
         frame.render_widget(Clear, rect);
         frame.render_widget(Paragraph::new(lines).style(Style::new().bg(PANEL_BG)), rect);
-        app.hits.push((rect, Hit::Toast(at)));
+        app.hits.push((rect, Hit::Toast(toast.id)));
         // A row between toasts, so that they read as two.
         top = top.saturating_add(tall + 1);
     }
@@ -638,9 +655,10 @@ fn message_button(app: &App) -> Button {
 }
 
 /// The case's bar: a button for each act its keys would do on it (TU-12).
-fn verb_chips(app: &App) -> Vec<Chip> {
-    app.verbs()
-        .into_iter()
+fn verb_chips(app: &App, verbs: &[Verb]) -> Vec<Chip> {
+    verbs
+        .iter()
+        .copied()
         .map(|verb| {
             let look = if verb == Verb::Answer {
                 Look::Primary
@@ -690,8 +708,8 @@ fn side_by_side_panes(body: Rect) -> [Rect; 3] {
 /// there is room for it and [`MIN_BODY`] rows of the case under it; and
 /// whether the title and the meta are held above it too, when there is
 /// room for them as well. Otherwise they scroll with the rest.
-fn case_fit(app: &App, inner: Rect) -> (Option<Flow>, bool) {
-    let chips = verb_chips(app);
+fn case_fit(app: &App, verbs: &[Verb], inner: Rect) -> (Option<Flow>, bool) {
+    let chips = verb_chips(app, verbs);
     let Some((key, case)) = app.selected_case().filter(|_| !chips.is_empty()) else {
         return (None, false);
     };
@@ -713,21 +731,6 @@ fn case_fit(app: &App, inner: Rect) -> (Option<Flow>, bool) {
 fn line_hits(app: &mut App, area: Rect, hits: &[Option<Hit>], skip: usize) {
     for row in 0..area.height {
         match hits.get(skip + usize::from(row)) {
-            // A row's verdicts, wrapped on a narrow pane: the cells are
-            // not where they are drawn, so a click picks the row.
-            Some(Some(Hit::Verdicts(at, _)))
-                if [
-                    skip + usize::from(row) + 1,
-                    (skip + usize::from(row)).wrapping_sub(1),
-                ]
-                .iter()
-                .any(|near| hits.get(*near) == Some(&hits[skip + usize::from(row)])) =>
-            {
-                app.hits.push((
-                    Rect::new(area.x, area.y + row, area.width, 1),
-                    Hit::ApprovalRow(*at),
-                ));
-            }
             // A row's verdicts: a click on each picks it.
             Some(Some(Hit::Verdicts(at, human))) => {
                 for (x, wide, verdict) in verdict_cells(*human) {
@@ -1179,7 +1182,7 @@ fn follow_up(case: &Case) -> Option<(&Answer, Vec<&str>)> {
     (!notes.is_empty()).then_some((answer, notes))
 }
 
-fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_case(frame: &mut Frame, app: &mut App, area: Rect, verbs: &[Verb], buttons: Option<Flow>) {
     app.hits.push((area, Hit::Case));
     let inner = inset(area, 2, 1);
     // The form or the message, fixed at the bottom of the pane.
@@ -1192,10 +1195,7 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
             .filter(|form| Some(form.key) == selected && form.act != Act::Answer)
             .map(form_paras)
     };
-    let buttons = panel
-        .is_none()
-        .then(|| panel_buttons(app, inner.width))
-        .flatten();
+    let buttons = buttons.filter(|_| panel.is_none());
     let inner = match buttons {
         Some(buttons) => {
             let tall = u16::try_from(buttons.0.len()).unwrap_or(u16::MAX);
@@ -1249,11 +1249,11 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
-    let mut paras = case_paras(app, *key, case);
+    let mut paras = case_paras_in(app, *key, case, usize::from(inner.width));
     // The title and the meta stay at the top, with the bar under them, and
     // the rest scrolls; on a pane with no room for that and some of the
     // rest, the bar and then the title give way, as [`case_fit`] says.
-    let (bar, fixed) = case_fit(app, inner);
+    let (bar, fixed) = case_fit(app, verbs, inner);
     let rest = if fixed {
         paras.split_off(2.min(paras.len()))
     } else {
@@ -1312,6 +1312,12 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The case as paragraphs (TU-03).
 fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
+    case_paras_in(app, key, case, usize::MAX)
+}
+
+/// The case as paragraphs, to be drawn `width` columns wide: its answer
+/// lays out to fit.
+fn case_paras_in(app: &App, key: Key, case: &Case, width: usize) -> Vec<Para> {
     let dim = Style::new().fg(DIM);
     let mut paras: Vec<Para> = vec![Para::plain(vec![Span::styled(
         case.title().to_string(),
@@ -1409,11 +1415,11 @@ fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
     // panel, at its foot, to choose and tick.
     let answerable = Act::Answer.fits(case);
     if !answerable {
-        options_paras(case, None, None, &mut paras);
+        options_paras(case, &mut paras);
     }
     rows_paras(case, &mut paras);
     if !answerable {
-        left_out_paras(case, None, &mut paras);
+        left_out_paras(case, &mut paras);
     }
     if !case.links().is_empty() {
         section(&mut paras, "Links");
@@ -1453,7 +1459,7 @@ fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
             .as_ref()
             .is_some_and(|f| f.key == key && f.act == Act::Answer);
         let last = follow.map(|(answer, _)| answer.choice);
-        paras.extend(panel_paras(form, case, focused, last));
+        paras.extend(panel_paras(form, case, focused, last, width));
     }
     paras
 }
@@ -1462,7 +1468,13 @@ fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
 /// its kind asks for, as radio rows to click, then the note. Its buttons
 /// are kept in sight under the case, by [`panel_chips`]. The part the
 /// keys are on, while they are in the panel, is pointed at.
-fn panel_paras(form: &Form, case: &Case, focused: bool, last: Option<i64>) -> Vec<Para> {
+fn panel_paras(
+    form: &Form,
+    case: &Case,
+    focused: bool,
+    last: Option<i64>,
+    width: usize,
+) -> Vec<Para> {
     let dim = Style::new().fg(DIM);
     let spot = focused.then(|| form.spot());
     let mut paras = vec![Para::blank()];
@@ -1592,9 +1604,15 @@ fn panel_paras(form: &Form, case: &Case, focused: bool, last: Option<i64>) -> Ve
                     )
                     .on(Hit::ApprovalRow(at)),
                 );
+                let cells = verdict_cells(row.human);
+                // On a pane too narrow for the verdicts on one line, one
+                // to a line, so that each is where a click picks it.
+                let one_line = cells
+                    .last()
+                    .is_some_and(|(x, wide, _)| usize::from(x + wide) <= width);
                 let mut spans = vec![Span::raw("     ")];
-                for (n, (_, _, verdict)) in verdict_cells(row.human).into_iter().enumerate() {
-                    if n > 0 {
+                for (n, (_, _, verdict)) in cells.into_iter().enumerate() {
+                    if n > 0 && one_line {
                         spans.push(Span::raw("  "));
                     }
                     let chosen = row.verdict == Some(verdict);
@@ -1612,8 +1630,14 @@ fn panel_paras(form: &Form, case: &Case, focused: bool, last: Option<i64>) -> Ve
                     } else {
                         Span::raw(word)
                     });
+                    if !one_line {
+                        let line = std::mem::replace(&mut spans, vec![Span::raw("     ")]);
+                        paras.push(Para::plain(line).on(Hit::Verdict(at, verdict)));
+                    }
                 }
-                paras.push(Para::plain(spans).on(Hit::Verdicts(at, row.human)));
+                if one_line {
+                    paras.push(Para::plain(spans).on(Hit::Verdicts(at, row.human)));
+                }
                 let editing = focused && form.being_edited() == Some(Which::Row(at));
                 if editing || !row.note.text().is_empty() {
                     paras.extend(on(
@@ -1661,24 +1685,24 @@ fn panel_buttons(app: &App, width: u16) -> Option<Flow> {
         .selected_case()
         .filter(|(_, case)| Act::Answer.fits(case))?;
     let key = *key;
-    let fresh;
-    let form = if let Some(form) = app.answer_of(key) {
-        form
-    } else {
-        fresh = Form::new(key, case, Act::Answer);
-        &fresh
-    };
     let focused = app
         .form
         .as_ref()
-        .is_some_and(|f| f.key == key && f.act == Act::Answer);
-    Some(flow(panel_chips(app, form, focused), width, " ", " "))
+        .filter(|f| f.key == key && f.act == Act::Answer);
+    let touched = app.answer_of(key).is_some_and(Form::touched);
+    let presses = Press::of(case.kind(), touched);
+    Some(flow(
+        panel_chips(app, case.kind(), &presses, focused),
+        width,
+        " ",
+        " ",
+    ))
 }
 
 /// The part of the case pane's `inner` area the case scrolls in, above
-/// the answer's panel's buttons, when they are drawn.
-fn scroll_area(app: &App, inner: Rect) -> Rect {
-    match panel_buttons(app, inner.width) {
+/// the answer's panel's `buttons`, when they are drawn.
+fn scroll_area(inner: Rect, buttons: Option<&Flow>) -> Rect {
+    match buttons {
         Some((lines, _)) => {
             let tall = u16::try_from(lines.len() + 1).unwrap_or(u16::MAX);
             Rect {
@@ -1690,15 +1714,16 @@ fn scroll_area(app: &App, inner: Rect) -> Rect {
     }
 }
 
-/// The answer's panel's buttons, each lit while the pointer or the keys
-/// are on it: send, which an fyi calls acknowledge, park on a stuck case,
-/// and drop.
-fn panel_chips(app: &App, form: &Form, focused: bool) -> Vec<Chip> {
-    form.presses()
-        .into_iter()
+/// The answer's panel's buttons for a case of `kind`, each lit while the
+/// pointer is on it, or the keys of the `focused` form: send, which an fyi
+/// calls acknowledge, park on a stuck case, drop, and discard.
+fn panel_chips(app: &App, kind: Kind, presses: &[Press], focused: Option<&Form>) -> Vec<Chip> {
+    presses
+        .iter()
+        .copied()
         .map(|press| {
             let button = match press {
-                Press::Send if form.kind == Kind::Fyi => {
+                Press::Send if kind == Kind::Fyi => {
                     Button::new("Acknowledge", Some(Hit::Press(press)))
                         .key("^s")
                         .look(Look::Primary)
@@ -1708,8 +1733,9 @@ fn panel_chips(app: &App, form: &Form, focused: bool) -> Vec<Chip> {
                     .look(Look::Primary),
                 Press::Park => Button::new("Park", Some(Hit::Press(press))),
                 Press::Drop => Button::new("Drop", Some(Hit::Press(press))).key("d"),
+                Press::Discard => Button::new("Discard", Some(Hit::Press(press))),
             };
-            let lit = button.lit(app) || (focused && form.spot() == Spot::Button(press));
+            let lit = button.lit(app) || focused.is_some_and(|f| f.spot() == Spot::Button(press));
             Chip {
                 spans: button.spans(lit),
                 bar: false,
@@ -1719,12 +1745,14 @@ fn panel_chips(app: &App, form: &Form, focused: bool) -> Vec<Chip> {
         .collect()
 }
 
-fn options_paras(case: &Case, last_pick: Option<i64>, picking: Option<i64>, paras: &mut Vec<Para>) {
+/// A decision's options, once it is no longer open: the one chosen
+/// marked. An open case has them in its answer, to choose.
+fn options_paras(case: &Case, paras: &mut Vec<Para>) {
     if case.options().is_empty() {
         return;
     }
     section(paras, "Options");
-    let chosen = picking.or_else(|| case.answer().map(|a| a.choice));
+    let chosen = case.answer().map(|a| a.choice);
     for (n, option) in (1i64..).zip(case.options()) {
         let number = if chosen == Some(n) {
             Style::new()
@@ -1741,58 +1769,31 @@ fn options_paras(case: &Case, last_pick: Option<i64>, picking: Option<i64>, para
                 Style::new().fg(Color::Yellow),
             ));
         }
-        if last_pick == Some(n) {
-            spans.push(Span::styled(
-                "  your last pick",
-                Style::new().fg(Color::Green),
-            ));
-        }
-        let para = Para::hanging(
+        paras.push(Para::hanging(
             vec![Span::styled(format!(" {n} "), number), Span::raw(" ")],
             spans,
-        );
-        // Only an answerable case's options open its answer (TU-12).
-        paras.push(if Act::Answer.fits(case) {
-            para.on(Hit::Choice(n))
-        } else {
-            para
-        });
+        ));
     }
 }
 
-/// A briefing's left-out items, numbered as an answer files them, each
-/// marked while the form on this case ticks it to file (IN-14).
-fn left_out_paras(case: &Case, filing: Option<&[bool]>, paras: &mut Vec<Para>) {
+/// A briefing's left-out items, numbered as an answer files them, once it
+/// is no longer open (IN-14). An open one has them in its answer, to tick.
+fn left_out_paras(case: &Case, paras: &mut Vec<Para>) {
     if case.left_out().is_empty() {
         return;
     }
     section(paras, "Left out");
     for (at, item) in case.left_out().iter().enumerate() {
-        let ticked = filing.is_some_and(|file| file.get(at).copied().unwrap_or(false));
-        let number = if ticked {
-            Style::new()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        };
-        let mut spans = markdown::inline(item);
-        if ticked {
-            spans.push(Span::styled("  to file", Style::new().fg(Color::Green)));
-        }
-        let para = Para::hanging(
+        paras.push(Para::hanging(
             vec![
-                Span::styled(format!(" {} ", at + 1), number),
+                Span::styled(
+                    format!(" {} ", at + 1),
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
             ],
-            spans,
-        );
-        paras.push(if Act::Answer.fits(case) {
-            para.on(Hit::LeftOut(at))
-        } else {
-            para
-        });
+            markdown::inline(item),
+        ));
     }
 }
 
@@ -2116,7 +2117,7 @@ fn field_paras(label: &str, field: &Field, editing: bool) -> Vec<Para> {
 
 /// The footer: the keys, over as many lines as `width` needs, each a
 /// button a click presses (TU-12); or a line the screen says, wrapped.
-fn footer_lines(app: &App, width: u16, side_by_side: bool, bar: bool) -> Flow {
+fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: bool) -> Flow {
     let said = |text: String, style: Style| {
         let para = Para::hanging(vec![Span::raw(" ")], vec![Span::styled(text, style)]);
         (wrap::wrap(vec![para], usize::from(width)), Vec::new())
@@ -2133,8 +2134,8 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool, bar: bool) -> Flow {
     // and a park in the case's bar, a message at the right of the tabs. An
     // answer is still offered when no button for it is drawn, as on a
     // narrow screen showing the list.
-    let answer_shown = bar && app.verbs().contains(&Verb::Answer);
-    let park_shown = bar && app.verbs().contains(&Verb::Park);
+    let answer_shown = bar && verbs.contains(&Verb::Answer);
+    let park_shown = bar && verbs.contains(&Verb::Park);
     let buttoned = |chip: &(&str, &str)| {
         (chip.0 == "a" && answer_shown)
             || (chip.0 == "p" && park_shown)
@@ -2326,6 +2327,10 @@ fn panel_keys(form: &Form) -> Vec<(&'static str, &'static str)> {
         cases_core::Kind::Question | cases_core::Kind::Stuck => keys.push(("i", "write")),
         _ => {}
     }
+    // Enter sends from any part but a button, which it presses.
+    if !matches!(form.spot(), Spot::Button(_)) {
+        keys.push(("⏎", "send"));
+    }
     keys.extend([("n", "note"), ("tab", "next part"), ("esc", "leave")]);
     keys
 }
@@ -2341,7 +2346,7 @@ pub(crate) const KEYS: [(&str, &str); 23] = [
     ("tab ⇧tab", "next or previous filter"),
     ("1 2 3 4", "inbox, in flight, done, all"),
     ("5 f", "briefings, and fold the answered ones"),
-    ("a", "into the answer, at the foot of the case"),
+    ("a", "into the answer; esc keeps it, Discard empties it"),
     ("tab ⇧tab", "in the answer: its next or previous part"),
     ("p r", "park a stuck case, or resume a parked one"),
     ("w", "withdraw an answered case, or a message"),
@@ -2363,7 +2368,7 @@ pub(crate) const ONE_KEYS: [(&str, &str); 14] = [
     ("j k ↑ ↓", "scroll the case"),
     ("space J K", "scroll the case a page"),
     ("^d ^u", "scroll the case a page"),
-    ("a", "into the answer, at the foot of the case"),
+    ("a", "into the answer; esc keeps it, Discard empties it"),
     ("tab ⇧tab", "in the answer: its next or previous part"),
     ("p", "park it, when it is stuck"),
     ("^s ^e", "in a field: send, or open $EDITOR"),
@@ -2783,7 +2788,7 @@ mod tests {
         let case = open(kind, with);
         let mut form = Form::new(key(), &case.0, Act::Answer);
         edit(&mut form);
-        panel_paras(&form, &case.0, focused, None)
+        panel_paras(&form, &case.0, focused, None, usize::MAX)
     }
 
     #[test]
@@ -2859,9 +2864,9 @@ mod tests {
     fn an_fyi_panel_is_its_note_and_acknowledge() {
         let case = open("fyi", |_| {});
         let form = Form::new(key(), &case.0, Act::Answer);
-        let paras = panel_paras(&form, &case.0, false, None);
+        let paras = panel_paras(&form, &case.0, false, None, usize::MAX);
         assert_eq!(lines(&paras), ["", "YOUR ANSWER", "note     empty"]);
-        let chips = panel_chips(&app(0), &form, false);
+        let chips = panel_chips(&app(0), form.kind, &form.presses(), None);
         let labels: Vec<String> = chips.iter().map(|chip| text(&chip.spans)).collect();
         assert_eq!(labels, [" ^s Acknowledge ", " d Drop "]);
     }
@@ -3402,7 +3407,7 @@ mod tests {
     #[test]
     fn the_footer_keys_follow_the_form() {
         let mut decision = form("decision", Act::Answer, self::decision);
-        let tail = "n note, tab next part, esc leave";
+        let tail = "⏎ send, n note, tab next part, esc leave";
         assert_eq!(
             pairs(&keys_for(&decision)),
             format!("j/k move, 1-9 choose, o other, {tail}")
@@ -3418,7 +3423,7 @@ mod tests {
         decision.tab(1);
         assert_eq!(
             pairs(&keys_for(&decision)),
-            format!("⏎ press, 1-9 choose, o other, {tail}")
+            "⏎ press, 1-9 choose, o other, n note, tab next part, esc leave"
         );
         assert_eq!(
             pairs(&keys_for(&form("signoff", Act::Answer, |_| {}))),
@@ -3933,6 +3938,9 @@ mod tests {
         });
         // An approval is opened with rows; a form can still hold none.
         form.rows.clear();
-        assert_eq!(pairs(&keys_for(&form)), "n note, tab next part, esc leave");
+        assert_eq!(
+            pairs(&keys_for(&form)),
+            "⏎ send, n note, tab next part, esc leave"
+        );
     }
 }

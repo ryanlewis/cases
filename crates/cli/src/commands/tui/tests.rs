@@ -3574,10 +3574,10 @@ fn an_answer_by_clicks_records_what_the_keys_record() {
     assert_eq!(answers(true), answers(false));
 }
 
-/// Review repro: on a pane too narrow for an approval row's verdicts on
-/// one line, a click on one never records another.
+/// On a pane too narrow for an approval row's verdicts on one line, each
+/// is on a line of its own, and a click on one picks it.
 #[test]
-fn a_click_on_a_wrapped_verdict_never_records_another() {
+fn a_narrow_answer_has_a_verdict_to_a_line_and_each_clicks() {
     let store = Store::new();
     store.open("approval", "today", "Move?", |open| {
         open.rows = vec![step("tag", "")];
@@ -3585,35 +3585,24 @@ fn a_click_on_a_wrapped_verdict_never_records_another() {
     let mut app = store.app();
     app.focus = Focus::Case;
     app.strip.shown = false;
-    let mut seen = false;
-    for scroll in 0..40 {
-        app.scroll = scroll;
-        let shown = screen(&mut app, 30, 30);
-        if let Some(at) = shown
-            .lines()
-            .position(|l| l.trim_start().starts_with("reject"))
-        {
-            let column = shown.lines().nth(at).unwrap().find("reject").unwrap();
-            let column =
-                u16::try_from(shown.lines().nth(at).unwrap()[..column].chars().count()).unwrap();
-            // Inside "reject", where approve's cell is on the first line.
-            mouse(
-                &mut app,
-                MouseEventKind::Down(MouseButton::Left),
-                (column + 6, u16::try_from(at).unwrap()),
-            );
-            let verdict = app.form.as_ref().and_then(|f| f.rows[0].verdict);
-            assert!(
-                matches!(verdict, None | Some("reject")),
-                "{verdict:?}:\n{shown}"
-            );
-            seen = true;
-            break;
-        }
-    }
     app.scroll = u16::MAX;
     let shown = screen(&mut app, 30, 30);
-    assert!(seen, "the verdicts did not wrap:\n{shown}");
+    for verdict in ["○ approve", "○ hold", "○ reject"] {
+        let line = shown.lines().find(|l| l.contains(verdict)).unwrap();
+        assert_eq!(line.trim(), verdict, "{shown}");
+    }
+    for (text, verdict) in [("○ reject", "reject"), ("○ hold", "hold")] {
+        app.scroll = u16::MAX;
+        let shown = screen(&mut app, 30, 30);
+        let (x, y) = spot(&shown, text);
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            (x + 4, y),
+        );
+        let picked = app.form.as_ref().and_then(|f| f.rows[0].verdict);
+        assert_eq!(picked, Some(verdict), "{shown}");
+    }
 }
 
 /// Review repro: a draft whose case can no longer be answered goes, and
@@ -3694,4 +3683,132 @@ fn the_field_being_typed_in_stays_in_sight() {
     typing(&mut app, "the last");
     let shown = screen(&mut app, 80, 24);
     assert!(shown.contains("the last"), "{shown}");
+}
+
+/// A write that lands says so, once: the read that shows the case
+/// answered does not first say nothing was sent (TU-04).
+#[test]
+fn a_write_that_lands_is_not_said_to_have_sent_nothing() {
+    let store = Store::new();
+    let key = store.open("decision", "today", "Pin?", decision);
+    store.open("fyi", "today", "Next", |_| {});
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('1'));
+    ctrl(&mut app, 's');
+    send(&mut app, &store);
+    let said: Vec<&str> = app.toasts.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(said, [format!("recorded answer on {key}")], "{said:?}");
+}
+
+/// Discard throws away what was chosen or typed in an answer, after the
+/// dialog, and leaves the case open; drop is still the case's drop.
+#[test]
+fn discard_throws_away_a_draft_and_the_case_stays_open() {
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("Discard"), "nothing to discard:\n{shown}");
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "half a reply");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.answer_of(key).is_some());
+    click(&mut app, " Discard ");
+    assert!(app.asking(), "no question before discarding");
+    click(&mut app, "y Discard");
+    assert!(app.answer_of(key).is_none(), "the draft is still there");
+    assert!(app.pending.is_none(), "discarding sent something");
+    assert_eq!(case(&store, key).state(), State::Open);
+    let shown = screen(&mut app, 120, 40);
+    assert!(!shown.contains("half a reply"), "{shown}");
+}
+
+/// A toast said again is the same toast up for longer; and a click puts
+/// away the toast it lands on, whichever have gone meanwhile.
+#[test]
+fn a_toast_said_again_is_refreshed_and_a_click_names_its_own() {
+    let store = Store::new();
+    store.open("fyi", "today", "FYI", |_| {});
+    let mut app = store.app();
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Char('r'));
+    }
+    assert_eq!(app.toasts.len(), 1, "{:?}", app.toasts);
+    app.flash("second");
+    app.flash("third");
+    let shown = screen(&mut app, 120, 40);
+    let third = spot(&shown, "third");
+    // The oldest goes before the click lands.
+    app.toasts.remove(0);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), third);
+    let said: Vec<&str> = app.toasts.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(said, ["second"]);
+}
+
+/// What the pointer lights is not lit through a toast over it.
+#[test]
+fn a_toast_over_what_is_lit_stays_as_it_is() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    app.strip.shown = false;
+    app.flash(&"a toast over the list ".repeat(5));
+    // One pane: the list's first row runs under the toast.
+    let shown = screen(&mut app, 80, 24);
+    let row = spot(&shown, "Pin?");
+    let line = shown.lines().nth(usize::from(row.1)).unwrap();
+    let x = line.find("toast").map(|at| line[..at].chars().count());
+    let (x, y) = (
+        u16::try_from(x.expect("no toast on the row")).unwrap(),
+        row.1,
+    );
+    mouse(&mut app, MouseEventKind::Moved, row);
+    assert!(app.hover.is_some());
+    assert_eq!(bg_in(&mut app, (80, 24), row), view::HOVER_BG);
+    assert_ne!(
+        bg_in(&mut app, (80, 24), (x, y)),
+        view::HOVER_BG,
+        "lit through the toast"
+    );
+}
+
+/// A move that leaves the pointer over the same thing asks for no new
+/// frame; one onto something else does. A click that opens help leaves
+/// nothing lit under it.
+#[test]
+fn a_move_over_the_same_thing_draws_nothing_new_and_help_lights_nothing() {
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let (x, y) = spot(&shown, "? keys");
+    let moved = |app: &mut App, at: (u16, u16)| {
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: at.0,
+            row: at.1,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    assert!(moved(&mut app, (x, y)), "onto a key");
+    assert!(!moved(&mut app, (x + 1, y)), "along the same key");
+    assert!(moved(&mut app, (0, 0)), "off it");
+    moved(&mut app, (x, y));
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
+    assert!(app.help);
+    assert_eq!(app.hover, None, "lit under help");
+}
+
+/// One case's screen has no filters, and no row kept for them.
+#[test]
+fn one_cases_screen_has_no_blank_row_for_filters() {
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    let mut app = App::one("cases.db".into(), key);
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    let shown = screen(&mut app, 80, 24);
+    let second = shown.lines().nth(1).unwrap();
+    assert!(second.starts_with("────"), "{shown}");
 }
