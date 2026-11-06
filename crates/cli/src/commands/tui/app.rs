@@ -139,10 +139,10 @@ pub(crate) enum Hit {
     Press(Press),
     /// One of the case's bar's buttons.
     Verb(Verb),
-    /// An action the palette lists, by its place.
-    Palette(usize),
-    /// An action a row's menu lists, by its place.
-    Menu(usize),
+    /// An action the palette lists.
+    Palette(Action),
+    /// An action a row's menu lists.
+    Menu(Action),
     /// A dialog, behind its buttons: a click on it does nothing.
     Dialog,
     /// A toast, by its id: a click puts it away.
@@ -157,10 +157,11 @@ pub(crate) struct Palette {
     pub(crate) at: usize,
 }
 
-/// A row's menu: where the right-click was, and the action the keys are
-/// on.
+/// A row's menu: the case it is on, where the right-click was, and the
+/// action the keys are on.
 #[derive(Debug)]
 pub(crate) struct Menu {
+    pub(crate) key: Key,
     pub(crate) at: Position,
     pub(crate) item: usize,
 }
@@ -446,6 +447,14 @@ impl App {
         self.now = now;
         self.problem = None;
         self.keep_selection();
+        // A row's menu is on its case: one the selection left goes.
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|menu| Some(menu.key) != self.selected)
+        {
+            self.menu = None;
+        }
         self.follow_form();
         self.follow_compose();
     }
@@ -782,6 +791,8 @@ impl App {
             | Hit::Verdict(..)
             | Hit::Press(_)
             | Hit::Verb(_) => !modal,
+            // ^k is the field's while one is typed in.
+            Hit::Key(key) if key.code == KeyCode::Char('k') => !self.typing(),
             Hit::Key(_) | Hit::Toast(_) => true,
         }
     }
@@ -832,8 +843,9 @@ impl App {
         }
         // As the table of actions has them, so that the bar, the palette,
         // a row's menu and the keys agree.
-        Action::fitting(self)
+        Action::ALL
             .into_iter()
+            .filter(|action| action.verb().is_some() && action.fits(self))
             .filter_map(Action::verb)
             .collect()
     }
@@ -855,6 +867,8 @@ impl App {
         let Some(palette) = &mut self.palette else {
             return;
         };
+        // Fewer may fit now than when the keys moved: the last is marked.
+        palette.at = palette.at.min(found.saturating_sub(1));
         match code {
             KeyCode::Esc => self.palette = None,
             KeyCode::Up => palette.at = palette.at.saturating_sub(1),
@@ -894,6 +908,7 @@ impl App {
         let Some(menu) = &mut self.menu else {
             return;
         };
+        menu.item = menu.item.min(items.saturating_sub(1));
         match code {
             KeyCode::Esc => self.menu = None,
             KeyCode::Up | KeyCode::Char('k') => menu.item = menu.item.saturating_sub(1),
@@ -946,7 +961,10 @@ impl App {
                 self.leave_panel();
                 self.select(row);
             }
-            self.menu = Some(Menu { at, item: 0 });
+            self.menu = Some(Menu { key, at, item: 0 });
+        } else {
+            // A right-click off a row is any click off the menu.
+            self.menu = None;
         }
     }
 
@@ -1037,12 +1055,15 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if self.palette.is_some() || self.menu.is_some() =>
             {
+                // What was drawn under the click, if it still fits; a row's
+                // menu, on its own case.
                 match hit {
-                    Some(Hit::Palette(at)) => self.run_found(at),
-                    Some(Hit::Menu(item)) => {
-                        if let Some(action) = Action::on_case(self).get(item).copied() {
-                            self.run(action);
-                        }
+                    Some(Hit::Palette(action)) if action.fits(self) => self.run(action),
+                    Some(Hit::Menu(action))
+                        if action.fits(self)
+                            && self.menu.as_ref().map(|menu| menu.key) == self.selected =>
+                    {
+                        self.run(action);
                     }
                     Some(Hit::Dialog) => {}
                     _ => {

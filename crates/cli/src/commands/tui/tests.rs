@@ -4148,3 +4148,82 @@ fn one_cases_screen_has_the_palette_and_no_menu() {
     );
     assert!(app.menu.is_none());
 }
+
+/// Review repro: a row's menu acts on the case it was opened on, or on
+/// none: when a read moves the selection off it, it closes.
+#[test]
+fn a_menu_closes_when_its_case_leaves() {
+    let store = Store::new();
+    let first = store.open("stuck", "blocking", "First stuck", |_| {});
+    store.open("stuck", "today", "Second stuck", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Right),
+        spot(&shown, "First stuck"),
+    );
+    assert_eq!(app.selected, Some(first));
+    store.answer(first, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.form.is_none(), "the menu acted on another case");
+}
+
+/// Review repro: when fewer actions fit than the one the palette's keys
+/// were on, enter runs the last, which is the one marked.
+#[test]
+fn the_palette_runs_the_marked_action_when_fewer_fit() {
+    use super::form::Act;
+    let store = Store::new();
+    let key = store.open("stuck", "today", "Stuck", |_| {});
+    let mut app = store.app();
+    ctrl(&mut app, 'k');
+    typing(&mut app, "a");
+    let before = super::actions::ranked(&app, "a").len();
+    for _ in 0..before {
+        press(&mut app, KeyCode::Down);
+    }
+    store.answer(key, |a| "elsewhere".clone_into(&mut a.text));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    assert!(super::actions::ranked(&app, "a").len() < before);
+    press(&mut app, KeyCode::Enter);
+    assert!(app.palette.is_none(), "enter did nothing");
+    assert_ne!(app.form.as_ref().map(|f| f.act), Some(Act::Answer));
+}
+
+/// Review repro: a click on a menu's item runs what was drawn there, or
+/// nothing, never another that took its place.
+#[test]
+fn a_click_on_a_menu_item_runs_what_was_drawn() {
+    let store = Store::new();
+    let key = store.open("stuck", "today", "Stuck", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 24);
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Right),
+        spot(&shown, "Stuck"),
+    );
+    let shown = screen(&mut app, 80, 24);
+    // Answer is the menu's first item, drawn below the row.
+    let answer = shown
+        .lines()
+        .enumerate()
+        .filter_map(|(y, l)| {
+            l.find("Answer ").map(|x| {
+                (
+                    u16::try_from(l[..x].chars().count()).unwrap(),
+                    u16::try_from(y).unwrap(),
+                )
+            })
+        })
+        .last()
+        .unwrap();
+    // Parked elsewhere: answer no longer fits, resume does.
+    store.human(key, &Record::Park(cases_core::Park::default()));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), answer);
+    assert!(app.pending.is_none(), "a click on answer resumed the case");
+}

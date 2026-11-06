@@ -781,10 +781,11 @@ fn draw_palette(frame: &mut Frame, app: &mut App) {
     app.hits.push((rect, Hit::Dialog));
     for row in 0..u16::try_from(shown.min(found.len())).unwrap_or(0) {
         let y = face.y + 2 + row;
-        if y < face.bottom() {
-            let n = skip + usize::from(row);
-            app.hits
-                .push((Rect::new(face.x, y, face.width, 1), Hit::Palette(n)));
+        if y < face.bottom()
+            && let Some(action) = found.get(skip + usize::from(row))
+        {
+            let rect = Rect::new(face.x, y, face.width, 1);
+            app.hits.push((rect, Hit::Palette(*action)));
         }
     }
 }
@@ -834,11 +835,11 @@ fn draw_menu(frame: &mut Frame, app: &mut App, at: ratatui::layout::Position) {
     let face = block.inner(rect);
     frame.render_widget(Paragraph::new(lines).block(block), rect);
     app.hits.push((rect, Hit::Dialog));
-    for n in 0..found.len() {
+    for (n, action) in found.iter().enumerate() {
         let y = face.y + u16::try_from(n).unwrap_or(u16::MAX);
         if y < face.bottom() {
-            app.hits
-                .push((Rect::new(face.x, y, face.width, 1), Hit::Menu(n)));
+            let rect = Rect::new(face.x, y, face.width, 1);
+            app.hits.push((rect, Hit::Menu(*action)));
         }
     }
 }

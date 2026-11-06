@@ -172,9 +172,9 @@ impl Action {
     /// The actions that fit the selected case and act on it, as the menu a
     /// right-click opens on its row lists them: the case's bar's.
     pub(crate) fn on_case(app: &App) -> Vec<Action> {
-        Action::fitting(app)
+        Action::ALL
             .into_iter()
-            .filter(|action| action.verb().is_some())
+            .filter(|action| action.verb().is_some() && action.fits(app))
             .collect()
     }
 }
