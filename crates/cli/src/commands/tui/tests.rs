@@ -3812,3 +3812,88 @@ fn one_cases_screen_has_no_blank_row_for_filters() {
     let second = shown.lines().nth(1).unwrap();
     assert!(second.starts_with("────"), "{shown}");
 }
+
+/// Review repro: an answer refused because its case was withdrawn
+/// meanwhile does not leave the answer open on a withdrawn case.
+#[test]
+fn an_answer_refused_on_a_withdrawn_case_closes() {
+    let store = Store::new();
+    let key = store.open("question", "today", "Name?", |_| {});
+    store.answer(key, |a| "first".clone_into(&mut a.text));
+    let mut note = Note::default();
+    "again?".clone_into(&mut note.body);
+    note.reopen = true;
+    store.agent(key, &Record::Note(note));
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    typing(&mut app, "a reply");
+    ctrl(&mut app, 's');
+    let send = app.pending.take().unwrap();
+    app.sending = Some(Sending::Event(Box::new(send)));
+    store.agent(key, &Record::Withdraw(cases_core::Withdraw::default()));
+    read(&mut app, &mut store.db.poller(), &store.db).unwrap();
+    app.wrote(Wrote::Append(Err(Refusal::Stale)));
+    assert!(
+        app.form.is_none(),
+        "the answer is still open on a withdrawn case"
+    );
+}
+
+/// Review repro: a toast that expires says the screen is to be drawn
+/// again, as a move of the pointer may be all that happens meanwhile.
+#[test]
+fn a_toast_that_expires_asks_for_a_new_frame() {
+    use std::time::{Duration, Instant};
+    let mut app = App::new("cases.db".into());
+    app.flash("going");
+    assert!(!app.expire_toasts(Instant::now()));
+    assert!(app.expire_toasts(Instant::now() + Duration::from_secs(5)));
+}
+
+/// Review repro: on a narrow pane the keys on an approval's row bring its
+/// verdicts, a line each, into sight.
+#[test]
+fn a_narrow_approvals_verdicts_come_into_sight() {
+    let store = Store::new();
+    store.open("approval", "today", "Move?", |open| {
+        open.rows = (0..6).map(|n| step(&format!("r{n}"), "")).collect();
+    });
+    let mut app = store.app();
+    app.strip.shown = false;
+    press(&mut app, KeyCode::Char('a'));
+    app.scroll = 0;
+    for _ in 0..5 {
+        press(&mut app, KeyCode::Char('j'));
+        screen(&mut app, 30, 24);
+    }
+    let shown = screen(&mut app, 30, 24);
+    let row = shown
+        .lines()
+        .position(|l| l.contains("▸ r5"))
+        .expect(&shown);
+    assert!(
+        shown.lines().skip(row).any(|l| l.contains("○ reject")),
+        "{shown}"
+    );
+}
+
+/// Review repro: once discard is gone, as what was chosen was taken back,
+/// the keys are not left on it.
+#[test]
+fn the_keys_leave_a_discard_that_is_gone() {
+    use super::form::{Press, Spot};
+    let store = Store::new();
+    store.open("decision", "today", "Pin?", decision);
+    let mut app = store.app();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Esc);
+    // From the note: send, drop, then discard.
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Tab);
+    }
+    let form = app.form.as_mut().unwrap();
+    assert_eq!(form.spot(), Spot::Button(Press::Discard));
+    form.other = false;
+    assert_ne!(form.spot(), Spot::Button(Press::Discard));
+}

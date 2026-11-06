@@ -474,7 +474,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
         if let Some(herdr) = run.herdr.as_deref_mut() {
             herdr.report(app.waiting());
         }
-        app.expire_toasts(Instant::now());
+        draw |= app.expire_toasts(Instant::now());
         if draw {
             terminal.draw(|frame| view::draw(frame, app))?;
             if app.strip.image {

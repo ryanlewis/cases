@@ -251,10 +251,15 @@ impl Form {
         match self.being_edited() {
             Some(Which::Row(_)) => Spot::Rows,
             Some(which) => Spot::Field(which),
-            None => self
-                .spot
-                .or_else(|| self.parts().first().copied())
-                .unwrap_or(Spot::Button(Press::Send)),
+            // A part that has gone, as discard once nothing is chosen or
+            // typed, leaves the keys on the first.
+            None => {
+                let parts = self.parts();
+                self.spot
+                    .filter(|spot| parts.contains(spot))
+                    .or_else(|| parts.first().copied())
+                    .unwrap_or(Spot::Button(Press::Send))
+            }
         }
     }
 

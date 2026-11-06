@@ -701,9 +701,13 @@ impl App {
     }
 
     /// Puts away the toasts that have been up long enough.
-    pub(crate) fn expire_toasts(&mut self, now: Instant) {
+    ///
+    /// Gives whether any went, so that the screen is drawn without them.
+    pub(crate) fn expire_toasts(&mut self, now: Instant) -> bool {
+        let up = self.toasts.len();
         self.toasts
             .retain(|toast| now.duration_since(toast.at) <= TOAST_FOR);
+        self.toasts.len() != up
     }
 
     /// What a click at `at` acts on, from where the last frame drew it.
@@ -1327,6 +1331,10 @@ impl App {
             // Not asked for here: nothing to say.
             _ => {}
         }
+        // With the write said, a form or a draft its read left open on a
+        // case it no longer fits, as when the write was refused because
+        // the case moved on meanwhile, goes, saying nothing was sent.
+        self.follow_form();
     }
 
     /// Queues a write for the loop, with the list as it stands, so that the

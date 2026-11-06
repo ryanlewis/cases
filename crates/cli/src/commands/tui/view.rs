@@ -759,7 +759,12 @@ fn reveal_lines(app: &App, hits: &[Option<Hit>]) -> Option<(usize, usize)> {
             (Spot::Choices, Some(Hit::Choice(_) | Hit::Mark(_))) => true,
             (
                 Spot::Rows,
-                Some(Hit::ApprovalRow(at) | Hit::Verdicts(at, _) | Hit::Field(Which::Row(at))),
+                Some(
+                    Hit::ApprovalRow(at)
+                    | Hit::Verdicts(at, _)
+                    | Hit::Verdict(at, _)
+                    | Hit::Field(Which::Row(at)),
+                ),
             ) => *at == form.row,
             (Spot::Items, Some(Hit::LeftOut(at))) => *at == form.item,
             _ => false,
