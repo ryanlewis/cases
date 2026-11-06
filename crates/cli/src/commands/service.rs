@@ -148,7 +148,8 @@ fn check_no_serve(manager: &Manager, store: &Path, listen: &str) -> Result<(), E
         old_store = flag_value(&args, "--store").map(PathBuf::from);
         old_listen = flag_value(&args, "--listen").map(str::to_owned);
     }
-    if old_store.as_deref() != Some(store)
+    // The same store by another path is still the service's own.
+    if old_store.as_deref().map(instance::resolve) != Some(instance::resolve(store))
         && let Ok(Some(running)) = instance::running(store)
     {
         return Err(Error::new(format!(
@@ -406,7 +407,12 @@ fn report(ctx: &Ctx, manager: &Manager) -> Result<Report, Error> {
                         exe.display()
                     ));
                 }
-                if !store.is_empty() && report.store != store {
+                // The same store by another path is still this one, as install
+                // takes it.
+                if !store.is_empty()
+                    && instance::resolve(Path::new(&report.store))
+                        != instance::resolve(Path::new(&store))
+                {
                     report.problems.push(format!(
                         "installed for another store: {} (this command uses {store})",
                         report.store
