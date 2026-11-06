@@ -79,7 +79,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     app.strip.area = image
         .filter(|_| drawn && !app.help)
         .map(|wide| stats::image_area(band, wide));
-    if app.only.is_some() {
+    if app.triage() && app.form.is_none() && app.compose.is_none() {
+        // SPIKE (triage-spike#1): the case as a triage card.
+        super::triage::draw(frame, app, body);
+    } else if app.only.is_some() {
         // One case (TU-11): no list beside it.
         draw_case(frame, app, body);
     } else if side_by_side {
@@ -1464,8 +1467,10 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
         let park = app
             .selected_case()
             .is_some_and(|(_, case)| Act::Park.fits(case));
-        form_keys = [("j/k", "scroll"), ("a", "answer")]
+        let pick = app.triage().then_some(("1-9", "pick"));
+        form_keys = pick
             .into_iter()
+            .chain([("j/k", "scroll"), ("a", "answer")])
             .chain(park.then_some(("p", "park")))
             .chain([("?", "keys"), ("q", "quit")])
             .collect();
