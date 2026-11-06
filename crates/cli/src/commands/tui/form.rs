@@ -493,7 +493,7 @@ impl Form {
     }
 
     /// Sends the form, or says what it is missing. A withdraw asks first.
-    fn send(&mut self) -> Outcome {
+    pub(crate) fn send(&mut self) -> Outcome {
         if let Some(missing) = self.missing() {
             return Outcome::Missing(missing);
         }

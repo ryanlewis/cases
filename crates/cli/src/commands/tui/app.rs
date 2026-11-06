@@ -123,6 +123,8 @@ pub(crate) enum Hit {
     ApprovalRow(usize),
     /// A field of the form.
     Field(Which),
+    /// SPIKE: a triage tile (triage-spike#1).
+    Tile(super::triage::Tile),
 }
 
 /// Whether one case's screen (TU-11) takes a key that reaches
@@ -235,6 +237,8 @@ pub(crate) struct One {
     /// It was not in the last read that worked, with every case folded:
     /// it is gone from the store.
     gone: bool,
+    /// SPIKE: it is drawn as a triage card (triage-spike#1).
+    pub(crate) triage: bool,
 }
 
 impl App {
@@ -283,9 +287,18 @@ impl App {
         App {
             selected: Some(key),
             focus: Focus::Case,
-            only: Some(One { key, gone: false }),
+            only: Some(One {
+                key,
+                gone: false,
+                triage: false,
+            }),
             ..App::new(store)
         }
+    }
+
+    /// SPIKE: whether the one case is drawn as a triage card.
+    pub(crate) fn triage(&self) -> bool {
+        self.only.is_some_and(|one| one.triage)
     }
 
     /// Whether the one case shown has left open, or the store: answered,
@@ -558,6 +571,16 @@ impl App {
             self.open_key(key);
             return;
         }
+        // SPIKE: a tile's number, or o, on the triage card.
+        if self.triage()
+            && let KeyCode::Char(c) = key.code
+            && let Some(tile) = self
+                .selected_case()
+                .and_then(|(_, case)| super::triage::by_key(case, c))
+        {
+            self.tile(tile);
+            return;
+        }
         match self.focus {
             Focus::List => self.list_key(key.code, ctrl),
             Focus::Case => self.case_key(key.code, ctrl),
@@ -646,7 +669,8 @@ impl App {
                     self.select(at);
                 }
             }
-            Hit::Tab(_) | Hit::Fold | Hit::Row(_) => {}
+            Hit::Tile(tile) if !open => self.tile(tile),
+            Hit::Tab(_) | Hit::Fold | Hit::Row(_) | Hit::Tile(_) => {}
             Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
                 // A choice or an item of a case with no form opens its answer;
                 // one of another case than the form's does nothing.
@@ -801,7 +825,7 @@ impl App {
 
     /// Opens the form for `act` on the selected case, or says why it
     /// cannot.
-    fn start(&mut self, act: Act) {
+    pub(crate) fn start(&mut self, act: Act) {
         let Some((key, case)) = self.selected_case() else {
             return;
         };
@@ -845,7 +869,7 @@ impl App {
         self.send(key, Record::Resume(Resume::default()), revision, "resume");
     }
 
-    fn form_outcome(&mut self, outcome: Outcome) {
+    pub(crate) fn form_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => self.form = None,

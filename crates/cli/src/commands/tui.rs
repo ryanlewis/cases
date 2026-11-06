@@ -18,6 +18,7 @@ mod markdown;
 mod reader;
 mod safe;
 pub(crate) mod stats;
+mod triage;
 mod view;
 mod wrap;
 
@@ -101,6 +102,9 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         Some(key) => App::one(shown, key),
         None => App::new(shown),
     };
+    if let Some(one) = &mut app.only {
+        one.triage = triage::enabled();
+    }
     let mode = stats::Mode::of(ctx.config.get("tui-stats"))?;
     app.strip.shown = mode.shown();
     // The store is read and written on a thread of its own: the screen never
