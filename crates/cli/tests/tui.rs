@@ -102,6 +102,16 @@ fn script_on(env: &Env, store: &str, vars: &[(&str, &str)]) -> Command {
 /// the terminal is raw and its loop is about to start, and what it wrote
 /// until then.
 fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
+    start_with(command, false)
+}
+
+/// [`start`], in a terminal that answers the screen's asks before it
+/// starts, as one does: DA1, which ends each, and, when `keyboard`, the
+/// kitty keyboard protocol's query, which says it speaks it.
+fn start_with(
+    command: &mut Command,
+    keyboard: bool,
+) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
     // stdin stays open: `script` may end when its input does.
     let mut script = spawn(
         command
@@ -120,6 +130,7 @@ fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
         }
     });
     let mut seen = Vec::new();
+    let mut answered = 0;
     let deadline = Instant::now() + Duration::from_secs(10);
     let pid = loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -127,6 +138,18 @@ fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
             panic!("the TUI did not start: {}", String::from_utf8_lossy(&seen));
         };
         seen.extend(chunk);
+        let asks: Vec<usize> = (0..seen.len())
+            .filter(|at| seen[*at..].starts_with(b"\x1b[c"))
+            .collect();
+        for at in asks.into_iter().skip(answered) {
+            let stdin = script.stdin.as_mut().expect("a stdin");
+            if keyboard && seen[..at].ends_with(b"\x1b[?u") {
+                stdin.write_all(b"\x1b[?0u").expect("the answer is typed");
+            }
+            stdin.write_all(b"\x1b[?62c").expect("the answer is typed");
+            stdin.flush().expect("the answer is sent");
+            answered += 1;
+        }
         let text = String::from_utf8_lossy(&seen);
         let pid = text
             .lines()
@@ -779,7 +802,13 @@ struct Tui {
 
 impl Tui {
     fn start(command: &mut Command) -> Tui {
-        let (script, received, pid, shown) = start(command);
+        Tui::start_with(command, false)
+    }
+
+    /// [`Tui::start`], in a terminal that speaks the kitty keyboard
+    /// protocol when `keyboard` says so.
+    fn start_with(command: &mut Command, keyboard: bool) -> Tui {
+        let (script, received, pid, shown) = start_with(command, keyboard);
         Tui {
             script,
             received,
@@ -923,6 +952,13 @@ impl Tui {
             self.shows("\x1b[?1003l"),
             "the pointer's moves are still reported"
         );
+        assert!(self.shows("\x1b[?2004l"), "pastes are still bracketed");
+        // And the keys are as they were, when the screen asked for the
+        // kitty keyboard protocol's (TU-12).
+        if let Some(pushed) = self.shown.windows(5).rposition(|w| w == b"\x1b[>1u") {
+            self.from = pushed;
+            assert!(self.shows("\x1b[<1u"), "the keys were not given back");
+        }
     }
 
     /// Types q, and checks that it quits.
@@ -1022,7 +1058,7 @@ fn an_edit_refused_as_stale_shows_the_message_as_it_is_now() {
         .to_owned();
     let mut tui = Tui::start(&mut script(&env));
     // In flight, the message is the one case; e edits its body.
-    tui.keys(&[b"2"]);
+    tui.keys(&[b"]"]);
     assert!(tui.shows("Ship it"), "{}", tui.drawn());
     tui.keys(&[b"e", b" Mine."]);
     env.ok(&["amend", &id, "--as", "Ryan", "--body", "From the web."]);
@@ -1542,6 +1578,66 @@ fn on_one_case_of_a_forwarded_store_an_answer_elsewhere_exits_0() {
     tui.ends();
 }
 
+/// In a terminal that speaks the kitty keyboard protocol, the screen asks
+/// for its keys, which tell shift+enter, a new line in a field, from
+/// enter, which sends; and gives them back on quitting, which
+/// [`Tui::ends`] checks. In one that does not, it asks for nothing, and
+/// alt+enter is the new line (TU-12).
+#[cfg(unix)]
+#[test]
+fn shift_enter_is_a_new_line_where_the_terminal_tells_it_from_enter() {
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start_with(&mut script(&env), true);
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(
+        tui.shows("\x1b[>1u"),
+        "the keyboard protocol was not asked for"
+    );
+    // Enter, into the guidance; shift+enter as the protocol has it.
+    tui.keys(&[b"\r", b"use", b"\x1b[13;2u", b"the mirror"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(
+        !tui.drawn().contains("\x1b[>1u"),
+        "the protocol was asked for"
+    );
+    // Alt+enter, as a terminal with no protocol sends it.
+    tui.keys(&[b"\r", b"use", b"\x1b\r", b"the mirror"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+}
+
+/// Review repro: a paste with a new line in it goes into the field whole,
+/// as the terminal brackets it, rather than its new line sending what was
+/// pasted so far and the rest being read as keys (TU-12).
+#[cfg(unix)]
+#[test]
+fn a_paste_goes_into_the_field_whole() {
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(tui.shows("\x1b[?2004h"), "pastes are not bracketed");
+    tui.keys(&[b"\r", b"\x1b[200~use\rthe mirror\x1b[201~"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+}
+
 /// A click, as the terminal reports it (SGR), on a tab switches to it; on
 /// quitting the mouse is no longer reported, which [`Tui::ends`] checks.
 #[cfg(unix)]
@@ -1558,8 +1654,8 @@ fn a_click_on_a_tab_switches_to_it() {
         "the pointer's moves are not reported"
     );
     tui.mark();
-    // "Done" is drawn from column 34, row 2, counted from 1, in its pill.
-    tui.keys(&[b"\x1b[<0;35;2M", b"\x1b[<0;35;2m"]);
+    // "Done" is drawn from column 28, row 2, counted from 1, in its pill.
+    tui.keys(&[b"\x1b[<0;29;2M", b"\x1b[<0;29;2m"]);
     assert!(tui.shows("no cases here."), "{}", tui.drawn());
     tui.quits();
 }

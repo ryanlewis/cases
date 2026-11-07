@@ -289,30 +289,78 @@ impl Form {
         Press::of(self.kind, self.touched())
     }
 
-    /// Moves the keys `by` parts along the panel, round from the end to the
-    /// start: into a field to type in it, or onto anything else.
-    pub(crate) fn tab(&mut self, by: isize) {
+    /// Moves the keys `by` parts along the panel: into a field to type in
+    /// it, or onto anything else. Gives whether there was a part to move
+    /// to: past the last, or before the first, the keys leave the panel,
+    /// out of any field, for the list (TU-12).
+    pub(crate) fn tab(&mut self, by: isize) -> bool {
         let parts = self.parts();
-        let len = parts.len().cast_signed();
-        let at = parts
-            .iter()
-            .position(|part| *part == self.spot())
-            .map_or(if by > 0 { -1 } else { 0 }, usize::cast_signed);
-        let next = usize::try_from((at + by).rem_euclid(len.max(1))).unwrap_or(0);
-        let part = parts
-            .get(next)
-            .copied()
-            .unwrap_or(Spot::Button(Press::Send));
-        self.go(part);
+        let next = match parts.iter().position(|part| *part == self.spot()) {
+            Some(at) => at.checked_add_signed(by),
+            None if by > 0 => Some(0),
+            None => parts.len().checked_sub(1),
+        };
+        if let Some(part) = next.and_then(|at| parts.get(at)).copied() {
+            self.go(part);
+            true
+        } else {
+            self.spot = Some(self.spot());
+            self.editing = None;
+            false
+        }
     }
 
     /// Puts the keys on `part`: in its field, when it is one.
-    fn go(&mut self, part: Spot) {
+    pub(crate) fn go(&mut self, part: Spot) {
         self.spot = Some(part);
         self.editing = match part {
             Spot::Field(which) => Some(which),
             _ => None,
         };
+    }
+
+    /// Answers by a number (TU-12): a decision's option, other being the
+    /// number after the last, with the keys put in the note to say it; a
+    /// signoff's or a briefing's 1 to accept, 2 for changes or to send it
+    /// back; or an approval's row, with the keys on its verdicts. Gives
+    /// whether the number names one.
+    pub(crate) fn pick(&mut self, n: u32) -> bool {
+        let wide = i64::from(n);
+        let at = |n: u32| usize::try_from(n).unwrap_or(usize::MAX);
+        let marks = match self.kind {
+            Kind::Signoff => ["accept", "changes"],
+            _ => ["accept", "send_back"],
+        };
+        let mark = usize::try_from(n)
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|at| marks.get(at).copied());
+        match self.kind {
+            Kind::Decision if (1..=self.options).contains(&wide) => {
+                self.choice = Some(wide);
+                self.other = false;
+                self.go(Spot::Choices);
+            }
+            Kind::Decision if wide == self.options + 1 => {
+                self.choice = None;
+                self.other = true;
+                self.go(Spot::Field(Which::Note));
+            }
+            Kind::Signoff if mark.is_some() => {
+                self.signoff = mark;
+                self.go(Spot::Choices);
+            }
+            Kind::Briefing if mark.is_some() => {
+                self.briefing = mark;
+                self.go(Spot::Choices);
+            }
+            Kind::Approval if (1..=self.rows.len()).contains(&at(n)) => {
+                self.row = at(n) - 1;
+                self.go(Spot::Rows);
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Presses one of the panel's buttons.
@@ -468,11 +516,22 @@ impl Form {
             return Outcome::Edit(self.edited());
         }
         if let Some(which) = self.editing {
+            let line = key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
             match key.code {
-                // In the answer's panel tab moves on to the next part, and
-                // esc leaves the field for the panel.
-                KeyCode::Tab if self.act == Act::Answer => self.tab(1),
-                KeyCode::BackTab if self.act == Act::Answer => self.tab(-1),
+                // Enter sends, and shift- or alt-enter is a new line. In
+                // the answer's panel tab moves on to the next part, or out
+                // of the panel past its ends, and esc leaves the field for
+                // the panel.
+                KeyCode::Enter if !line => return self.send(),
+                KeyCode::Tab if self.act == Act::Answer && !self.tab(1) => {
+                    return Outcome::Leave;
+                }
+                KeyCode::BackTab if self.act == Act::Answer && !self.tab(-1) => {
+                    return Outcome::Leave;
+                }
+                KeyCode::Tab | KeyCode::BackTab if self.act == Act::Answer => {}
                 KeyCode::Esc if self.act == Act::Answer => {
                     self.spot = Some(self.spot());
                     self.editing = None;
@@ -491,13 +550,22 @@ impl Form {
     }
 
     /// A key in the answer's panel with no field typing: tab and shift-tab
-    /// move between its parts, esc leaves it, a part's own keys move on it
-    /// or press it, and the form's other keys are as they were (TU-05).
+    /// move between its parts, and out past its ends, esc leaves it, a
+    /// number picks, a part's own keys move on it or press it, and the
+    /// form's other keys are as they were (TU-05).
     fn panel_key(&mut self, code: KeyCode) -> Outcome {
         match (code, self.spot()) {
-            (KeyCode::Tab, _) => self.tab(1),
-            (KeyCode::BackTab, _) => self.tab(-1),
+            (KeyCode::Tab, _) if !self.tab(1) => return Outcome::Leave,
+            (KeyCode::BackTab, _) if !self.tab(-1) => return Outcome::Leave,
+            (KeyCode::Tab | KeyCode::BackTab, _) => {}
             (KeyCode::Esc, _) => return Outcome::Leave,
+            // A number picks what it names, but on a briefing's items,
+            // where it ticks the item it names to file.
+            (KeyCode::Char(c @ '0'..='9'), spot)
+                if !(self.kind == Kind::Briefing && spot == Spot::Items) =>
+            {
+                self.pick(c.to_digit(10).unwrap_or(0));
+            }
             (KeyCode::Enter | KeyCode::Char(' '), Spot::Button(press)) => return self.press(press),
             (KeyCode::Char('j') | KeyCode::Down, Spot::Choices) => self.move_choice(1),
             (KeyCode::Char('k') | KeyCode::Up, Spot::Choices) => self.move_choice(-1),
@@ -661,22 +729,13 @@ impl Form {
         }
     }
 
-    /// A decision's keys: an option by its number, or o for other.
+    /// A decision's own key: o for other. Its options are picked by their
+    /// numbers, as [`Form::pick`] has them.
     fn decision_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char(c @ '1'..='9') => {
-                let n = i64::from(u32::from(c) - u32::from('0'));
-                if n <= self.options {
-                    self.choice = Some(n);
-                    self.other = false;
-                }
-            }
-            KeyCode::Char('o') => {
-                self.choice = None;
-                self.other = true;
-                self.editing = Some(Which::Note);
-            }
-            _ => {}
+        if code == KeyCode::Char('o') {
+            self.choice = None;
+            self.other = true;
+            self.editing = Some(Which::Note);
         }
     }
 
@@ -727,8 +786,8 @@ impl Form {
     }
 
     /// A briefing's keys: y to accept, s to send it back with the reason in
-    /// the note, and a number to tick or untick the left-out item it names
-    /// to file, 0 for the tenth.
+    /// the note, and, on its items, a number to tick or untick the
+    /// left-out item it names to file, 0 for the tenth.
     fn briefing_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('y') => self.briefing = Some("accept"),
@@ -969,9 +1028,8 @@ mod tests {
         assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
         assert_eq!(decision.confirm, Some(Confirm::Discard));
         assert_eq!(press(&mut decision, KeyCode::Char('y')), Outcome::Cancel);
-        press(&mut decision, KeyCode::Tab);
-        assert_eq!(decision.spot(), Spot::Choices, "round to the start");
-        press(&mut decision, KeyCode::BackTab);
+        // Past the last part, the keys leave the panel, for the list.
+        assert_eq!(press(&mut decision, KeyCode::Tab), Outcome::Leave);
         assert_eq!(decision.spot(), Spot::Button(Press::Discard));
         press(&mut decision, KeyCode::BackTab);
         press(&mut decision, KeyCode::BackTab);
@@ -982,6 +1040,13 @@ mod tests {
                 "x".clone_into(&mut a.note);
             })
         );
+        // Before the first part, the keys leave it too, out of a field.
+        let mut decision = form("decision", Act::Answer);
+        assert_eq!(press(&mut decision, KeyCode::BackTab), Outcome::Leave);
+        let mut question = form("question", Act::Answer);
+        assert_eq!(question.editing, Some(Which::Text));
+        assert_eq!(press(&mut question, KeyCode::BackTab), Outcome::Leave);
+        assert_eq!(question.editing, None);
         // A stuck case parks from its panel; an fyi has only its note.
         let stuck = form("stuck", Act::Answer);
         assert_eq!(stuck.presses(), [Press::Send, Press::Park, Press::Drop]);
@@ -1049,7 +1114,7 @@ mod tests {
             ("decision", Act::Answer, 'i'),
             ("decision", Act::Answer, 'y'),
             ("decision", Act::Answer, '0'),
-            ("decision", Act::Answer, '3'),
+            ("decision", Act::Answer, '4'),
             ("fyi", Act::Answer, '1'),
             ("fyi", Act::Answer, 'o'),
             ("fyi", Act::Answer, 'y'),
@@ -1085,10 +1150,16 @@ mod tests {
             press(&mut form, KeyCode::Enter),
             Outcome::Missing("choose an option first, or o for other")
         );
+        press(&mut form, KeyCode::Char('4'));
+        assert_eq!((form.choice, form.other), (None, false));
+        // Other is the number after the last option: its note is where it
+        // is said.
         press(&mut form, KeyCode::Char('3'));
-        assert_eq!(form.choice, None);
+        assert_eq!((form.choice, form.other), (None, true));
+        assert_eq!(form.editing, Some(Which::Note));
+        press(&mut form, KeyCode::Esc);
         press(&mut form, KeyCode::Char('2'));
-        assert_eq!(form.choice, Some(2));
+        assert_eq!((form.choice, form.other), (Some(2), false));
         press(&mut form, KeyCode::Char('o'));
         assert_eq!((form.choice, form.other), (None, true));
         assert_eq!(form.editing, Some(Which::Note));
@@ -1099,6 +1170,22 @@ mod tests {
         );
         press(&mut form, KeyCode::Char('n'));
         typing(&mut form, " Sink it ");
+        // Enter in the note sends; alt- or shift-enter is a new line.
+        for modifiers in [KeyModifiers::ALT, KeyModifiers::SHIFT] {
+            assert_eq!(
+                form.key(KeyEvent::new(KeyCode::Enter, modifiers)),
+                Outcome::Stay
+            );
+            assert_eq!(form.note.text(), " Sink it \n");
+            press(&mut form, KeyCode::Backspace);
+        }
+        assert_eq!(
+            press(&mut form, KeyCode::Enter),
+            answer(|a| {
+                a.other = true;
+                "Sink it".clone_into(&mut a.note);
+            })
+        );
         press(&mut form, KeyCode::Tab);
         assert_eq!(
             press(&mut form, KeyCode::Enter),
@@ -1234,6 +1321,11 @@ mod tests {
         });
         let mut form = Form::new(Key::new(1).unwrap(), &case, Act::Answer);
         assert_eq!(form.editing, None);
+        // On the answers, a number answers; on the items, it ticks one.
+        press(&mut form, KeyCode::Char('2'));
+        assert_eq!(form.briefing, Some("send_back"));
+        press(&mut form, KeyCode::Tab);
+        assert_eq!(form.spot(), Spot::Items);
         press(&mut form, KeyCode::Char('0'));
         press(&mut form, KeyCode::Char('9'));
         press(&mut form, KeyCode::Char('y'));

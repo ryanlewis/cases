@@ -32,7 +32,9 @@ use cases_core::{Kind, State};
 use cases_store_sqlite::{Db, Key};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, Event, KeyCode, KeyModifiers,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 
@@ -41,7 +43,7 @@ use crate::ctx::{self, Ctx};
 use crate::error::{Error, Status};
 use crate::store::{AnyStore, Target};
 
-use app::{App, Sending};
+use app::{App, Newline, Sending};
 use follow::Follow;
 use form::Act;
 use herdr::Herdr;
@@ -135,6 +137,15 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     // reads keys, and only when the config file leaves it to the terminal.
     app.strip.image = mode.asks() && only.is_none() && kitty::supported();
     IMAGES.store(app.strip.image, Ordering::SeqCst);
+    // Whether the terminal speaks the kitty keyboard protocol, which tells
+    // shift+enter from enter: asked as the strip's images are, before
+    // anything reads keys. A terminal that does not answer within crossterm's
+    // wait is taken as one that does not.
+    let keyboard = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    KEYBOARD.store(keyboard, Ordering::SeqCst);
+    if keyboard {
+        app.newline = Newline::ShiftEnter;
+    }
     let mut terminal = init()?;
     let mut run = Run {
         reader: &mut reader,
@@ -294,27 +305,42 @@ fn init() -> io::Result<DefaultTerminal> {
         // alternate screen, then this stops the mouse reports.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(io::stdout(), DisableMouseCapture);
+            let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
             hook(info);
         }));
     });
     TAKEN.store(true, Ordering::SeqCst);
     let terminal = ratatui::try_init()?;
     IMAGE_HOOK.call_once(|| {
-        // Over ratatui's hook, so that the strip's image is deleted while
-        // the alternate screen, which holds it, is still up.
+        // Over ratatui's hook, so that the strip's image is deleted, and
+        // the keys given back, while the alternate screen, which holds
+        // them, is still up.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             unshow();
+            pop_keyboard();
             hook(info);
         }));
     });
     // Clicks, the wheel and every move of the pointer, in SGR form: the
     // moves light what the pointer is over. The loop takes the moves that
     // queue up as one, so that the screen is not drawn again for each.
+    // And pastes bracketed, so that a new line in one is not enter, which
+    // sends (TU-12).
     if let Err(error) = io::stdout()
-        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h")
+        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h")
         .and_then(|()| io::stdout().flush())
+    {
+        restore();
+        return Err(error);
+    }
+    // Keys that tell shift+enter, a new line, from enter, which sends,
+    // where the terminal speaks the kitty keyboard protocol (TU-12).
+    if KEYBOARD.load(Ordering::SeqCst)
+        && let Err(error) = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
     {
         restore();
         return Err(error);
@@ -322,11 +348,20 @@ fn init() -> io::Result<DefaultTerminal> {
     Ok(terminal)
 }
 
+/// Gives the terminal its keys back as they were, when [`init`] asked for
+/// the kitty keyboard protocol's.
+fn pop_keyboard() {
+    if KEYBOARD.load(Ordering::SeqCst) {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
+}
+
 /// Puts the terminal back as it was: the strip's image deleted, no mouse
 /// reports, then as ratatui restores it.
 fn restore() {
     unshow();
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    pop_keyboard();
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     TAKEN.store(false, Ordering::SeqCst);
 }
@@ -344,6 +379,10 @@ fn unshow() {
 /// Whether the strip draws a kitty image, so that putting the terminal
 /// back deletes it (TU-13).
 static IMAGES: AtomicBool = AtomicBool::new(false);
+
+/// Whether the screen asks for the kitty keyboard protocol's keys, so that
+/// putting the terminal back gives the old ones back (TU-12).
+static KEYBOARD: AtomicBool = AtomicBool::new(false);
 
 /// Whether the screen has the terminal: from [`init`] until [`restore`],
 /// so that a second signal puts it back, and leaves alone the terminal of
@@ -395,16 +434,19 @@ fn signals() -> Result<Arc<AtomicBool>, Error> {
 
 /// Puts the terminal back from the signal thread, as [`restore`] does,
 /// while the loop may be stuck holding stdout: written to its file
-/// descriptor, past the lock. No mouse reports, the main screen, the
-/// cursor shown, then not raw.
+/// descriptor, past the lock. The keys as they were, no mouse reports,
+/// the main screen, the cursor shown, then not raw.
 #[cfg(unix)]
 fn put_back() {
     if IMAGES.load(Ordering::SeqCst) {
         let _ = rustix::io::write(io::stdout(), &kitty::delete(kitty::id()));
     }
+    if KEYBOARD.load(Ordering::SeqCst) {
+        let _ = rustix::io::write(io::stdout(), b"\x1b[<1u");
+    }
     let _ = rustix::io::write(
         io::stdout(),
-        b"\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+        b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
     );
     let _ = ratatui::crossterm::terminal::disable_raw_mode();
 }
@@ -522,6 +564,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
                 Event::Mouse(mouse) => {
                     app.mouse(mouse);
                 }
+                Event::Paste(text) => app.paste(&text),
                 // The screen is drawn afresh: the image is deleted, so that
                 // none is left where the strip was, and sent again.
                 Event::Resize(..) => {

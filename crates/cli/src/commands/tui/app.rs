@@ -13,7 +13,7 @@ use ratatui::layout::{Position, Rect};
 
 use super::actions::{self, Action};
 use super::compose::{self, Compose, Part};
-use super::form::{Act, Form, Outcome, Press, Which};
+use super::form::{Act, Form, Outcome, Press, Spot, Which};
 use super::reader::Wrote;
 use crate::commands::list;
 use crate::output::Actors;
@@ -179,17 +179,20 @@ pub(crate) struct Toast {
 }
 
 /// Whether one case's screen (TU-11) takes a key that reaches
-/// [`App::pane_key`]: its answer, a park, help, and the keys that scroll
-/// it by the page. j, k, the arrows, q and a form's keys are taken before
+/// [`App::pane_key`]: its answer, by a number, n, enter or tab too, a
+/// park, help, and the keys that scroll it by the page. j, k, the arrows, q and a form's keys are taken before
 /// that. The list's, the filters' and messages' keys do nothing there,
 /// and nor does a withdraw or a resume, as the screen ends once the case
 /// leaves open. The help it shows is [`super::view::ONE_KEYS`].
 pub(crate) fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
     match code {
         KeyCode::Char('d' | 'u') => ctrl,
-        KeyCode::Char('a' | 'p' | '?' | ' ' | 'J' | 'K') | KeyCode::PageDown | KeyCode::PageUp => {
-            true
-        }
+        KeyCode::Char('a' | 'n' | 'p' | '?' | ' ' | 'J' | 'K' | '1'..='9')
+        | KeyCode::Enter
+        | KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::PageDown
+        | KeyCode::PageUp => true,
         _ => false,
     }
 }
@@ -251,11 +254,15 @@ impl Verb {
 const WHEEL: u16 = 3;
 
 /// Which pane has the keys. Side by side both show; on a narrow terminal
-/// only the one with the keys does (TU-02).
+/// only the one with the keys does (TU-02). The answer's panel has them
+/// while [`App::form`] is an answer; that is drawn in the case's pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
     List,
     Case,
+    /// A button of the case's bar, which tab reaches on a case with no
+    /// answer to give: enter presses it.
+    Bar(Verb),
 }
 
 /// The screen's state.
@@ -330,6 +337,17 @@ pub(crate) struct App {
     pub(crate) hover: Option<Hit>,
     /// The stats strip (TU-13).
     pub(crate) strip: Strip,
+    /// The key the footer offers for a new line in a field.
+    pub(crate) newline: Newline,
+}
+
+/// The key for a new line in a field (TU-12): shift+enter where the
+/// terminal tells it from enter, through the kitty keyboard protocol, and
+/// alt+enter, which any terminal sends, otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Newline {
+    ShiftEnter,
+    AltEnter,
 }
 
 /// The stats strip's state (TU-13).
@@ -402,6 +420,7 @@ impl App {
                 image: false,
                 area: None,
             },
+            newline: Newline::AltEnter,
         }
     }
 
@@ -457,6 +476,29 @@ impl App {
         }
         self.follow_form();
         self.follow_compose();
+        self.settle_focus();
+    }
+
+    /// Where the keys go back to when they leave the answer, or a button
+    /// of the case's bar: the list, or the case on one case's screen.
+    fn home(&self) -> Focus {
+        if self.only.is_some() {
+            Focus::Case
+        } else {
+            Focus::List
+        }
+    }
+
+    /// Takes the keys off a button of the case's bar that the case no
+    /// longer offers, or once the case has an answer to give, whose parts
+    /// the ring goes round instead, as after the selection or the case
+    /// moved: back to where they go home to.
+    fn settle_focus(&mut self) {
+        if let Focus::Bar(verb) = self.focus
+            && (!self.verbs().contains(&verb) || self.answerable())
+        {
+            self.focus = self.home();
+        }
     }
 
     /// Closes the edit of a message an agent has picked up since, or that
@@ -937,6 +979,12 @@ impl App {
             return;
         }
         self.leave_panel();
+        if let Action::Filter(filter) = action {
+            if self.only.is_none() {
+                self.set_filter(filter);
+            }
+            return;
+        }
         self.pane_key(action.code(), false);
     }
 
@@ -1017,9 +1065,105 @@ impl App {
             self.open_key(key);
             return;
         }
+        self.settle_focus();
         match self.focus {
             Focus::List => self.list_key(key.code, ctrl),
             Focus::Case => self.case_key(key.code, ctrl),
+            Focus::Bar(verb) => self.bar_key(verb, key.code, ctrl),
+        }
+        self.settle_focus();
+    }
+
+    /// A key while a button of the case's bar has the keys: tab and
+    /// shift-tab move along the bar and back to the list, enter or space
+    /// presses the button, esc goes back, and any other key is the list's.
+    fn bar_key(&mut self, verb: Verb, code: KeyCode, ctrl: bool) {
+        let verbs = self.verbs();
+        let at = verbs.iter().position(|v| *v == verb).unwrap_or(0);
+        match code {
+            KeyCode::Tab => {
+                self.focus = verbs.get(at + 1).map_or(self.home(), |v| Focus::Bar(*v));
+            }
+            KeyCode::BackTab => {
+                self.focus = at
+                    .checked_sub(1)
+                    .and_then(|at| verbs.get(at))
+                    .map_or(self.home(), |v| Focus::Bar(*v));
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.focus = Focus::Case;
+                self.pane_key(KeyCode::Char(verb.key()), false);
+            }
+            KeyCode::Esc => self.focus = self.home(),
+            _ => {
+                self.focus = self.home();
+                match self.focus {
+                    Focus::Case => self.case_key(code, ctrl),
+                    _ => self.list_key(code, ctrl),
+                }
+            }
+        }
+    }
+
+    /// Whether the selected case can be answered now.
+    pub(crate) fn answerable(&self) -> bool {
+        self.selected_case()
+            .is_some_and(|(_, case)| Act::Answer.fits(case))
+    }
+
+    /// Tab, or shift-tab when `by` is back, from the list or the case: onto
+    /// the answer's first part, or its last; on a case with no answer to
+    /// give, onto the case's bar's first button, or its last (TU-12).
+    fn ring(&mut self, by: isize) {
+        if self.answerable() {
+            self.answer_at(|form| {
+                let parts = form.parts();
+                let part = if by > 0 { parts.first() } else { parts.last() };
+                if let Some(part) = part {
+                    form.go(*part);
+                }
+                true
+            });
+            return;
+        }
+        let verbs = self.verbs();
+        let verb = if by > 0 { verbs.first() } else { verbs.last() };
+        if let Some(verb) = verb {
+            self.focus = Focus::Bar(*verb);
+        }
+    }
+
+    /// Puts the keys in the selected case's answer, where `to` puts them,
+    /// with the case scrolled to it; or, when `to` says it cannot, leaves
+    /// them where they were. A case that cannot be answered says why.
+    fn answer_at(&mut self, to: impl FnOnce(&mut Form) -> bool) {
+        let focus = self.focus;
+        let Some(form) = self.enter_panel() else {
+            return;
+        };
+        if to(form) {
+            form.reveal = true;
+        } else {
+            self.leave_panel();
+            self.focus = focus;
+        }
+    }
+
+    /// Takes a paste into the field being typed in, whole, new lines and
+    /// all; one in no field is dropped, rather than read as keys (TU-12).
+    pub(crate) fn paste(&mut self, text: &str) {
+        if self.asking() {
+            return;
+        }
+        if let Some(form) = &mut self.form
+            && let Some(which) = form.being_edited()
+        {
+            form.field(which).paste(text, false);
+            form.reveal = form.act == Act::Answer;
+        } else if let Some(compose) = &mut self.compose
+            && let Some(part) = compose.part
+        {
+            compose.field(part).paste(text, part != Part::Body);
         }
     }
 
@@ -1079,6 +1223,7 @@ impl App {
             MouseEventKind::ScrollUp => self.wheel(under(), -1),
             _ => {}
         }
+        self.settle_focus();
         // What the click or the wheel did may have put something over the
         // pointer, as help, which nothing under it is lit through.
         self.hover = self.hovered();
@@ -1329,8 +1474,20 @@ impl App {
             KeyCode::Char('e') => self.edit_sent(),
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('s') if !ctrl && self.strip.room => self.strip.shown = !self.strip.shown,
-            KeyCode::Tab => self.set_filter(self.filter.step(1)),
-            KeyCode::BackTab => self.set_filter(self.filter.step(-1)),
+            KeyCode::Tab => self.ring(1),
+            KeyCode::BackTab => self.ring(-1),
+            KeyCode::Char(']') => self.set_filter(self.filter.step(1)),
+            KeyCode::Char('[') => self.set_filter(self.filter.step(-1)),
+            // A number answers the case at once: an option, an answer or
+            // a row, by its number, with the keys put on it there.
+            KeyCode::Char(c @ '1'..='9') => {
+                let n = c.to_digit(10).unwrap_or(0);
+                self.answer_at(|form| form.pick(n));
+            }
+            KeyCode::Char('n') => self.answer_at(|form| {
+                form.go(Spot::Field(Which::Note));
+                true
+            }),
             KeyCode::Char('f') if self.filter == Filter::Briefings => {
                 self.answered = match self.answered {
                     Group::Folded => Group::Shown,
@@ -1338,18 +1495,15 @@ impl App {
                 };
                 self.keep_selection();
             }
-            KeyCode::Char(c @ '1'..='5') => {
-                let at = usize::from(u8::try_from(c).unwrap_or(b'1') - b'1');
-                self.set_filter(Filter::ALL[at]);
-            }
             _ => self.move_key(code, ctrl),
         }
     }
 
-    /// The keys that move about: open the selected case, scroll it by the
-    /// page, or select the first or last case.
+    /// The keys that move about: into the case's answer, open the selected
+    /// case, scroll it by the page, or select the first or last case.
     fn move_key(&mut self, code: KeyCode, ctrl: bool) {
         match code {
+            KeyCode::Enter if self.answerable() => self.ring(1),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if self.selected.is_some() => {
                 self.focus = Focus::Case;
             }
@@ -1422,7 +1576,10 @@ impl App {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => self.form = None,
-            Outcome::Leave => self.leave_panel(),
+            Outcome::Leave => {
+                self.leave_panel();
+                self.focus = self.home();
+            }
             Outcome::Park => {
                 self.leave_panel();
                 self.start(Act::Park);

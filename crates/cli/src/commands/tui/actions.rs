@@ -18,6 +18,8 @@ pub(crate) enum Action {
     Edit,
     Message,
     Filter(Filter),
+    NextFilter,
+    PreviousFilter,
     Fold,
     Stats,
     First,
@@ -29,7 +31,7 @@ pub(crate) enum Action {
 impl Action {
     /// Every action, in the order the palette lists them when nothing is
     /// typed: the selected case's first, then moving about, then the rest.
-    pub(crate) const ALL: [Action; 17] = [
+    pub(crate) const ALL: [Action; 19] = [
         Action::Answer,
         Action::Park,
         Action::Resume,
@@ -41,6 +43,8 @@ impl Action {
         Action::Filter(Filter::Done),
         Action::Filter(Filter::All),
         Action::Filter(Filter::Briefings),
+        Action::NextFilter,
+        Action::PreviousFilter,
         Action::Fold,
         Action::First,
         Action::Last,
@@ -63,6 +67,8 @@ impl Action {
             Action::Filter(Filter::Done) => "Show done",
             Action::Filter(Filter::All) => "Show all",
             Action::Filter(Filter::Briefings) => "Show briefings",
+            Action::NextFilter => "Next filter",
+            Action::PreviousFilter => "Previous filter",
             Action::Fold => "Fold answered briefings",
             Action::First => "First case",
             Action::Last => "Last case",
@@ -81,7 +87,9 @@ impl Action {
             Action::Withdraw => "take back an answer, or a message",
             Action::Edit => "change a message no agent has picked up",
             Action::Message => "write to an agent",
-            Action::Filter(_) => "what the list shows",
+            Action::Filter(_) | Action::NextFilter | Action::PreviousFilter => {
+                "what the list shows"
+            }
             Action::Fold => "show or hide the answered briefings",
             Action::First => "select the first case in the list",
             Action::Last => "select the last case in the list",
@@ -100,11 +108,10 @@ impl Action {
             Action::Withdraw => "w",
             Action::Edit => "e",
             Action::Message => "m",
-            Action::Filter(Filter::Inbox) => "1",
-            Action::Filter(Filter::Flight) => "2",
-            Action::Filter(Filter::Done) => "3",
-            Action::Filter(Filter::All) => "4",
-            Action::Filter(Filter::Briefings) => "5",
+            // A filter by name has no key of its own: [ and ] step to it.
+            Action::Filter(_) => "",
+            Action::NextFilter => "]",
+            Action::PreviousFilter => "[",
             Action::Fold => "f",
             Action::First => "g",
             Action::Last => "G",
@@ -114,9 +121,12 @@ impl Action {
         }
     }
 
-    /// The key pressed to do it: its first character.
+    /// The key pressed to do it: its first character, if it has one.
     pub(crate) fn code(self) -> KeyCode {
-        KeyCode::Char(self.key().chars().next().unwrap_or(' '))
+        self.key()
+            .chars()
+            .next()
+            .map_or(KeyCode::Null, KeyCode::Char)
     }
 
     /// The act on the case the bar offers for it, if it is one.
@@ -142,6 +152,8 @@ impl Action {
         if app.modal() {
             return false;
         }
+        // A filter by name has no key, which one case's screen does not
+        // take either.
         if app.only.is_some() && !one_case_takes(self.code(), false) {
             return false;
         }
@@ -157,7 +169,11 @@ impl Action {
             Action::Fold => app.filter == Filter::Briefings,
             Action::First | Action::Last => !app.shown(app.filter).is_empty(),
             Action::Stats => app.strip.room,
-            Action::Message | Action::Help | Action::Quit => true,
+            Action::NextFilter
+            | Action::PreviousFilter
+            | Action::Message
+            | Action::Help
+            | Action::Quit => true,
         }
     }
 
