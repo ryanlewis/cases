@@ -3474,30 +3474,27 @@ fn tab_and_esc_move_the_keys_in_and_out_of_the_answer() {
     click(&mut app, "In flight");
     assert_eq!(app.filter, Filter::Inbox);
     let mut ring = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..2 {
         press(&mut app, KeyCode::Tab);
         ring.push(spot(&app));
     }
     assert_eq!(
         ring,
         [
+            // The buttons, one stop, at send.
             Some(Spot::Button(Press::Send)),
-            Some(Spot::Button(Press::Drop)),
-            Some(Spot::Button(Press::Discard)),
-            // Past the last, back to the list, keeping the draft.
+            // Past them, back to the list, keeping the draft.
             None,
         ]
     );
     assert_eq!(app.focus, Focus::List);
     let draft = app.answer_of(app.selected.unwrap()).unwrap();
     assert_eq!((draft.choice, draft.note.text()), (Some(2), "q1"));
-    // Shift-tab from the list is the answer's last part, and goes back
-    // round to the list before its first.
+    // Shift-tab from the list is the answer's buttons, at send, and goes
+    // back round to the list before its first part.
     press(&mut app, KeyCode::BackTab);
-    assert_eq!(spot(&app), Some(Spot::Button(Press::Discard)));
-    for _ in 0..3 {
-        press(&mut app, KeyCode::BackTab);
-    }
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Send)));
+    press(&mut app, KeyCode::BackTab);
     assert_eq!(spot(&app), Some(Spot::Field(Which::Note)));
     press(&mut app, KeyCode::BackTab);
     assert_eq!(spot(&app), Some(Spot::Choices));
@@ -3947,10 +3944,10 @@ fn the_keys_leave_a_discard_that_is_gone() {
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Char('o'));
     press(&mut app, KeyCode::Esc);
-    // From the note: send, drop, then discard.
-    for _ in 0..3 {
-        press(&mut app, KeyCode::Tab);
-    }
+    // From the note: the buttons, then along them to discard.
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
     let form = app.form.as_mut().unwrap();
     assert_eq!(form.spot(), Spot::Button(Press::Discard));
     form.other = false;
@@ -4430,48 +4427,38 @@ fn the_tab_ring_follows_the_kind() {
         assert_eq!(app.focus, Focus::List, "{kind}");
         parts
     };
+    // The buttons are one stop, at send, whatever buttons there are.
     let note = Spot::Field(Which::Note);
-    let [send, park, drop] = [Press::Send, Press::Park, Press::Drop].map(Spot::Button);
-    assert_eq!(ring("decision"), [Spot::Choices, note, send, drop]);
-    assert_eq!(ring("signoff"), [Spot::Choices, note, send, drop]);
+    let buttons = Spot::Button(Press::Send);
+    assert_eq!(ring("decision"), [Spot::Choices, note, buttons]);
+    assert_eq!(ring("signoff"), [Spot::Choices, note, buttons]);
     assert_eq!(
         ring("briefing"),
-        [Spot::Choices, Spot::Items, note, send, drop]
+        [Spot::Choices, Spot::Items, note, buttons]
     );
-    assert_eq!(ring("approval"), [Spot::Rows, note, send, drop]);
-    assert_eq!(
-        ring("question"),
-        [Spot::Field(Which::Text), note, send, drop]
-    );
-    assert_eq!(
-        ring("stuck"),
-        [Spot::Field(Which::Text), note, send, park, drop]
-    );
-    assert_eq!(ring("fyi"), [note, send, drop]);
+    assert_eq!(ring("approval"), [Spot::Rows, note, buttons]);
+    assert_eq!(ring("question"), [Spot::Field(Which::Text), note, buttons]);
+    assert_eq!(ring("stuck"), [Spot::Field(Which::Text), note, buttons]);
+    assert_eq!(ring("fyi"), [note, buttons]);
 
-    // A message has no answer: the bar's buttons are the ring.
+    // A message has no answer: the bar's buttons are the ring, as one
+    // stop, at its first button either way.
     let store = Store::new();
     message(&store, "A message");
     let mut app = store.app();
     show(&mut app, Filter::Flight);
     let mut stops = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..2 {
         press(&mut app, KeyCode::Tab);
         stops.push(app.focus);
     }
-    assert_eq!(
-        stops,
-        [
-            Focus::Bar(Verb::Withdraw),
-            Focus::Bar(Verb::Edit),
-            Focus::List
-        ]
-    );
+    assert_eq!(stops, [Focus::Bar(Verb::Withdraw), Focus::List]);
     press(&mut app, KeyCode::BackTab);
-    assert_eq!(app.focus, Focus::Bar(Verb::Edit));
-    let shown = screen(&mut app, 120, 40);
-    assert!(shown.contains("▸ Edit"), "{shown}");
-    assert!(shown.contains("on: Edit · tab → list"), "{shown}");
+    assert_eq!(app.focus, Focus::Bar(Verb::Withdraw));
+    press(&mut app, KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::List);
+    press(&mut app, KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Bar(Verb::Withdraw));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.focus, Focus::List);
     press(&mut app, KeyCode::Tab);
@@ -4480,6 +4467,82 @@ fn the_tab_ring_follows_the_kind() {
         app.form.as_ref().map(|f| f.act),
         Some(super::form::Act::Withdraw)
     );
+}
+
+/// A row of buttons is one stop (TU-12): left and right move along it
+/// and stop at its ends, enter and space press the one the keys are on,
+/// and tab or shift-tab leave it from any of them.
+#[test]
+fn a_row_of_buttons_is_one_stop_with_arrows_along_it() {
+    use super::form::{Confirm, Press, Spot};
+    let store = Store::new();
+    store.open("stuck", "today", "Stuck?", |_| {});
+    let mut app = store.app();
+    let spot = |app: &App| app.form.as_ref().map(super::form::Form::spot);
+    // From the list, shift-tab lands on the buttons at send.
+    press(&mut app, KeyCode::BackTab);
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Send)));
+    // Left at the first stays there; right goes along to the last, and
+    // stays there.
+    press(&mut app, KeyCode::Left);
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Send)));
+    let mut along = Vec::new();
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Right);
+        along.push(spot(&app));
+    }
+    assert_eq!(
+        along,
+        [Press::Park, Press::Drop, Press::Drop].map(|p| Some(Spot::Button(p)))
+    );
+    // Enter presses the one the keys are on.
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.form.as_ref().unwrap().confirm, Some(Confirm::Drop));
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Left);
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(
+        app.form.as_ref().map(|f| f.act),
+        Some(super::form::Act::Park)
+    );
+    let mut app = store.app();
+    // Tab leaves the row from park, its middle; shift-tab from drop
+    // goes back to the note.
+    press(&mut app, KeyCode::BackTab);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Park)));
+    press(&mut app, KeyCode::Tab);
+    assert_eq!((spot(&app), app.focus), (None, Focus::List));
+    press(&mut app, KeyCode::BackTab);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::BackTab);
+    assert_eq!(spot(&app), Some(Spot::Field(Which::Note)));
+    // Tabbing back in lands on send, not the last one used.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(spot(&app), Some(Spot::Button(Press::Send)));
+
+    // The case's bar, in the ring of a case with no answer, is the same.
+    let store = Store::new();
+    message(&store, "A message");
+    let mut app = store.app();
+    show(&mut app, Filter::Flight);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Bar(Verb::Withdraw));
+    press(&mut app, KeyCode::Left);
+    assert_eq!(app.focus, Focus::Bar(Verb::Withdraw));
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.focus, Focus::Bar(Verb::Edit));
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.focus, Focus::Bar(Verb::Edit));
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("▸ Edit"), "{shown}");
+    assert!(
+        shown.contains("on: Edit · ←→ buttons · tab → list"),
+        "{shown}"
+    );
+    press(&mut app, KeyCode::Enter);
+    assert!(app.compose.is_some());
 }
 
 /// A number answers the selected case from the list, with the keys put
@@ -4582,12 +4645,24 @@ fn the_focus_is_drawn_on_each_region_and_part() {
     let shown = screen(&mut app, 120, 40);
     let (x, y) = spot(&shown, "▸ note");
     assert_eq!(bg_at(&mut app, (x + 2, y)), view::FOCUS_BG);
-    assert!(shown.contains("on: note · tab → Send"), "{shown}");
-    // Then a button: pointed at by its own face, not filled.
+    assert!(shown.contains("on: note · tab → buttons"), "{shown}");
+    // Then the buttons, at send: pointed at by its own face, not filled.
     press(&mut app, KeyCode::Tab);
     let shown = screen(&mut app, 120, 40);
     assert!(shown.contains("▸ ⏎ Send"), "{shown}");
-    assert!(shown.contains("on: Send · tab → Drop"), "{shown}");
+    assert!(
+        shown.contains("on: Send · ←→ buttons · tab → list"),
+        "{shown}"
+    );
+    // Right moves the pointer along them.
+    press(&mut app, KeyCode::Right);
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("▸ d Drop"), "{shown}");
+    assert!(!shown.contains("▸ ⏎ Send"), "{shown}");
+    assert!(
+        shown.contains("on: Drop · ←→ buttons · tab → list"),
+        "{shown}"
+    );
     // An approval's row: its line and its verdicts.
     let store = Store::new();
     store.open("approval", "today", "Move?", |open| {

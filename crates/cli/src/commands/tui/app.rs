@@ -1074,27 +1074,29 @@ impl App {
         self.settle_focus();
     }
 
-    /// A key while a button of the case's bar has the keys: tab and
-    /// shift-tab move along the bar and back to the list, enter or space
-    /// presses the button, esc goes back, and any other key is the list's.
+    /// A key while a button of the case's bar has the keys: the bar is
+    /// one stop, so tab and shift-tab go back to the list, left and right
+    /// move along the bar, stopping at either end, enter or space presses
+    /// the button, esc goes back, and any other key is the list's.
     fn bar_key(&mut self, verb: Verb, code: KeyCode, ctrl: bool) {
         let verbs = self.verbs();
         let at = verbs.iter().position(|v| *v == verb).unwrap_or(0);
         match code {
-            KeyCode::Tab => {
-                self.focus = verbs.get(at + 1).map_or(self.home(), |v| Focus::Bar(*v));
-            }
-            KeyCode::BackTab => {
-                self.focus = at
-                    .checked_sub(1)
-                    .and_then(|at| verbs.get(at))
-                    .map_or(self.home(), |v| Focus::Bar(*v));
+            KeyCode::Left | KeyCode::Right => {
+                let to = if code == KeyCode::Left {
+                    at.saturating_sub(1)
+                } else {
+                    at + 1
+                };
+                if let Some(verb) = verbs.get(to) {
+                    self.focus = Focus::Bar(*verb);
+                }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.focus = Focus::Case;
                 self.pane_key(KeyCode::Char(verb.key()), false);
             }
-            KeyCode::Esc => self.focus = self.home(),
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => self.focus = self.home(),
             _ => {
                 self.focus = self.home();
                 match self.focus {
@@ -1113,7 +1115,7 @@ impl App {
 
     /// Tab, or shift-tab when `by` is back, from the list or the case: onto
     /// the answer's first part, or its last; on a case with no answer to
-    /// give, onto the case's bar's first button, or its last (TU-12).
+    /// give, onto the case's bar, at its first button either way (TU-12).
     fn ring(&mut self, by: isize) {
         if self.answerable() {
             self.answer_at(|form| {
@@ -1126,9 +1128,7 @@ impl App {
             });
             return;
         }
-        let verbs = self.verbs();
-        let verb = if by > 0 { verbs.first() } else { verbs.last() };
-        if let Some(verb) = verb {
+        if let Some(verb) = self.verbs().first() {
             self.focus = Focus::Bar(*verb);
         }
     }
