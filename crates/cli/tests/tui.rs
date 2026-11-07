@@ -952,6 +952,7 @@ impl Tui {
             self.shows("\x1b[?1003l"),
             "the pointer's moves are still reported"
         );
+        assert!(self.shows("\x1b[?2004l"), "pastes are still bracketed");
         // And the keys are as they were, when the screen asked for the
         // kitty keyboard protocol's (TU-12).
         if let Some(pushed) = self.shown.windows(5).rposition(|w| w == b"\x1b[>1u") {
@@ -1611,6 +1612,25 @@ fn shift_enter_is_a_new_line_where_the_terminal_tells_it_from_enter() {
     );
     // Alt+enter, as a terminal with no protocol sends it.
     tui.keys(&[b"\r", b"use", b"\x1b\r", b"the mirror"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+}
+
+/// Review repro: a paste with a new line in it goes into the field whole,
+/// as the terminal brackets it, rather than its new line sending what was
+/// pasted so far and the rest being read as keys (TU-12).
+#[cfg(unix)]
+#[test]
+fn a_paste_goes_into_the_field_whole() {
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(tui.shows("\x1b[?2004h"), "pastes are not bracketed");
+    tui.keys(&[b"\r", b"\x1b[200~use\rthe mirror\x1b[201~"]);
     tui.mark();
     tui.keys(&[b"\r"]);
     assert!(tui.shows("recorded answer"), "{}", tui.drawn());

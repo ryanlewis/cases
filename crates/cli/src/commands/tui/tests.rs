@@ -4641,3 +4641,29 @@ fn the_footer_leads_with_the_keys_place_and_the_answer() {
         assert_eq!(footer(kind), format!("{lead}   {rest}"), "{kind}");
     }
 }
+
+/// Review repro: a paste goes into the field being typed in whole, its
+/// new lines too, rather than an enter in it sending; in a one-line part
+/// of a message its new lines are spaces; and in no field it is dropped,
+/// not read as keys.
+#[test]
+fn a_paste_goes_into_the_field_being_typed_in() {
+    let store = Store::new();
+    store.open("stuck", "today", "Stuck", |_| {});
+    let mut app = store.app();
+    app.paste("q");
+    assert!(!app.quit && app.form.is_none(), "a paste was read as keys");
+    press(&mut app, KeyCode::Enter);
+    app.paste("use\r\nthe mirror");
+    assert!(app.pending.is_none());
+    let form = app.form.as_ref().unwrap();
+    assert_eq!(form.text.text(), "use\nthe mirror");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('m'));
+    app.paste("two\nlines");
+    let compose = app.compose.as_mut().unwrap();
+    let part = compose.part.unwrap();
+    assert_ne!(part, super::compose::Part::Body);
+    assert_eq!(compose.field(part).text(), "two lines");
+}

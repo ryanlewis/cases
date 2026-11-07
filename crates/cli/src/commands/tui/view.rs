@@ -913,7 +913,7 @@ const MIN_BODY: u16 = 3;
 /// Where the case pane is drawn in `body`: beside the list, or alone; or
 /// nowhere, on a narrow screen showing the list.
 fn case_pane(app: &App, body: Rect, side_by_side: bool) -> Option<Rect> {
-    if app.only.is_some() || (!side_by_side && app.focus == Focus::Case) {
+    if app.only.is_some() || (!side_by_side && app.focus != Focus::List) {
         Some(body)
     } else if side_by_side {
         let [_, _, case] = side_by_side_panes(body);

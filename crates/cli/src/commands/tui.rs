@@ -32,8 +32,9 @@ use cases_core::{Kind, State};
 use cases_store_sqlite::{Db, Key};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags,
-    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, Event, KeyCode, KeyModifiers,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 
@@ -304,27 +305,30 @@ fn init() -> io::Result<DefaultTerminal> {
         // alternate screen, then this stops the mouse reports.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(io::stdout(), DisableMouseCapture);
-            pop_keyboard();
+            let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
             hook(info);
         }));
     });
     TAKEN.store(true, Ordering::SeqCst);
     let terminal = ratatui::try_init()?;
     IMAGE_HOOK.call_once(|| {
-        // Over ratatui's hook, so that the strip's image is deleted while
-        // the alternate screen, which holds it, is still up.
+        // Over ratatui's hook, so that the strip's image is deleted, and
+        // the keys given back, while the alternate screen, which holds
+        // them, is still up.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             unshow();
+            pop_keyboard();
             hook(info);
         }));
     });
     // Clicks, the wheel and every move of the pointer, in SGR form: the
     // moves light what the pointer is over. The loop takes the moves that
     // queue up as one, so that the screen is not drawn again for each.
+    // And pastes bracketed, so that a new line in one is not enter, which
+    // sends (TU-12).
     if let Err(error) = io::stdout()
-        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h")
+        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h")
         .and_then(|()| io::stdout().flush())
     {
         restore();
@@ -357,7 +361,7 @@ fn pop_keyboard() {
 fn restore() {
     unshow();
     pop_keyboard();
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     TAKEN.store(false, Ordering::SeqCst);
 }
@@ -442,7 +446,7 @@ fn put_back() {
     }
     let _ = rustix::io::write(
         io::stdout(),
-        b"\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+        b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
     );
     let _ = ratatui::crossterm::terminal::disable_raw_mode();
 }
@@ -560,6 +564,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
                 Event::Mouse(mouse) => {
                     app.mouse(mouse);
                 }
+                Event::Paste(text) => app.paste(&text),
                 // The screen is drawn afresh: the image is deleted, so that
                 // none is left where the strip was, and sent again.
                 Event::Resize(..) => {

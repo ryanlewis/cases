@@ -490,11 +490,12 @@ impl App {
     }
 
     /// Takes the keys off a button of the case's bar that the case no
-    /// longer offers, as after the selection or the case moved: back to
-    /// where they go home to.
+    /// longer offers, or once the case has an answer to give, whose parts
+    /// the ring goes round instead, as after the selection or the case
+    /// moved: back to where they go home to.
     fn settle_focus(&mut self) {
         if let Focus::Bar(verb) = self.focus
-            && !self.verbs().contains(&verb)
+            && (!self.verbs().contains(&verb) || self.answerable())
         {
             self.focus = self.home();
         }
@@ -1145,6 +1146,24 @@ impl App {
         } else {
             self.leave_panel();
             self.focus = focus;
+        }
+    }
+
+    /// Takes a paste into the field being typed in, whole, new lines and
+    /// all; one in no field is dropped, rather than read as keys (TU-12).
+    pub(crate) fn paste(&mut self, text: &str) {
+        if self.asking() {
+            return;
+        }
+        if let Some(form) = &mut self.form
+            && let Some(which) = form.being_edited()
+        {
+            form.field(which).paste(text, false);
+            form.reveal = form.act == Act::Answer;
+        } else if let Some(compose) = &mut self.compose
+            && let Some(part) = compose.part
+        {
+            compose.field(part).paste(text, part != Part::Body);
         }
     }
 
