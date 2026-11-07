@@ -98,7 +98,8 @@ pub(crate) enum Spot {
     Items,
     /// A field to type in.
     Field(Which),
-    /// One of the panel's buttons.
+    /// The panel's buttons, one stop for tab, with the button the keys are
+    /// on: left and right move between them.
     Button(Press),
 }
 
@@ -255,8 +256,12 @@ impl Form {
             // typed, leaves the keys on the first.
             None => {
                 let parts = self.parts();
+                let presses = self.presses();
                 self.spot
-                    .filter(|spot| parts.contains(spot))
+                    .filter(|spot| match spot {
+                        Spot::Button(press) => presses.contains(press),
+                        _ => parts.contains(spot),
+                    })
                     .or_else(|| parts.first().copied())
                     .unwrap_or(Spot::Button(Press::Send))
             }
@@ -264,7 +269,8 @@ impl Form {
     }
 
     /// The parts of the answer's panel, in the order tab moves through
-    /// them: what its kind asks for, the note, then its buttons.
+    /// them: what its kind asks for, the note, then its buttons, as one
+    /// stop that tab lands on at send, the first.
     pub(crate) fn parts(&self) -> Vec<Spot> {
         let mut parts = Vec::new();
         match self.kind {
@@ -280,7 +286,7 @@ impl Form {
             _ => {}
         }
         parts.push(Spot::Field(Which::Note));
-        parts.extend(self.presses().into_iter().map(Spot::Button));
+        parts.push(Spot::Button(Press::Send));
         parts
     }
 
@@ -295,7 +301,11 @@ impl Form {
     /// out of any field, for the list (TU-12).
     pub(crate) fn tab(&mut self, by: isize) -> bool {
         let parts = self.parts();
-        let next = match parts.iter().position(|part| *part == self.spot()) {
+        let stop = match self.spot() {
+            Spot::Button(_) => Spot::Button(Press::Send),
+            spot => spot,
+        };
+        let next = match parts.iter().position(|part| *part == stop) {
             Some(at) => at.checked_add_signed(by),
             None if by > 0 => Some(0),
             None => parts.len().checked_sub(1),
@@ -567,6 +577,8 @@ impl Form {
                 self.pick(c.to_digit(10).unwrap_or(0));
             }
             (KeyCode::Enter | KeyCode::Char(' '), Spot::Button(press)) => return self.press(press),
+            (KeyCode::Left, Spot::Button(press)) => self.move_press(press, -1),
+            (KeyCode::Right, Spot::Button(press)) => self.move_press(press, 1),
             (KeyCode::Char('j') | KeyCode::Down, Spot::Choices) => self.move_choice(1),
             (KeyCode::Char('k') | KeyCode::Up, Spot::Choices) => self.move_choice(-1),
             (KeyCode::Char('j') | KeyCode::Down, Spot::Items) => {
@@ -583,6 +595,19 @@ impl Form {
             _ => return self.command(code),
         }
         Outcome::Stay
+    }
+
+    /// Moves the keys `by` one along the panel's buttons from `press`,
+    /// stopping at either end.
+    fn move_press(&mut self, press: Press, by: isize) {
+        let presses = self.presses();
+        let at = presses.iter().position(|p| *p == press).unwrap_or(0);
+        let to = at
+            .saturating_add_signed(by)
+            .min(presses.len().saturating_sub(1));
+        if let Some(press) = presses.get(to) {
+            self.spot = Some(Spot::Button(*press));
+        }
     }
 
     /// Moves the choice `by` one along the panel's choices: a decision's
@@ -997,8 +1022,7 @@ mod tests {
             [
                 Spot::Choices,
                 Spot::Field(Which::Note),
-                Spot::Button(Press::Send),
-                Spot::Button(Press::Drop)
+                Spot::Button(Press::Send)
             ]
         );
         assert_eq!(decision.spot(), Spot::Choices);
@@ -1018,21 +1042,23 @@ mod tests {
             (decision.spot(), decision.editing),
             (Spot::Button(Press::Send), None)
         );
-        press(&mut decision, KeyCode::Tab);
+        // The buttons are one stop: right and left move along them.
+        press(&mut decision, KeyCode::Right);
+        assert_eq!(decision.spot(), Spot::Button(Press::Drop));
         assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
         assert_eq!(decision.confirm, Some(Confirm::Drop));
         decision.confirm = None;
         // With something chosen or typed, discard is the last button.
-        press(&mut decision, KeyCode::Tab);
+        press(&mut decision, KeyCode::Right);
         assert_eq!(decision.spot(), Spot::Button(Press::Discard));
         assert_eq!(press(&mut decision, KeyCode::Enter), Outcome::Stay);
         assert_eq!(decision.confirm, Some(Confirm::Discard));
         assert_eq!(press(&mut decision, KeyCode::Char('y')), Outcome::Cancel);
-        // Past the last part, the keys leave the panel, for the list.
+        // Past the buttons, the keys leave the panel, for the list.
         assert_eq!(press(&mut decision, KeyCode::Tab), Outcome::Leave);
         assert_eq!(decision.spot(), Spot::Button(Press::Discard));
-        press(&mut decision, KeyCode::BackTab);
-        press(&mut decision, KeyCode::BackTab);
+        press(&mut decision, KeyCode::Left);
+        press(&mut decision, KeyCode::Left);
         assert_eq!(
             press(&mut decision, KeyCode::Char(' ')),
             answer(|a| {

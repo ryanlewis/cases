@@ -2617,29 +2617,32 @@ fn focus_line(app: &App, verbs: &[Verb]) -> Option<String> {
         Some(form) if form.act == Act::Answer => {
             let spot = form.spot();
             let parts = form.parts();
+            // The buttons are one stop, which tab reaches at send.
+            let stop = match spot {
+                Spot::Button(_) => Spot::Button(Press::Send),
+                spot => spot,
+            };
             let next = parts
                 .iter()
-                .position(|part| *part == spot)
+                .position(|part| *part == stop)
                 .and_then(|at| parts.get(at + 1))
                 .map(|part| part_name(form, *part));
-            (
-                spot_name(form, spot),
-                Some(next.unwrap_or_else(|| home.into())),
-            )
+            let here = match spot {
+                Spot::Button(_) => format!("{} · ←→ buttons", spot_name(form, spot)),
+                _ => spot_name(form, spot),
+            };
+            (here, Some(next.unwrap_or_else(|| home.into())))
         }
         Some(_) => return None,
         None if app.compose.is_some() => return None,
         None => match app.focus {
-            Focus::Bar(verb) => {
-                let at = verbs.iter().position(|v| *v == verb).unwrap_or(0);
-                let next = verbs.get(at + 1).map_or(home, |v| v.label());
-                (verb.label().into(), Some(next.into()))
-            }
+            // The bar is one stop: tab leaves it.
+            Focus::Bar(verb) => (format!("{} · ←→ buttons", verb.label()), Some(home.into())),
             focus => {
                 let here = if focus == Focus::List { "list" } else { "case" };
                 let first = app.selected_case().and_then(|(key, case)| {
                     if !Act::Answer.fits(case) {
-                        return verbs.first().map(|verb| verb.label().into());
+                        return (!verbs.is_empty()).then(|| "buttons".into());
                     }
                     let fresh;
                     let form = if let Some(form) = app.answer_of(*key) {
@@ -2668,7 +2671,8 @@ fn part_name(form: &Form, spot: Spot) -> String {
         Spot::Choices => "answers".into(),
         Spot::Rows => "rows".into(),
         Spot::Items => "items".into(),
-        _ => spot_name(form, spot),
+        Spot::Button(_) => "buttons".into(),
+        Spot::Field(_) => spot_name(form, spot),
     }
 }
 
@@ -2847,7 +2851,7 @@ pub(crate) const KEYS: [(&str, &str); 28] = [
     ("⇧⏎ alt+⏎", "in a field: a new line (alt+⏎ in any terminal)"),
     (
         "tab ⇧tab",
-        "list, then the answer's parts or the case's buttons",
+        "list, the answer's parts; ← → along a row of buttons",
     ),
     ("esc", "leave the field, then back to the list"),
     ("a", "into the answer; esc keeps it, Discard empties it"),
@@ -2884,7 +2888,10 @@ pub(crate) const ONE_KEYS: [(&str, &str); 19] = [
     ("n", "write the answer's note"),
     ("⏎", "into the answer; in it, send, or press the button"),
     ("⇧⏎ alt+⏎", "in a field: a new line (alt+⏎ in any terminal)"),
-    ("tab ⇧tab", "the case, then the answer's parts"),
+    (
+        "tab ⇧tab",
+        "the case, the answer's parts; ← → along buttons",
+    ),
     ("esc", "leave the field, then the answer"),
     ("a", "into the answer; esc keeps it, Discard empties it"),
     ("j k ↑ ↓", "scroll the case"),
