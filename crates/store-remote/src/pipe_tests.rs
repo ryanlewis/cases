@@ -108,20 +108,23 @@ fn read_then_write(script: &str, after: impl FnOnce(&Path)) -> usize {
     starts(dir.path())
 }
 
-/// Waits until the child whose pid the script wrote to `$LOG.pid` in `dir`
-/// has exited, and leaves it for the pipe to reap: the test's process is
-/// its parent, so it can wait on it without taking its status. A child the
-/// pipe reaped already, when it looked at the connection as it went back
-/// to the pool, had exited.
-fn exited(dir: &Path) {
+/// Waits up to 5 s for the child whose pid the script wrote to `$LOG.pid`
+/// in `dir` to exit, and leaves it for the pipe to reap: the test's
+/// process is its parent, so it can look without taking its status. A
+/// child the pipe reaped already, when it looked at the connection as it
+/// went back to the pool, had exited.
+fn child_exited(dir: &Path) {
     use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
     let pid = Pid::from_raw(log_pid(dir)).expect("a pid");
-    match waitid(
-        WaitId::Pid(pid),
-        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-    ) {
-        Ok(_) | Err(rustix::io::Errno::CHILD) => {}
-        Err(error) => panic!("waiting for the child {pid:?}: {error}"),
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        match waitid(WaitId::Pid(pid), options) {
+            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => return,
+            Ok(None) => assert!(Instant::now() < until, "the child {pid:?} did not exit"),
+            Err(error) => panic!("waiting for the child {pid:?}: {error}"),
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -153,7 +156,7 @@ fn a_child_that_exits_after_its_answer_is_not_used_again() {
         "\"$ANSWER\"; [ -e \"$LOG.once\" ] || { : > \"$LOG.once\"; exit 0; };;",
     );
     assert!(once.contains("exit 0; };;"), "{once}");
-    assert_eq!(read_then_write(&once, exited), 2);
+    assert_eq!(read_then_write(&once, child_exited), 2);
 }
 
 #[test]
