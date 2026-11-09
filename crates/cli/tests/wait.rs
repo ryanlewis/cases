@@ -3087,7 +3087,7 @@ fn a_full_wait_that_took_a_message_prints_it_by_actor_id_when_the_actors_cannot_
 /// the store's actors: once before any pickup, then again after each, so
 /// that an actor a pickup made is named. It is counted on a forwarded
 /// store, whose every call is a request on the pipe. The count is pinned
-/// so that reading them less (finding B2) changes it on purpose.
+/// so that reading them less changes it on purpose.
 #[cfg(unix)]
 #[test]
 fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
@@ -3158,6 +3158,7 @@ fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
 /// fails, only the message it took and has not printed: not the one it
 /// printed. Its reader takes one line and goes, and the second line is too
 /// long for the pipe to hold, so that its write fails.
+#[cfg(unix)]
 #[test]
 fn a_listening_wait_whose_stdout_fails_after_a_line_names_only_the_messages_not_printed() {
     let env = Env::new();
