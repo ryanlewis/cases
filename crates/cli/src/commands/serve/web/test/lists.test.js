@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { html } from "../static/html.ts";
-import { HUSH, List, UNHEARD, UNPICKED, Waiting, addressee, afterRead, counts, heard, lineFollows, lineFrom, listed, listensForCase, parts, quiet, takes, tally, unpicked, zero, Zero } from "../static/lists.ts";
+import { HUSH, List, Tally, UNHEARD, UNPICKED, Waiting, addressee, afterRead, counts, heard, lineFollows, lineFrom, listed, listensForCase, parts, quiet, takes, tally, unpicked, zero, Zero } from "../static/lists.ts";
 import { mark } from "../static/fresh.ts";
 import { decision, steps } from "./case.js";
 
@@ -469,4 +469,14 @@ test("a withdrawn card whose withdraw has no data says no reason", () => {
   const done = list([], [blank], "done");
   assert.ok(done.includes('<a class="card state-withdrawn" href="/cases/w2-case-w2?show=done">'), done);
   assert.ok(!done.includes('<p class="ask">'), done);
+});
+
+test("the header's tally shows the counts that are not zero, in order, only blocking hot", () => {
+  const tallied = (t) => render(html`<${Tally} t=${t} />`);
+  assert.equal(
+    tallied({ waiting: 6, blocking: 1, today: 2, whenever: 0, parked: 3 }),
+    '<span id="tally" class="label tally"><span class="hot"><strong>1</strong> blocking</span> · <span><strong>2</strong> today</span> · <span><strong>3</strong> parked</span></span>',
+  );
+  assert.equal(tallied({ waiting: 1, blocking: 0, today: 0, whenever: 1, parked: 0 }), '<span id="tally" class="label tally"><span><strong>1</strong> whenever</span></span>');
+  assert.equal(tallied({ waiting: 0, blocking: 0, today: 0, whenever: 0, parked: 0 }), '<span id="tally" class="label tally"></span>');
 });
