@@ -1,11 +1,12 @@
 {
   "name": "cases-inbox",
   "private": true,
-  "description": "Type-checks the inbox's TypeScript with tsc, runs its tests in node (test/), and checks the vendored and npm JavaScript against advisories (advisories.js). Nothing here is built or served: build.rs strips the types, and the vendored files are in static/vendor/.",
+  "description": "Type-checks the inbox's TypeScript with tsc, runs its tests in node (test/, with `npm run coverage` for a coverage table), and checks the vendored and npm JavaScript against advisories (advisories.js). Nothing here is built or served: build.rs strips the types, and the vendored files are in static/vendor/.",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --import ./test/hooks.js --test test/*.test.js",
+    "coverage": "node --import ./test/hooks.js --test --experimental-test-coverage --test-coverage-exclude='test/**' --test-coverage-exclude='**/vendor/**' --test-coverage-exclude='node_modules/**' test/*.test.js",
     "advisories": "node advisories.js"
   },
   "devDependencies": {
