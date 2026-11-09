@@ -1383,3 +1383,100 @@ fn a_steady_remote_wait_collects_until_its_timeout() {
         holds(&r.fake)
     );
 }
+
+/// A steady wait, its server failing from the read it found an answer at:
+/// it holds the answer, and nothing new can come.
+fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child) {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    // The first read and held poll, and the read the answer wakes it to;
+    // then every request fails.
+    for _ in 0..3 {
+        r.fake.fault(PASS);
+    }
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let mut args = vec!["--id", &answered, "--id", &left, "--mood", "steady"];
+    args.extend(timeout);
+    let wait = r.wait(&args);
+    assert!(soon(Duration::from_secs(10), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    (r, answered, wait)
+}
+
+/// A steady wait that holds an answer, and whose server then fails every
+/// request, prints the answer at the end of its quiet time, exit 0: not at
+/// its timeout and, with none, not never (AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_read_while_it_collects_prints_at_the_end_of_its_quiet_time() {
+    let start = Instant::now();
+    let waits = [
+        collecting_through_an_outage(&["--timeout", "60s"]),
+        collecting_through_an_outage(&[]),
+    ];
+    for (_r, answered, mut wait) in waits {
+        // Its quiet time is 10 s; well past it, the wait is stopped.
+        let ended = soon(Duration::from_secs(25), || {
+            wait.try_wait().unwrap().is_some()
+        });
+        let took = start.elapsed();
+        if !ended {
+            wait.kill().unwrap();
+            let out = wait.wait_with_output().unwrap();
+            panic!("still waiting after {took:?}: {out:?}");
+        }
+        let out = Output::from(wait.wait_with_output().unwrap());
+        assert_eq!(out.code, 0, "{out:?}");
+        let lines: Vec<_> = out.stdout.lines().map(json).collect();
+        assert_eq!(lines.len(), 1, "{out:?}");
+        assert_eq!(lines[0]["id"], answered.as_str());
+        assert!(took >= Duration::from_secs(9), "{took:?}");
+        assert_eq!(
+            out.stderr.matches("the server failed (503)").count(),
+            1,
+            "{out:?}"
+        );
+    }
+}
+
+/// A steady wait that holds nothing rides a failing server out until its
+/// timeout, as an eager one does, and ends there with nothing, exit 2.
+#[test]
+fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Unanswered");
+    r.fake.fault(PASS);
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let start = Instant::now();
+    let out = Output::from(
+        r.wait(&["--id", &id, "--mood", "steady", "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    let took = start.elapsed();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        took >= Duration::from_secs(3) && took < Duration::from_secs(6),
+        "{took:?}"
+    );
+    assert!(out.stderr.contains("the server failed (503)"), "{out:?}");
+}
