@@ -682,21 +682,39 @@ test("with an old cursor kept and localStorage no longer taking writes, the same
   assert.equal(N.shown.length, 6);
 });
 
-// Pinned as it is: a Notification that cannot be made (Chrome on Android
-// throws "Illegal constructor" from `new Notification`) is caught as if
-// serve were out of reach, so the cursor does not move, and the items
-// before it are shown again at every check. The catch's comment speaks only
-// of serve. Reported as a follow-up; not changed here.
-test("a notification the browser will not make leaves the cursor where it was, and is tried again", async (t) => {
+// A Notification the browser will not make (Chrome on Android throws
+// "Illegal constructor" from `new Notification`) is passed over, and the
+// cursor moves past it all the same: each item is tried once, shown or not,
+// so the items before it are not shown again, and the items after it are
+// tried.
+test("a notification the browser will not make is passed over, and the others are shown once", async (t) => {
   await forget(t);
   const N = browser("granted", { fails: (title) => title === "title 2" });
   prefs.values = { notify: "all" };
   keep({ boot: "b1", id: 0 });
-  const asked = feed([page("b1", 2, [item(1), item(2)])]);
+  const asked = feed([page("b1", 3, [item(1), item(2), item(3)]), page("b1", 3)]);
   const n = await start(t);
-  assert.deepEqual(N.shown.map((s) => s.title), ["title 1"]);
-  assert.deepEqual(kept(), { boot: "b1", id: 0 });
+  assert.deepEqual(N.shown.map((s) => s.title), ["title 1", "title 3"]);
+  assert.deepEqual(kept(), { boot: "b1", id: 3 });
+  await n.tick(4999);
+  assert.equal(asked.length, 1);
+  await n.tick(1);
+  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=3"]);
+  assert.equal(N.shown.length, 2);
+});
+
+test("in a browser that will make none, the cursor still moves on, and the tab asks at its usual pace", async (t) => {
+  await forget(t);
+  const N = browser("granted", { fails: () => true });
+  prefs.values = { notify: "all" };
+  keep({ boot: "b1", id: 0 });
+  const asked = feed([page("b1", 2, [item(1), item(2)]), page("b1", 4, [item(1), item(2), item(3), item(4)])]);
+  const n = await start(t);
+  assert.deepEqual(kept(), { boot: "b1", id: 2 });
+  await n.tick(0);
+  assert.equal(asked.length, 1);
   await n.tick(5000);
-  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=0"]);
-  assert.deepEqual(N.shown.map((s) => s.title), ["title 1", "title 1"]);
+  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=2"]);
+  assert.deepEqual(kept(), { boot: "b1", id: 4 });
+  assert.deepEqual(N.shown, []);
 });
