@@ -165,15 +165,22 @@ async fn store(State(app): State<Arc<App>>, request: Request) -> Response {
     );
     let answered = tokio::task::spawn_blocking(move || {
         let answer = dial::handle_http(&app.db, &request, &app.leases);
-        (answer.status(), answer.body().clone())
+        let cause = answer.body()["error"]["message"]
+            .as_str()
+            .map(str::to_owned);
+        (
+            answer.status(),
+            answer.body().to_string().into_bytes(),
+            cause,
+        )
     })
     .await;
     match answered {
-        Ok((status, body)) => {
+        Ok((status, body, cause)) => {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            let response = json(status, body.to_string().into_bytes());
-            match body["error"]["message"].as_str() {
-                Some(message) => failed(response, message),
+            let response = json(status, body);
+            match cause {
+                Some(cause) => failed(response, &cause),
                 None => response,
             }
         }
