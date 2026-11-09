@@ -391,6 +391,93 @@ test("a send taken after a later send went counts, and the later send's answer c
   assert.equal(posted.length, 2);
 });
 
+test("a composer closed with its send out keeps the next composer from sending until that send is answered", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer;
+  const posted = serve([() => new Promise((resolve) => (answer = resolve)), () => new Response(JSON.stringify({ id: "m2" }), { status: 200 })]);
+  const a = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(a, "Rebase");
+  const first = a.find((v) => v.type === "form").props.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  // Escape, then discard: the dialog closes with the send still out, and
+  // the app takes the composer away, as preact does, its refs emptied.
+  a.act(() => a.find((v) => v.type === "dialog").props.onCancel(event()));
+  a.act(() => a.find(button("discard")).props.onClick());
+  assert.equal(a.log.at(-1), "close");
+  a.find((v) => v.type === "dialog").ref.current = null;
+  a.unmount();
+  // Opened again, with the same note: its send is held, and says why.
+  const b = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(b, "Rebase");
+  await submit(b);
+  assert.equal(posted.length, 1);
+  assert.ok(b.page().includes('<p class="error" role="alert">the message sent before is not answered yet: wait for it before sending this one</p>'), b.page());
+  // The first is taken: the line says it was sent, which it was, and the
+  // open composer stays open, and says so too, since the line is behind it.
+  answer(new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
+  await first;
+  b.act(() => {});
+  assert.deepEqual([a.sent, b.sent], [[{ id: "m1" }], []]);
+  assert.ok(!b.log.includes("close"));
+  assert.ok(b.page().includes('<p class="error" role="alert">the message sent before was sent: send this one only if it is another message</p>'), b.page());
+  // Answered, it holds the next composer no longer: a send from it is the
+  // human's, made after the composer said the first was sent.
+  await submit(b);
+  assert.equal(posted.length, 2);
+  assert.deepEqual(b.sent, [{ id: "m2" }]);
+});
+
+test("a composer closed with its send out says why that send was refused in the next one, which then sends", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer;
+  const posted = serve([() => new Promise((resolve) => (answer = resolve)), () => new Response(JSON.stringify({ id: "m2" }), { status: 200 })]);
+  const a = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(a, "Rebase");
+  const first = a.find((v) => v.type === "form").props.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  a.unmount();
+  const b = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(b, "Rebase");
+  await submit(b);
+  assert.equal(posted.length, 1);
+  answer(new Response(JSON.stringify({ error: { category: "request", message: "no one is ghost" } }), { status: 400 }));
+  await first;
+  b.act(() => {});
+  assert.deepEqual(a.sent, []);
+  assert.ok(b.page().includes('<p class="error" role="alert">about the message sent before: no one is ghost</p>'), b.page());
+  await submit(b);
+  assert.equal(posted.length, 2);
+  assert.deepEqual(b.sent, [{ id: "m2" }]);
+});
+
+test("a composer closed with its send out holds the next one for that send's ten seconds only", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer;
+  const posted = serve([() => new Promise((resolve) => (answer = resolve)), () => new Response(JSON.stringify({ id: "m2" }), { status: 200 })]);
+  const a = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(a, "Rebase");
+  const first = a.find((v) => v.type === "form").props.onSubmit(event());
+  await new Promise((resolve) => setImmediate(resolve));
+  a.unmount();
+  const b = open({ to: "ghost", cases: [kase("a1", "ghost", [], 5)] });
+  note(b, "Rebase");
+  t.mock.timers.tick(9999);
+  await submit(b);
+  assert.equal(posted.length, 1);
+  // After ten seconds a send goes again, as from the composer that sent
+  // (IN-09).
+  t.mock.timers.tick(1);
+  await submit(b);
+  assert.equal(posted.length, 2);
+  assert.deepEqual(b.sent, [{ id: "m2" }]);
+  // The first's late refusal says nothing in the composer that has sent
+  // since.
+  answer(new Response(JSON.stringify({ error: { category: "request", message: "late" } }), { status: 400 }));
+  await first;
+  b.act(() => {});
+  assert.ok(!b.page().includes("late"), b.page());
+});
+
 test("a send refused stops its ten seconds, so they do not cut short the next send's", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let answer;
