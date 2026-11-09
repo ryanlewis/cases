@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { html } from "../static/html.ts";
-import { CaseView, drawnFrom, redrawn, verdictOf } from "../static/case.ts";
+import { CaseView, drawnFrom, redrawn, response, verdictOf } from "../static/case.ts";
 import { body, decision, steps } from "./case.js";
 import { thread } from "../static/thread.ts";
 
@@ -619,4 +619,25 @@ test("a withdrawn message whose withdraw has no data says who withdrew it, and n
   const page = drawWith(message("withdrawn", sentEvent, pickupEvent, withdrawEvent));
   assert.ok(page.includes('<p class="taken withdrawn">withdrawn by <strong>ryan</strong>, '), page);
   assert.ok(!page.includes('class="reason"'), page);
+});
+
+// A form's fields, with `extra` set.
+const fields = (extra) => ({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "", ...extra });
+
+test("the form sends other only with a note, as the store wants (IN-03)", () => {
+  const c = decision("open", open);
+  for (const note of ["", "   "]) {
+    assert.deepEqual(response(c, fields({ choice: "other", note }), false), { problem: "other needs a note: say what you want instead" });
+  }
+  assert.deepEqual(response(c, fields({ choice: "other", note: " a print " }), false), { answer: { note: "a print", other: true } });
+  assert.deepEqual(response(c, fields({ choice: "1" }), false), { answer: { choice: 1 } });
+});
+
+test("the form sends request changes only with a comment, as the store wants (IN-03)", () => {
+  const c = { ...decision("open", open), kind: "signoff", options: undefined };
+  for (const note of ["", "   "]) {
+    assert.deepEqual(response(c, fields({ signoff: "changes", note }), false), { problem: "requesting changes needs a comment: say what to change" });
+  }
+  assert.deepEqual(response(c, fields({ signoff: "changes", note: "rename it" }), false), { answer: { note: "rename it", signoff: "changes" } });
+  assert.deepEqual(response(c, fields({ signoff: "accept" }), false), { answer: { signoff: "accept" } });
 });

@@ -549,7 +549,8 @@ function Choice({
 // that keeps it from being sent: a form missing its response is never sent
 // (IN-03). Notes and text are trimmed: the store keeps text as it is sent.
 // With `preselect`, a row with no verdict chosen is sent as approve. A
-// briefing sent back needs a reason, the note (IN-14).
+// decision's other and a signoff's request for changes need the note, as a
+// briefing sent back does (IN-14): the store refuses them without one.
 export function response(c: Case, f: Fields, preselect: boolean): { answer: Answer; problem?: never } | { answer?: never; problem: string } {
   const answer: Answer = {};
   const note = f.note.trim();
@@ -557,6 +558,7 @@ export function response(c: Case, f: Fields, preselect: boolean): { answer: Answ
   switch (c.kind) {
     case "decision":
       if (!f.choice) return { problem: "choose an option" };
+      if (f.choice === "other" && !note) return { problem: "other needs a note: say what you want instead" };
       if (f.choice === "other") answer.other = true;
       else answer.choice = Number(f.choice);
       break;
@@ -576,6 +578,7 @@ export function response(c: Case, f: Fields, preselect: boolean): { answer: Answ
       break;
     case "signoff":
       if (!f.signoff) return { problem: "choose accept or request changes" };
+      if (f.signoff === "changes" && !note) return { problem: "requesting changes needs a comment: say what to change" };
       answer.signoff = f.signoff as Answer["signoff"] & string;
       break;
     case "stuck": {
@@ -644,6 +647,8 @@ function Respond({
     setF((was) => ({ ...was, file: on ? [...was.file.filter((m) => m !== n), n] : was.file.filter((m) => m !== n) }));
   };
   const sendingBack = c.kind === "briefing" && f.briefing === "send_back";
+  // The choices that need the note, which the store refuses without one.
+  const noteNeeded = sendingBack || (c.kind === "decision" && f.choice === "other") || (c.kind === "signoff" && f.signoff === "changes");
   // An amend that replaces a briefing's left-out items numbers them anew:
   // the ticks made against the old list go, rather than file other items.
   const items = JSON.stringify(c.left_out || []);
@@ -732,7 +737,7 @@ ${(c.left_out || []).length > 0 && html`<fieldset class="file">
   }
   return html`<form class="respond" data-write="answer" onSubmit=${submit}>
   ${fields}
-  <label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${sendingBack} value=${f.note} onInput=${set("note")} /></label>
+  <label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${noteNeeded} value=${f.note} onInput=${set("note")} /></label>
   <div class="actions">
     <button type="submit" class="primary" id="respond-send" aria-keyshortcuts=${SEND_SHORTCUTS}>${c.kind === "fyi" ? "acknowledge" : "send"} <${Hint} keys=${SEND} /></button>
     ${c.kind === "stuck"
