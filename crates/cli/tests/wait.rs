@@ -3153,3 +3153,140 @@ fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
         .count();
     assert_eq!(actors, 4, "{requests}");
 }
+
+/// A listening wait whose stdout fails after its first line names, as it
+/// fails, only the message it took and has not printed: not the one it
+/// printed. Its reader takes one line and goes, and the second line is too
+/// long for the pipe to hold, so that its write fails.
+#[test]
+fn a_listening_wait_whose_stdout_fails_after_a_line_names_only_the_messages_not_printed() {
+    let env = Env::new();
+    let first = message(&env, &["--to", "w1", "--body", "First."]);
+    let second = message(&env, &["--to", "w1", "--body", &"Second. ".repeat(15_000)]);
+
+    let (reader, writer) = common::pipe();
+    let read = thread::spawn(move || {
+        let mut line = String::new();
+        BufReader::new(reader).read_line(&mut line).unwrap();
+        line
+    });
+    let out: Output = common::output(
+        wait_command(&env, &listening("w1", &[]))
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::piped()),
+    )
+    .into();
+    let printed = read.join().unwrap();
+    assert_eq!(json(&printed)["id"], first.as_str());
+    assert_eq!(out.code, 1, "{out:?}");
+    for id in [&first, &second] {
+        assert_eq!(env.case(id).state().as_str(), "pickedup", "{id}");
+    }
+    assert_eq!(
+        out.stderr,
+        format!("warning: {second}: picked up, but not printed: Broken pipe (os error 32)\n"),
+    );
+}
+
+/// A forwarded pickup wait stopped by a signal while it prints names only
+/// the cases it picked up and has not printed: here the second, whose long
+/// line waits on a stdout that nobody reads, and not the first, printed
+/// before it.
+#[cfg(unix)]
+#[test]
+fn a_forwarded_pickup_wait_stopped_while_it_prints_names_only_the_cases_not_printed() {
+    let mut env = Env::new();
+    let body = "A long body. ".repeat(3500);
+    let open = |title: &str| {
+        env.open(&[
+            "--kind",
+            "decision",
+            "--urgency",
+            "today",
+            "--title",
+            title,
+            "--option",
+            "Pin",
+            "--option",
+            "Float",
+            "--body",
+            &body,
+        ])
+    };
+    let first = open("First");
+    let second = open("Second");
+    run(&env, "answer", &first, &["--option", "1"]);
+    run(&env, "answer", &second, &["--option", "1"]);
+    let forward = format!(
+        "exec:LLVM_PROFILE_FILE='{}' CASES_STORE='{}' exec '{}' dial-stdio",
+        env.path("far-%p.profraw").display(),
+        env.store.display(),
+        env!("CARGO_BIN_EXE_cases"),
+    );
+    env.set("PATH", "/usr/bin:/bin");
+    env.set("CASES_FORWARD", &forward);
+
+    let args = [
+        "wait",
+        "--timeout",
+        "10s",
+        "--full",
+        "--since",
+        &first,
+        "--id",
+        &first,
+        "--id",
+        &second,
+        "--pickup",
+        "--by",
+        "me",
+    ];
+    let child = common::spawn(
+        env.command(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // The first line, about 45 KB, fits in the pipe; the second does not,
+    // and it is picked up before it is printed.
+    let until = Instant::now() + PATIENCE;
+    while env.case(&second).state().as_str() != "pickedup" {
+        assert!(Instant::now() < until, "the wait picked up nothing");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    // Nothing reads stdout until the wait has ended, so that the second
+    // line is not printed while the signal is handled.
+    let mut child = child;
+    let status = child.wait().unwrap();
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2),
+        "{status:?}"
+    );
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert_eq!(json(stdout.lines().next().unwrap())["id"], first.as_str());
+    assert_eq!(
+        stderr,
+        format!("warning: {second}: picked up, but not printed: a signal ended the wait\n"),
+    );
+    assert_eq!(env.case(&first).state().as_str(), "pickedup");
+}
