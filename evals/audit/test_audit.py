@@ -220,11 +220,40 @@ class Audit(unittest.TestCase):
             "cases wait --label L --worker w --pickup --by w --since x || true")
         self.assertEqual((c["ask"], c["extra"]), (2, 3))
 
-    def test_quotes_and_command_substitutions_nest_as_in_the_shell(self):
-        self.assertTrue(transcript.bookkeeping_only(
-            'id="$(cases open --kind fyi --title "a)b; c" --worker w)" && cases wait --id "$id"'))
-        self.assertTrue(transcript.bookkeeping_only('cases close A --outcome "$(cat out.md)"; echo "it\'s"'))
-        self.assertFalse(transcript.bookkeeping_only('( cd x && make ) ; cases close A --outcome done'))
+    def test_only_commands_that_do_no_work_are_bookkeeping(self):
+        work = [
+            "if ! git diff --quiet; then git commit -am wip; fi; cases close A --outcome done",
+            "true && { git push; } && cases close A",
+            "cases close A --outcome-file - <<EOF && git push\nDone.\nEOF",
+            "echo $(git push origin main) && cases close A",
+            'echo "$(make deploy)"; cases close A',
+            "id=$(cases list; git push)",
+            "X=$(cases list) git push",
+            'cases close A --outcome "$(git log -1 --format=%h)"',
+            "( cd x && make ) ; cases close A --outcome done",
+            "cat src/main.rs; cases list",
+            "cat > src/main.rs <<'EOF'\nfn main(){}\nEOF\ncases close A",
+            "echo hi > src/x.rs; cases list",
+            "cases wait --id A & git push",
+            "grep -rn foo src/ ; cases list",
+            "tail -20 /tmp/x/b3.output",
+        ]
+        bookkeeping = [
+            'id="$(cases open --kind fyi --title "a)b; c" --worker w)" && cases wait --id "$id"',
+            "FOO=1 id=$(cases open --title t)",
+            "cat > q.md <<'EOF'\nWe could run make deploy && rm -rf build\nEOF\ncases open --title q --body-file q.md",
+            "for i in A B; do cases show $i --answer; done",
+            "if cases close A; then echo ok; fi",
+            "# close it\ncases close A --outcome done",
+            "cases list --json | grep -c open",
+            "cases show A --answer | jq -r .answer 2>&1",
+            "cases list > /dev/null 2>&1 && echo ok",
+            "cat /tmp/x/b7.output",
+        ]
+        for cmd in work:
+            self.assertFalse(transcript.bookkeeping_only(cmd, {"b7"}), cmd)
+        for cmd in bookkeeping:
+            self.assertTrue(transcript.bookkeeping_only(cmd, {"b7"}), cmd)
 
     def test_reading_a_waits_output_is_a_cases_only_call(self):
         f = SessionFile()
@@ -234,6 +263,14 @@ class Audit(unittest.TestCase):
         f.bash("cat /nonexistent/b1.output && git push")
         c = rules_cases.cost(self.session(f))
         self.assertEqual((c["ask"], c["extra"]), (0, 2))
+
+    def test_reading_another_background_tasks_output_is_not_a_wait_read(self):
+        f = SessionFile()
+        f.user("go")
+        f.bash("cargo test", bg=True)
+        f.bash("tail -20 /nonexistent/b1.output")
+        c = rules_cases.cost(self.session(f))
+        self.assertEqual((c["ask"], c["extra"]), (0, 0))
 
     def test_the_report_holds_no_transcript_text(self):
         f = SessionFile()
