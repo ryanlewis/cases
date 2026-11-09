@@ -991,6 +991,67 @@ fn a_second_pickup_wait_on_a_forwarded_store_is_refused() {
     assert!(!again.stderr.contains("already picking up"), "{again:?}");
 }
 
+/// A pickup wait on the far side's store by its own path there, and one
+/// forwarded to a dial-stdio that names the store by a symlink to it, each
+/// hold off the other (AG-05): both lock beside the store file itself.
+#[test]
+fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_each_other() {
+    let mut f = Forwarding::new();
+    f.open_decision();
+    let link = f.env.path("link.db");
+    std::os::unix::fs::symlink(&f.far, &link).unwrap();
+    f.env.set(
+        "CASES_FORWARD",
+        &format!(
+            "exec:CASES_STORE='{}' exec '{}' dial-stdio",
+            link.display(),
+            env!("CARGO_BIN_EXE_cases")
+        ),
+    );
+    let far = f.far.to_str().unwrap();
+    let local = ["--store", far, "wait", "--pickup", "--worker", "lead"];
+    let refused = |out: &Output, holder: &std::process::Child| {
+        assert_eq!(out.code, 1, "{out:?}");
+        let want = format!(
+            "Error: another wait is already picking up worker \"lead\" (pid {}, since ",
+            holder.id()
+        );
+        assert!(out.stderr.starts_with(&want), "{want}: {out:?}");
+    };
+
+    let mut first = picking_up_by(&f, f.env.command(local.iter().chain(&["--timeout", "60s"])));
+    let second = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
+    refused(&second, &first);
+    first.kill().unwrap();
+    first.wait().unwrap();
+
+    // The far side's dial-stdio is the holder, as it takes the lock. The
+    // lock file names the killed wait until it does.
+    let locks = f.far.with_file_name("far.db-waits");
+    let before = holder(&locks, "worker-lead-");
+    let mut first = spawn(
+        f.env
+            .command(["wait", "--pickup", "--worker", "lead", "--timeout", "60s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let until = Instant::now() + Duration::from_secs(10);
+    while holder(&locks, "worker-lead-") == before {
+        assert!(Instant::now() < until, "the forwarded wait took no lock");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let second = f.run(&[&local[..], &["--timeout", "1s"]].concat());
+    assert_eq!(second.code, 1, "{second:?}");
+    assert!(
+        second
+            .stderr
+            .starts_with("Error: another wait is already picking up worker \"lead\" (pid "),
+        "{second:?}"
+    );
+    first.kill().unwrap();
+    first.wait().unwrap();
+}
+
 /// A pickup wait killed outright, with no chance to let go, keeps its
 /// locks on the far side until their lease runs out, and no longer: its
 /// connection for them ended, but a pickup of its could still have been on
