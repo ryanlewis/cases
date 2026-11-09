@@ -28,7 +28,7 @@ HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2(?=\s|$)", re.S)
 # bookkeeping. `cat` writes a case's body file or prints a wait's output, and
 # `jq`, `head` and `tail` read a line. Anything else is work, such as `git`,
 # `make` or `grep` over the code.
-GLUE = set("echo printf cat jq head tail cd true false test [ [[ ] ]] if then else elif fi do done ! { } ( ) :".split())
+GLUE = set("echo printf cat jq head tail cd true false test [ [[ ] ]] if then else elif fi for while until do done ! { } :".split())
 ASSIGN = re.compile(r'^[A-Za-z_]\w*=(?:"?\$\(\s*(.*?)\)?"?|\S*)$', re.S)
 
 EXIT = re.compile(r'Exit code (\d+)')
@@ -84,44 +84,43 @@ def cases_segments(cmd):
 
 def _pieces(cmd):
     """A command's simple commands: split at &&, ||, ;, |, a newline, ( and
-    ), outside quotes, with heredoc bodies and backslash-newlines removed. A
-    `$(...)` stays whole in its piece."""
+    ), outside quotes and `$(...)`, with heredoc bodies and backslash-newlines
+    removed. Quotes and `$(...)` nest as the shell nests them."""
     cmd = HEREDOC.sub("<<HEREDOC", cmd or "").replace("\\\n", " ")
-    pieces, cur, quote, depth, i = [], [], None, 0, 0
+    pieces, cur, stack, i = [], [], [], 0
     while i < len(cmd):
-        ch = cmd[i]
-        if quote:
-            if ch == "\\" and quote == '"':
-                cur.append(cmd[i:i + 2])
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
+        ch, top = cmd[i], (stack[-1] if stack else None)
+        step = 1
+        if top == "'":
+            if ch == "'":
+                stack.pop()
         elif ch == "\\":
-            cur.append(cmd[i:i + 2])
-            i += 2
-            continue
-        elif ch in "'\"":
-            quote = ch
+            step = 2
+        elif top == '"' and ch == '"':
+            stack.pop()
         elif cmd.startswith("$(", i):
-            depth += 1
-            cur.append("$(")
-            i += 2
-            continue
-        elif ch == ")" and depth:
-            depth -= 1
-        elif not depth and (cmd.startswith("&&", i) or cmd.startswith("||", i)):
+            stack.append("$(")
+            step = 2
+        elif top == '"':
+            pass
+        elif ch in "'\"":
+            stack.append(ch)
+        elif top == "$(" and ch == "(":
+            stack.append("(")
+        elif top in ("$(", "(") and ch == ")":
+            stack.pop()
+        elif top is None and (cmd.startswith("&&", i) or cmd.startswith("||", i)):
             pieces.append("".join(cur))
             cur = []
             i += 2
             continue
-        elif not depth and ch in ";|\n()":
+        elif top is None and ch in ";|\n()":
             pieces.append("".join(cur))
             cur = []
             i += 1
             continue
-        cur.append(ch)
-        i += 1
+        cur.append(cmd[i:i + step])
+        i += step
     pieces.append("".join(cur))
     return [p.strip() for p in pieces if p.strip()]
 

@@ -11,6 +11,7 @@ import audit
 import history
 import rules_cases
 import rules_team_lead as tl
+import transcript
 
 
 class SessionFile:
@@ -218,6 +219,12 @@ class Audit(unittest.TestCase):
             'echo "$id"; cases list --worker w',
             "cases wait --label L --worker w --pickup --by w --since x || true")
         self.assertEqual((c["ask"], c["extra"]), (2, 3))
+
+    def test_quotes_and_command_substitutions_nest_as_in_the_shell(self):
+        self.assertTrue(transcript.bookkeeping_only(
+            'id="$(cases open --kind fyi --title "a)b; c" --worker w)" && cases wait --id "$id"'))
+        self.assertTrue(transcript.bookkeeping_only('cases close A --outcome "$(cat out.md)"; echo "it\'s"'))
+        self.assertFalse(transcript.bookkeeping_only('( cd x && make ) ; cases close A --outcome done'))
 
     def test_reading_a_waits_output_is_a_cases_only_call(self):
         f = SessionFile()
