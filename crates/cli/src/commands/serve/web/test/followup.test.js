@@ -62,7 +62,7 @@ test("a note after an amend that reopened the case leaves it not a follow-up", (
   const amend = { seq: 4, author: "agent", event: "amend", from: "pickedup", file: "", data: { body: "new question", reopen: true } };
   const after = { ...note, seq: 5, from: "open", data: { body: "and the budget?" } };
   assert.equal(followUp({ ...decision("open", open, answer, pickup, amend, after), amend_seq: 4 }), null);
-  assert.equal(followUp(decision("open", open, answer, amend, { ...after, from: "open" })), null);
+  assert.equal(followUp({ ...decision("open", open, answer, { ...amend, seq: 3, from: "answered" }, { ...after, seq: 4 }), amend_seq: 3 }), null);
 });
 
 test("a note that reopened the case, then an amend that does not reopen it, leaves it a follow-up", () => {
