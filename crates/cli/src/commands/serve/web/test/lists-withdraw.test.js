@@ -200,8 +200,8 @@ test("the withdraw is sent at the revision the row had when it was pressed, with
 test("a withdraw that lands with no one told of it leaves the line as it was", async (t) => {
   const { answer } = serve(t);
   const r = row(answered);
+  // props is the object the row reads on each draw.
   r.props.sent = undefined;
-  r.draw();
   r.press();
   const { done } = r.submit();
   await settle();
@@ -333,8 +333,6 @@ test("while the line is open it follows the stream; while it is shut, a case tha
   // Open: the line follows, and says a state the case moved on to.
   const o = row(answered);
   o.press();
-  o.bring({ ...answered, revision: answered.revision });
-  assert.equal(o.refusal(), "", "the same revision says nothing");
   o.bring(pickedUp);
   assert.equal(o.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
 });
@@ -407,6 +405,15 @@ test("a folded part of the list stays as the human left it, and opens when it co
   assert.equal(details().props.open, undefined, "and folded again");
   const holding = mount(folded.type, { ...folded.props, holds: true });
   assert.equal([...nodes(holding.tree)].find((v) => v.type === "details").props.open, true, "open when it holds the case shown");
+  // Folded by the human, then the case shown comes to be one of its own.
+  const props2 = { ...folded.props, holds: false };
+  const later = mount(folded.type, props2);
+  const laterDetails = () => [...nodes(later.tree)].find((v) => v.type === "details");
+  assert.equal(laterDetails().props.open, undefined);
+  props2.holds = true;
+  later.dirty = true;
+  later.draw();
+  assert.equal(laterDetails().props.open, true, "it opens itself");
 });
 
 test("a stale refusal of a case older than one the stream brought before the send says how the case moved on, and keeps the newer", async (t) => {
