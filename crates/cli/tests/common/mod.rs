@@ -394,7 +394,16 @@ impl Env {
 
     /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one.
     pub(crate) fn fake_serve_on(&self, store: &Path, addr: &str) -> (TcpListener, String) {
-        let listener = listen(addr);
+        self.fake_serve_with(store, listen(addr))
+    }
+
+    /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one,
+    /// on a listener the test bound.
+    pub(crate) fn fake_serve_with(
+        &self,
+        store: &Path,
+        listener: TcpListener,
+    ) -> (TcpListener, String) {
         let addr = listener.local_addr().expect("an address");
         let url = format!("http://{addr}/");
         let info = serde_json::json!({
