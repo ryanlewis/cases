@@ -1383,3 +1383,30 @@ fn a_steady_remote_wait_collects_until_its_timeout() {
         holds(&r.fake)
     );
 }
+
+/// The reads of cases that `args` sends, as request lines.
+fn case_reads(r: &Remote, args: &[&str]) -> Vec<String> {
+    let before = r.fake.lines().len();
+    r.ok(args);
+    r.fake.lines()[before..]
+        .iter()
+        .filter(|line| line.starts_with("GET ") && line.contains("/store/cases"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn show_answer_and_inbox_read_the_case_they_name_once() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(None, "Read once");
+    let part = &id[1..id.len() - 1];
+    for args in [
+        vec!["show", id.as_str()],
+        vec!["show", part],
+        vec!["inbox", "--print", id.as_str()],
+        vec!["answer", id.as_str(), "--ack"],
+    ] {
+        let reads = case_reads(&r, &args);
+        assert_eq!(reads.len(), 1, "{args:?}: {reads:#?}");
+    }
+}
