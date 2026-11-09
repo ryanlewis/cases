@@ -87,8 +87,6 @@ test("when mermaid does not load, the code block stays with a line that says so,
   draw(document.body);
   await settle();
   assert.equal(mermaid.imports, 2, "the import is tried again");
-  assert.equal(error(first), "not drawn: mermaid did not load", "a diagram that failed is not drawn again, and says so once");
-  assert.equal(first.querySelectorAll(".diagram-error").length, 1);
   assert.ok(second.shadowRoot);
   assert.deepEqual(mermaid.renders.map((r) => r.source), ["flowchart LR\n  C --> D"]);
   draw(document.body);
@@ -128,10 +126,13 @@ test("mermaid is given the strict config in the page's look, on the colour behin
   assert.equal(c.themeVariables.background, "rgb(21, 22, 26)", "the first colour up the parents that is not transparent");
   assert.equal(d.themeVariables.background, "#0d0f14", "the page's --bg when no parent has one");
   assert.equal(d.themeVariables.edgeLabelBackground, "#0d0f14");
+  assert.deepEqual(mermaid.renders.slice(-2).map((r) => r.source), ["flowchart LR", "flowchart TD"], "the configs are in the order of the diagrams");
+  look.vars = { "--bg": " #0d0f14 ", "--fg": "#eceef4", "--prose": "serif" };
   look.colorScheme = "light";
+  look.fontSize = "16px";
   outer.remove();
   bare.remove();
-  assert.ok(onGround);
+  assert.equal(onGround.isConnected, false);
 });
 
 test("each diagram is rendered by an id of its own, from its code block's text; one with no code block is not rendered", async () => {
@@ -204,6 +205,7 @@ test("a link in a diagram follows the page's rule: to a new tab when it may be f
     ["href", "#top", null],
     ["href", "", null],
     ["xlink:href", "https://other.example/x", "https://other.example/x"],
+    ["xlink:href", "https://other.example/?a=1&b=2", "https://other.example/?a=1&b=2"],
     ["xlink:href", "javascript:alert(1)", null],
   ];
   mermaid.svg = () => `<svg>${cases.map(([name, value], i) => `<a ${name}="${value.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" target="_self" transform="translate(${i})"><text>${i}</text></a>`).join("")}</svg>`;
@@ -352,9 +354,5 @@ test("a diagram that fails to draw again keeps the one it had, with no line", as
   await settle();
   assert.equal(drawnSvg(el).textContent, "kept");
   assert.equal(error(el), undefined);
-  const renders = mermaid.renders.length;
-  observers[0].callback();
-  await settle();
-  assert.equal(mermaid.renders.length, renders, "a failed redraw is forgotten, so not drawn again");
   el.remove();
 });

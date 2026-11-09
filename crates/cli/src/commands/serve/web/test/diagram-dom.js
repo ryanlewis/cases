@@ -196,8 +196,9 @@ function parse(html, doc) {
     const svg = m[1] === "svg" || top.namespaceURI === SVG_NS;
     const e = new Node(svg ? SVG_NS : HTML_NS, m[1], doc);
     for (const [, name, value = ""] of m[2].matchAll(/([\w:-]+)(?:="([^"]*)")?/g)) {
-      if (name === "xlink:href") e.setAttributeNS(XLINK_NS, name, value);
-      else e.setAttribute(name, value.replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+      const text = value.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+      if (name === "xlink:href") e.setAttributeNS(XLINK_NS, name, text);
+      else e.setAttribute(name, text);
     }
     top.append(e);
     if (!m[3]) open.push(e);
@@ -245,7 +246,9 @@ export function install() {
   return { document: doc, look, observers, media };
 }
 
-// Lets the queue of renders run out.
+// Lets the queue of renders run out: a few turns of the event loop, and
+// then a few more, a millisecond apart, for an import still loading.
 export async function settle() {
   for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 1));
 }
