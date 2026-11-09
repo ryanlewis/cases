@@ -410,6 +410,148 @@ mod tests {
         assert!(!frame.contains("\x1b["), "colour without color:\n{frame}");
     }
 
+    /// The cases of `db` as the poller folds them.
+    fn cases(db: &Db) -> Vec<(Key, Case)> {
+        db.poller()
+            .poll()
+            .unwrap()
+            .iter()
+            .map(|(key, case)| (*key, case.clone().unwrap()))
+            .collect()
+    }
+
+    /// The counts the first test leaves at zero: an open case of every
+    /// urgency, one picked up, one withdrawn, which no count takes, and a
+    /// resume; and the events no count takes: an agent's pickup and
+    /// withdraw, and the human's answer and the close before serve started.
+    #[test]
+    fn the_screen_counts_every_state_and_the_human_s_events_since_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let open = |kind: &str, urgency: &str| {
+            let options = if kind == "decision" {
+                r#","options":["a","b"]"#
+            } else {
+                ""
+            };
+            write(
+                &db,
+                None,
+                "agent",
+                "open",
+                &format!(
+                    r#"{{"kind":"{kind}","urgency":"{urgency}","title":"T","opened_at":"2026-09-16T11:00:00Z"{options}}}"#
+                ),
+            )
+        };
+        open("question", "blocking");
+        open("question", "today");
+        let resumed = open("stuck", "whenever");
+        write(
+            &db,
+            Some(resumed),
+            "human",
+            "park",
+            r#"{"parked_at":"2026-09-16T11:30:00Z"}"#,
+        );
+        write(
+            &db,
+            Some(resumed),
+            "human",
+            "resume",
+            r#"{"resumed_at":"2026-09-16T12:03:00Z"}"#,
+        );
+        let picked = open("decision", "today");
+        write(
+            &db,
+            Some(picked),
+            "human",
+            "answer",
+            r#"{"choice":1,"answered_at":"2026-09-16T12:01:00Z"}"#,
+        );
+        write(
+            &db,
+            Some(picked),
+            "agent",
+            "pickup",
+            r#"{"picked_up_at":"2026-09-16T12:04:00Z"}"#,
+        );
+        let withdrawn = open("decision", "blocking");
+        write(
+            &db,
+            Some(withdrawn),
+            "agent",
+            "withdraw",
+            r#"{"withdrawn_at":"2026-09-16T12:05:00Z"}"#,
+        );
+        let early = open("fyi", "whenever");
+        write(
+            &db,
+            Some(early),
+            "human",
+            "answer",
+            r#"{"ack":true,"answered_at":"2026-09-16T11:58:00Z"}"#,
+        );
+        write(
+            &db,
+            Some(early),
+            "agent",
+            "pickup",
+            r#"{"picked_up_at":"2026-09-16T11:58:30Z"}"#,
+        );
+        write(
+            &db,
+            Some(early),
+            "agent",
+            "close",
+            r#"{"outcome":"done","closed_at":"2026-09-16T11:59:00Z"}"#,
+        );
+
+        let stats = Stats::count(&cases(&db), at("2026-09-16T12:00:00Z"));
+        assert_eq!(
+            stats,
+            Stats {
+                open: [1, 1, 1],
+                parked: 0,
+                sent: 0,
+                answered: 0,
+                picked_up: 1,
+                closed: 1,
+                closed_since: 0,
+                answers: 1,
+                parks: 0,
+                resumes: 1,
+                last_event: Some(at("2026-09-16T12:05:00Z")),
+            }
+        );
+        let frame = render(&view(Ok(stats), Vec::new(), false));
+        assert_eq!(
+            frame,
+            [
+                "cases serve  ·  up 6m",
+                "",
+                "inbox       http://127.0.0.1:7337/",
+                "store       /data/cases.db",
+                "",
+                "open          3   1 blocking · 1 today · 1 whenever",
+                "parked        0",
+                "with agent    1   0 sent · 0 answered · 1 picked up",
+                "closed        1   0 since start",
+                "",
+                "since start 1 request · 1 answer · 0 parks · 1 resume · 1 notification",
+                "last event  5m ago",
+                "",
+                "log",
+                "  nothing yet",
+                "",
+                AGENT_HINT[0],
+                AGENT_HINT[1],
+                "",
+                "Ctrl-C quit",
+            ]
+        );
+    }
+
     #[test]
     fn an_empty_store_and_a_failed_read() {
         let empty = render(&view(Ok(Stats::default()), Vec::new(), false)).join("\n");
