@@ -408,3 +408,64 @@ test("a folded part of the list stays as the human left it, and opens when it co
   const holding = mount(folded.type, { ...folded.props, holds: true });
   assert.equal([...nodes(holding.tree)].find((v) => v.type === "details").props.open, true, "open when it holds the case shown");
 });
+
+test("a stale refusal of a case older than one the stream brought before the send says how the case moved on, and keeps the newer", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  // The stream brings the pickup while the line is open, before the send.
+  r.bring(pickedUp);
+  const first = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, pickedUp.revision);
+  // Refused as stale, with the case as it was before the pickup: late.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 409, { error: { category: "stale", message: "stale" } });
+  await second.done;
+});
+
+test("an open line follows a newer revision of the case in the same state, when only rows that keep its state came since", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  // A row since that kept the case answered, as fresh.ts's `since` reads
+  // one: made up, as an agent's amend of an answered case reopens it.
+  const amend = { seq: answered.last_seq + 1, author: "agent", event: "amend", from: "answered", file: "", data: { labels: ["x"] } };
+  const later = { ...answered, events: [...answered.events, amend], revision: answered.revision + 1, last_seq: amend.seq };
+  r.bring(later);
+  assert.equal(r.refusal(), "", "nothing to say");
+  const { done } = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, later.revision);
+  answer(0, 409, { error: { category: "stale", message: "stale" } });
+  await done;
+});
+
+test("a send answered at once frees the guard for good: its 10 s does not free the guard of the send after it", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  answer(0, 409, { error: { category: "transition", message: "no" } });
+  await a.done;
+  mock.timers.tick(5000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  // 10 s after the first was sent, the second is still out.
+  mock.timers.tick(5000);
+  r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "the first's timer is gone with its answer");
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
+});

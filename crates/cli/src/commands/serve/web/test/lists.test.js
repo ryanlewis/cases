@@ -480,3 +480,17 @@ test("the header's tally shows the counts that are not zero, in order, only bloc
   assert.equal(tallied({ waiting: 1, blocking: 0, today: 0, whenever: 1, parked: 0 }), '<span id="tally" class="label tally"><span><strong>1</strong> whenever</span></span>');
   assert.equal(tallied({ waiting: 0, blocking: 0, today: 0, whenever: 0, parked: 0 }), '<span id="tally" class="label tally"></span>');
 });
+
+test("a card's classes and line: a parked one is marked parked, a follow-up's line is the follow-up's, and a done one's age is since it was last changed", () => {
+  const parkedCard = inbox([{ ...open("p1", "today", "c", 20), state: "parked" }]);
+  assert.ok(parkedCard.includes('<a class="card urgency-today parked" href="/cases/p1-case-p1">'), parkedCard);
+  assert.ok(parkedCard.includes('<p class="ask parked">'), parkedCard);
+  const reopened = { ...decision("open", steps.open, steps.answer, steps.pickup, steps.note), urgency: "today" };
+  const followed = inbox([reopened]);
+  assert.ok(followed.includes('<p class="ask followup">'), followed);
+  const plain = inbox([open("o1", "today", "a", 5)]);
+  assert.ok(!plain.includes("followup") && !plain.includes(" parked"), plain);
+  const closedLate = { ...open("c9", "today", "a", 600), state: "closed", updated_at: at(2), close: { outcome: "done" } };
+  const done = list([], [closedLate], "done");
+  assert.ok(done.includes('<span class="age">2m</span>'), done);
+});
