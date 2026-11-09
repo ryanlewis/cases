@@ -353,6 +353,8 @@ interface Guard {
   held: boolean;
   // Whether its send was taken: a message sent.
   sent?: boolean;
+  // What its send comes to, once answered.
+  answer?: Promise<api.Sent>;
 }
 
 // What a send reads and changes besides: the choices, the case it is about,
@@ -382,12 +384,18 @@ let last: Guard | null = null;
 // whichever send it came: the composer goes, and its guard holds for good,
 // so the answer of a send after it changes nothing; a refusal counts only
 // from the send that went last. A send out from a composer closed since
-// holds this one as its own would, and says so.
+// holds this one as its own would, and says so, and then what came of it,
+// unless this composer has sent since.
 async function submit(s: Sending, e: Event): Promise<void> {
   e.preventDefault();
   if (s.sending.current?.held) return;
   if (last?.held && !last.sent) {
+    const mine = s.sending.current;
     s.setRefusal("the message sent before is not answered yet: wait for it before sending this one");
+    last.answer?.then(({ after, refusal }) => {
+      if (s.sending.current !== mine) return;
+      s.setRefusal(after ? "the message sent before was sent: send this one only if it is another message" : `about the message sent before: ${refusal}`);
+    });
     return;
   }
   const { body, problem } = drafted(s.f, s.choices, s.re);
@@ -399,7 +407,8 @@ async function submit(s: Sending, e: Event): Promise<void> {
   s.sending.current = last = guard;
   const release = setTimeout(() => (guard.held = false), 10000);
   try {
-    const { after, refusal: why } = await api.sendMessage(body!);
+    guard.answer = api.sendMessage(body!);
+    const { after, refusal: why } = await guard.answer;
     if (after && !s.sending.current?.sent) s.sending.current = guard;
     if (s.sending.current !== guard) return;
     if (after) {
