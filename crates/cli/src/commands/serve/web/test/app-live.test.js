@@ -586,31 +586,62 @@ test("a read of the list that lands between a refusal and the page's next draw i
   p.app.unmount();
 });
 
-test("a refusal on the list while the composer is open pins the case on the composer's entry", async () => {
-  const p = await openApp({ server: { waiting: [a, b] } });
-  await p.click(link("/message?to=w1"));
-  p.page.props.refused({ ...a, revision: 7 });
-  await p.settle();
-  // The case's page takes the place of the composer's entry, and of what
-  // it held.
-  assert.deepEqual(p.entries(), ["/", ">/cases/aB3xQ-first-case"]);
-  assert.equal(p.history.state, null);
-  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
-  // Another composer opened while that entry is still the composer's
-  // leaves it as it is.
-  mock.timers.tick(1000);
-  await p.click(link("/message?to=w2"));
-  assert.equal(p.composer.props.to, "w2");
-  assert.equal(p.history.state, null);
-  // Pinned as it is today, a bug: closing the composer takes that entry off
-  // with history.back(), which lands on the list the refusal moved from, so
-  // the page leaves the refused case's page for the list.
-  p.composer.props.onClose();
-  await p.settle();
-  assert.deepEqual(p.entries(), [">/", "/cases/aB3xQ-first-case"]);
-  assert.deepEqual(route(p), { page: "list", show: "inbox" });
-  p.app.unmount();
-});
+// The ways the composer closes, as App hears them: Escape and its close
+// control close its dialog, which calls onClose; a send calls onSent, then
+// closes it; the back button takes its entry off, and the composer, with
+// nothing written, sets nothing for back to answer.
+const closes = {
+  escape: async (p) => p.composer.props.onClose(),
+  close: async (p) => p.composer.props.onClose(),
+  send: async (p) => {
+    p.composer.props.onSent(kase("fG7bV", "A note", { kind: "message", state: "sent", worker: "w1" }));
+    p.composer.props.onClose();
+  },
+  back: async (p) => {
+    p.composer.props.back.current = null;
+    p.history.back();
+  },
+};
+
+for (const [how, close] of Object.entries(closes)) {
+  test(`a refusal on the list while the composer is open stays shown once the composer closes (${how})`, async () => {
+    const p = await openApp({ server: { waiting: [a, b] } });
+    await p.click(link("/message?to=w1"));
+    // The store moved on, and the send made before is refused with the case
+    // as it is now.
+    const now = { ...a, revision: 7 };
+    p.server.waiting = [now, b];
+    p.page.props.refused(now);
+    await p.settle();
+    // The case's page goes in under the composer, whose entry stays on top.
+    assert.deepEqual(p.entries(), ["/", "/cases/aB3xQ-first-case", ">/cases/aB3xQ-first-case"]);
+    assert.deepEqual(p.history.state, { composer: { to: "w1", re: "" } });
+    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+    assert.ok(p.composer);
+    p.taken();
+    await close(p);
+    await p.settle();
+    // The page stays on the refused case: nothing is read again, the case
+    // shown is the one the refusal gave, and the address is its page.
+    assert.equal(p.composer, undefined);
+    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+    assert.equal(p.page.props.data.shown.case.revision, 7);
+    assert.deepEqual(p.taken(), []);
+    assert.deepEqual(p.entries(), ["/", ">/cases/aB3xQ-first-case", "/cases/aB3xQ-first-case"]);
+    assert.equal(p.location.pathname, "/cases/aB3xQ-first-case");
+    // Back goes to the list the refusal moved from; forward to the case's
+    // page again, then to the composer's entry, which opens it again, as
+    // forward onto any closed composer's entry does.
+    await p.back();
+    assert.deepEqual(route(p), { page: "list", show: "inbox" });
+    await p.forward();
+    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: null });
+    assert.equal(p.composer, undefined);
+    await p.forward();
+    assert.equal(p.composer.props.to, "w1");
+    p.app.unmount();
+  });
+}
 
 test("a refusal on the list for a case it does not show leaves the page", async () => {
   const p = await openApp({ server: { waiting: [a, b] } });
