@@ -49,9 +49,10 @@ const drawn = new Map<Element, string>();
 // The diagrams waiting in the queue: one wait each, which draws in the
 // theme the page has when its turn comes.
 const queued = new Set<Element>();
-// The diagrams not drawn as mermaid did not load: the next draw tries them
-// again, where one whose text does not parse is not.
-const unloaded = new WeakSet<Element>();
+// The source of each diagram not drawn as mermaid did not load: the next
+// draw, or change of look or theme, tries it again, where one whose text
+// does not parse is not.
+const unloaded = new Map<Element, string>();
 
 // mermaid did not load: not the diagram's fault, and worth another try.
 class Unloaded extends Error {}
@@ -61,6 +62,7 @@ class Unloaded extends Error {}
 export function draw(root: Element): void {
   // Forget the diagrams no longer in the page, such as another case's.
   for (const el of drawn.keys()) if (!el.isConnected) drawn.delete(el);
+  for (const el of unloaded.keys()) if (!el.isConnected) unloaded.delete(el);
   const found = [...root.querySelectorAll(".diagram")].filter((el) => !drawn.has(el) && (unloaded.has(el) || !el.querySelector(".diagram-error")));
   if (!found.length) return;
   watch();
@@ -181,6 +183,7 @@ function show(el: Element, svg: string): void {
   const shadow = el.shadowRoot || el.attachShadow({ mode: "open" });
   shadow.adoptedStyleSheets = [host, sheet];
   shadow.replaceChildren(node);
+  unloaded.delete(el);
   el.querySelector(".diagram-error")?.remove();
 }
 
@@ -205,8 +208,9 @@ function links(a: Element): void {
 // drawn before keeps what it drew, and is drawn again on the next change.
 function fail(el: Element, e: unknown): void {
   if (el.shadowRoot) return;
+  const source = drawn.get(el);
   drawn.delete(el);
-  if (e instanceof Unloaded) unloaded.add(el);
+  if (e instanceof Unloaded && source !== undefined) unloaded.set(el, source);
   else unloaded.delete(el);
   el.querySelector(".diagram-error")?.remove();
   const line = document.createElement("p");
@@ -233,9 +237,11 @@ function watch(): void {
   if (watching) return;
   watching = true;
   const again = () => {
-    for (const [el, source] of drawn) {
-      if (el.isConnected) render(el, source);
-      else drawn.delete(el);
+    for (const map of [drawn, unloaded]) {
+      for (const [el, source] of map) {
+        if (el.isConnected) render(el, source);
+        else map.delete(el);
+      }
     }
   };
   new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ["data-look", "data-theme"] });

@@ -359,14 +359,17 @@ test("a diagram that fails to draw again keeps the one it had, with no line", as
   el.remove();
 });
 
-test("a diagram whose redraw failed is drawn again on the next change, in the new colours", async () => {
+test("a diagram whose redraw failed is drawn again on the next change, in the new colours", async (t) => {
+  t.after(() => {
+    look.vars = { "--bg": " #0d0f14 ", "--fg": "#eceef4", "--prose": "serif" };
+  });
   let colour = "old";
   mermaid.svg = () => `<svg><text>${colour}</text></svg>`;
   const el = fence("flowchart LR");
   draw(document.body);
   await settle();
   mermaid.svg = () => {
-    throw new Error("mermaid did not load");
+    throw new Error("a redraw that failed");
   };
   observers[0].callback();
   await settle();
@@ -380,7 +383,6 @@ test("a diagram whose redraw failed is drawn again on the next change, in the ne
   assert.equal(drawnSvg(el).textContent, "new");
   assert.equal(mermaid.configs[configs]?.themeVariables.primaryColor, "#654321");
   assert.equal(error(el), undefined);
-  look.vars = { "--bg": " #0d0f14 ", "--fg": "#eceef4", "--prose": "serif" };
   el.remove();
 });
 
