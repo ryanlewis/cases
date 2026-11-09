@@ -1400,13 +1400,19 @@ fn show_answer_and_inbox_read_the_case_they_name_once() {
     let r = Remote::new(&["me"]);
     let id = r.open(None, "Read once");
     let part = &id[1..id.len() - 1];
-    for args in [
-        vec!["show", id.as_str()],
-        vec!["show", part],
-        vec!["inbox", "--print", id.as_str()],
-        vec!["answer", id.as_str(), "--ack"],
+    let store = format!("GET /v1/stores/{}/store/cases", r.ids[0]);
+    // The case by its key, for a whole id; the list, for part of one.
+    let (one, all) = (format!("{store}/1 HTTP/1.1"), format!("{store} HTTP/1.1"));
+    for (args, want) in [
+        (vec!["show", id.as_str()], &one),
+        (vec!["show", part], &all),
+        (vec!["inbox", "--print", id.as_str()], &one),
+        (vec!["answer", id.as_str(), "--ack"], &one),
     ] {
-        let reads = case_reads(&r, &args);
-        assert_eq!(reads.len(), 1, "{args:?}: {reads:#?}");
+        assert_eq!(
+            case_reads(&r, &args),
+            std::slice::from_ref(want),
+            "{args:?}"
+        );
     }
 }
