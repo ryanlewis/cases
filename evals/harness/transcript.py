@@ -6,6 +6,7 @@ command. The parsing of `cases` commands and the cost of an API call follow
 the cost study's script (notes: projects/cases/research/cases-cost-in-sessions.py).
 """
 import json
+import os
 import re
 import shlex
 
@@ -38,14 +39,22 @@ def strip_heredocs(cmd):
 CONTROL = set("if then elif else do while until ! { } ( ) time".split())
 # Glue that moves or tests text: it does no work whatever its arguments,
 # except that a redirection it makes must go to a file the case uses.
-GLUE = set("echo printf cd true false test [ [[ ] ]] fi done : exit".split())
+GLUE = set("echo printf cd true false test [ [[ ] ]] fi done : exit sleep".split())
 # Text tools: glue only when every file they read or write is one the case
 # uses (a body file, a wait's output, stdin), so `cat src/main.rs` is work.
 # The number is how many operands come before the files (a pattern, a program).
 TEXT = {"cat": 0, "head": 0, "tail": 0, "wc": 0, "sort": 0, "uniq": 0, "cut": 0,
-        "grep": 1, "sed": 1, "awk": 1, "jq": 1, "tr": 2}
+        "grep": 1, "sed": 1, "awk": 1, "jq": 1, "tr": 2, "tee": 0}
 CASES = re.compile(r"(?:\S*/)?cases")
 BODY_FILE = re.compile(r"--(?:body|outcome|text)-file[=\s]+(\"[^\"]*\"|'[^']*'|\S+)")
+# A text tool's options that take the next word as their value.
+VALUE_FLAGS = {"cut": {"-d": 1, "-f": 1, "-c": 1, "-b": 1}, "sort": {"-t": 1, "-k": 1},
+               "head": {"-n": 1, "-c": 1}, "tail": {"-n": 1, "-c": 1}, "awk": {"-F": 1, "-v": 1},
+               "grep": {"-e": 1, "-A": 1, "-B": 1, "-C": 1, "-m": 1}, "sed": {"-e": 1},
+               "jq": {"--arg": 2, "--argjson": 2}}
+# Commands that run the command after them: it is that command that counts.
+WRAPPERS = {"timeout": 1, "nohup": 0, "time": 0, "xargs": 0}
+XARGS_VALUES = {"-n", "-I", "-L", "-P", "-d", "-s", "-E"}
 REDIRECT = re.compile(r"^\d*(?:>>?|&>|<)(.*)$")
 
 EXIT = re.compile(r'Exit code (\d+)')
@@ -102,13 +111,20 @@ def cases_segments(cmd):
 def _scan(cmd):
     """A command's simple commands, split at &&, ||, ;, |, &, a newline, ( and
     ), outside quotes and command substitutions, which nest as the shell nests
-    them. Each `$(...)` in a piece is replaced by `$SUB`, and its body is
-    returned beside the pieces, to be checked in its turn."""
+    them. Each `$(...)` or backtick substitution in a piece is replaced by
+    `$SUB`, and its body is returned beside the pieces, to be checked in its
+    turn. A `#` that starts a word starts a comment. The last value says
+    whether every quote and substitution was closed: a command left open
+    cannot be read, so it is not bookkeeping."""
     cmd = strip_heredocs(cmd).replace("\\\n", " ")
     pieces, subs, cur, stack, start, i = [], [], [], [], 0, 0
     while i < len(cmd):
         ch, top = cmd[i], (stack[-1] if stack else None)
-        outer = "$(" not in stack and "(" not in stack
+        outer = not ({"$(", "(", "`"} & set(stack))
+        if top not in ("'", '"') and ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()`"):
+            while i < len(cmd) and cmd[i] != "\n":
+                i += 1
+            continue
         if top == "'":
             if ch == "'":
                 stack.pop()
@@ -119,6 +135,20 @@ def _scan(cmd):
             continue
         elif top == '"' and ch == '"':
             stack.pop()
+        elif ch == "`":
+            if top == "`":
+                stack.pop()
+                if not ({"$(", "(", "`"} & set(stack)):
+                    subs.append(cmd[start:i])
+                    i += 1
+                    continue
+            else:
+                if outer:
+                    start = i + 1
+                    cur.append("$SUB")
+                stack.append("`")
+                i += 1
+                continue
         elif cmd.startswith("$(", i):
             if outer:
                 start = i + 2
@@ -134,7 +164,7 @@ def _scan(cmd):
             stack.append("(")
         elif top in ("$(", "(") and ch == ")":
             stack.pop()
-            if not stack or ("$(" not in stack and "(" not in stack):
+            if not ({"$(", "(", "`"} & set(stack)):
                 subs.append(cmd[start:i])
                 i += 1
                 continue
@@ -153,30 +183,39 @@ def _scan(cmd):
             cur.append(ch)
         i += 1
     pieces.append("".join(cur))
-    return [p.strip() for p in pieces if p.strip()], subs
+    return [p.strip() for p in pieces if p.strip()], subs, not stack
 
 
 def _words(piece):
     try:
-        return shlex.split(piece, comments=True)
+        return shlex.split(piece)
     except ValueError:
         return piece.split()
 
 
 def _files_ok(words, allowed):
     """Whether every file a text tool reads or writes, after its leading
-    operands, is one the case uses. Flags and numbers are not files."""
-    skip = TEXT.get(words[0], 0)
+    operands, is one the case uses. Flags, their values and numbers are not
+    files."""
+    tool = words[0]
+    skip = TEXT.get(tool, 0)
+    if tool in ("grep", "sed") and ("-e" in words or "--regexp" in words):
+        skip = 0
+    takes = VALUE_FLAGS.get(tool, {})
+    values = 0
     for w in words[1:]:
-        r = REDIRECT.match(w)
-        if r:
+        if values:
+            values -= 1
+            continue
+        if REDIRECT.match(w):
             continue
         if w.startswith("-") and w != "-":
+            values = takes.get(w, 0)
             continue
         if skip:
             skip -= 1
             continue
-        if w.isdigit() or w.startswith("<<"):
+        if w.lstrip("+-").isdigit() or w.startswith("<<"):
             continue
         if not allowed(w):
             return False
@@ -203,6 +242,16 @@ def _bookkeeping(piece, allowed):
     words = _words(piece)
     while words and (words[0] in CONTROL or re.match(r"^[A-Za-z_]\w*=", words[0])):
         words = words[1:]
+    while words and words[0] in WRAPPERS:
+        wrapper, words = words[0], words[1:]
+        operands = WRAPPERS[wrapper]
+        while words and (words[0].startswith("-") or operands):
+            if words[0].startswith("-"):
+                flag, words = words[0], words[1:]
+                if wrapper == "xargs" and flag in XARGS_VALUES:
+                    words = words[1:]
+            else:
+                words, operands = words[1:], operands - 1
     if not words or words[0] == "for":
         return True
     head = words[0]
@@ -215,6 +264,11 @@ def _bookkeeping(piece, allowed):
     return False
 
 
+def names_output(text, tid):
+    """Whether `text` names background task `tid`'s output file, by its whole name."""
+    return re.search(r"(?<![\w.-])%s\.output(?![\w.-])" % re.escape(tid), text) is not None
+
+
 def bookkeeping_only(cmd, wait_tasks=()):
     """Whether every simple command of a shell command, those inside command
     substitutions included, is cases bookkeeping. A file counts as the case's
@@ -225,11 +279,11 @@ def bookkeeping_only(cmd, wait_tasks=()):
 
     def allowed(path):
         return (path in named or path in ("-", "/dev/null", "/dev/stdout", "/dev/stderr")
-                or any(tid + ".output" in path for tid in wait_tasks))
+                or os.path.basename(path) in {tid + ".output" for tid in wait_tasks})
 
     def check(text, depth=0):
-        pieces, subs = _scan(text)
-        return (all(_bookkeeping(p, allowed) for p in pieces)
+        pieces, subs, closed = _scan(text)
+        return (closed and all(_bookkeeping(p, allowed) for p in pieces)
                 and (depth > 8 or all(check(s, depth + 1) for s in subs)))
     return check(cmd)
 
@@ -436,11 +490,14 @@ class Transcript:
         for ci, ts in per_call.items():
             tagged = []
             for t in ts:
-                reads = any(tid + ".output" in json.dumps(t.input) for tid in wait_files)
+                blob = json.dumps(t.input)
+                reads = any(names_output(blob, tid) for tid in wait_files)
+                # The subcommands outside heredoc bodies, as the bookkeeping check reads them.
+                subs = {s for s, _ in cases_segments(strip_heredocs(t.cmd))} & set(t.subs)
                 if t.name == "Skill" and "cases" in str(t.input.get("skill", "")):
                     tagged.append({"skill"})
-                elif t.name == "Bash" and (t.segments or reads) and bookkeeping_only(t.cmd, wait_files):
-                    tagged.append(set(t.subs) | ({"wait-read"} if reads else set()))
+                elif t.name == "Bash" and (subs or reads) and bookkeeping_only(t.cmd, wait_files):
+                    tagged.append(subs | ({"wait-read"} if reads else set()))
                 elif t.name != "Bash" and reads:
                     tagged.append({"wait-read"})
                 else:

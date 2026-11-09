@@ -237,6 +237,15 @@ class Audit(unittest.TestCase):
             "cases wait --id A & git push",
             "grep -rn foo src/ ; cases list",
             "tail -20 /tmp/x/b3.output",
+            "cat /tmp/x/ab7.output",
+            "# don't forget\ncases close A; git push",
+            "echo `git push`; cases list",
+            "echo $(git push",
+            "echo hi#x > src/x.rs; cases list",
+            "timeout 600 git push",
+            "cases list | tee out.txt",
+            "cases list | xargs rm",
+            "grep -e foo src/main.rs; cases list",
         ]
         bookkeeping = [
             'id="$(cases open --kind fyi --title "a)b; c" --worker w)" && cases wait --id "$id"',
@@ -249,6 +258,14 @@ class Audit(unittest.TestCase):
             "cases show A --answer | jq -r .answer 2>&1",
             "cases list > /dev/null 2>&1 && echo ok",
             "cat /tmp/x/b7.output",
+            "# don't forget\ncases close A --outcome done",
+            "id=`cases open --title t` && cases wait --id $id",
+            "timeout 600 cases wait --id A",
+            "while ! cases wait --id A; do sleep 5; done",
+            "cases list --json | xargs -n1 cases show",
+            "nohup cases wait --id A > /dev/null 2>&1",
+            "cut -d , -f1 /tmp/x/b7.output",
+            "tail -n +5 /tmp/x/b7.output",
         ]
         for cmd in work:
             self.assertFalse(transcript.bookkeeping_only(cmd, {"b7"}), cmd)
