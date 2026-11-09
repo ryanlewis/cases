@@ -643,6 +643,28 @@ for (const [how, close] of Object.entries(closes)) {
   });
 }
 
+test("back onto the address of the page a refusal pinned keeps it; back elsewhere moves", async () => {
+  // From the pinned page, back to another case's page moves to it.
+  const p = await openApp({ url: "/cases/bC4yR", server: { waiting: [a, b] } });
+  await p.click(link("/"));
+  p.page.props.refused({ ...a, revision: 7 });
+  await p.settle();
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  await p.back();
+  assert.deepEqual(route(p), { page: "case", id: "bC4yR", show: null });
+  p.app.unmount();
+  // Unpinned, back from a case under a filter to its page with none moves
+  // too: it lists the case under its own.
+  const q = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a, b] } });
+  await q.click(link("/cases/aB3xQ?show=all"));
+  assert.deepEqual(route(q), { page: "case", id: "aB3xQ", show: "all" });
+  q.taken();
+  await q.back();
+  assert.deepEqual(route(q), { page: "case", id: "aB3xQ", show: null });
+  assert.deepEqual(q.taken(), [WAITING, OTHERS, "GET /v1/cases/aB3xQ", LISTENERS]);
+  q.app.unmount();
+});
+
 test("a refusal on the list for a case it does not show leaves the page", async () => {
   const p = await openApp({ server: { waiting: [a, b] } });
   p.page.props.refused({ ...b, revision: 7 });

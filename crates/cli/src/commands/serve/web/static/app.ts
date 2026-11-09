@@ -438,7 +438,7 @@ function App({ build }: { build: string }) {
       // The page a refusal pinned is the page of its address, which names no
       // filter for the inbox's: as when closing the composer over it lands
       // there.
-      if (pinned.current === routeRef.current && r.show === null && same(r, { ...routeRef.current, show: null })) return;
+      if (pinned.current === routeRef.current && same(r, { ...routeRef.current, show: null })) return;
       if (stale.current) {
         location.reload();
         return;
