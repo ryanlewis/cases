@@ -351,7 +351,7 @@ fn is_json(headers: &HeaderMap) -> bool {
 
 /// Reads a write's body, of at most [`MAX_BODY`] bytes, within `timeout`: a
 /// request that stalls while it is sent is dropped rather than held (IN-11).
-async fn read_body(body: Body, timeout: Duration) -> Result<Bytes, Refusal> {
+pub(crate) async fn read_body(body: Body, timeout: Duration) -> Result<Bytes, Refusal> {
     match tokio::time::timeout(timeout, axum::body::to_bytes(body, MAX_BODY)).await {
         Ok(Ok(bytes)) => Ok(bytes),
         Ok(Err(_)) => Err(Refusal::bad("the body is over 1 MiB, or was cut off")),
