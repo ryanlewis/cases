@@ -4,7 +4,8 @@
 //! The engine is shown the store's cases after each read that finds the
 //! store moved. It compares their events, by case and seq, with the ones it
 //! has seen, so an event counts as new when it appears in the store, not by
-//! its time. The first read only records what is there. A case that leaves
+//! its time; a case whose rows did not grow is not looked at again. The
+//! first read only records what is there. A case that leaves
 //! the store is forgotten, so what the engine keeps is bounded by the live
 //! store.
 
@@ -56,12 +57,23 @@ pub(crate) struct Landed {
 /// open time tells its cases from the old store's.
 type CaseId = (Key, Option<Time>);
 
+/// What the engine keeps of a case: the seqs of its events looked at
+/// already, and how many rows the case had then.
+#[derive(Debug, Default)]
+struct Seen {
+    seqs: HashSet<u64>,
+    revision: u64,
+}
+
 /// Decides, read by read, which cases newly landed on the human.
 #[derive(Debug, Default)]
 pub(crate) struct Engine {
-    /// For each case in the last read, the seqs of the events looked at
-    /// already; `None` until the first read.
-    seen: Option<HashMap<CaseId, HashSet<u64>>>,
+    /// For each case in the last read, what was looked at already; `None`
+    /// until the first read.
+    seen: Option<HashMap<CaseId, Seen>>,
+    /// How many cases had their events looked at.
+    #[cfg(test)]
+    walked: usize,
 }
 
 impl Engine {
@@ -76,14 +88,26 @@ impl Engine {
         for (key, case) in cases {
             let Ok(case) = case else { continue };
             let id = (*key, case.opened_at());
-            let mut seqs = before.remove(&id).unwrap_or_default();
+            let mut was = before.remove(&id).unwrap_or_default();
+            // A case's rows are only ever added to, so one with as many rows
+            // as before has the same events, and nothing new: its events
+            // are not looked at again.
+            if was.revision == case.revision() {
+                seen.insert(id, was);
+                continue;
+            }
+            #[cfg(test)]
+            {
+                self.walked += 1;
+            }
             let fresh: HashSet<u64> = case
                 .events()
                 .iter()
                 .map(|event| event.seq)
-                .filter(|seq| seqs.insert(*seq))
+                .filter(|seq| was.seqs.insert(*seq))
                 .collect();
-            seen.insert(id, seqs);
+            was.revision = case.revision();
+            seen.insert(id, was);
             if first || fresh.is_empty() {
                 continue;
             }
@@ -654,6 +678,41 @@ mod tests {
         );
         assert!(!landed.iter().any(|landed| landed.key == still));
         assert!(engine.observe(&read(&db)).is_empty());
+    }
+
+    /// A read looks at the events of the cases that moved alone: none when
+    /// nothing did, one for a write to one case, and every case of a store
+    /// put in its place that holds more.
+    #[test]
+    fn a_read_looks_only_at_the_cases_that_moved() {
+        let (_dir, db) = scratch();
+        let keys: Vec<Key> = (0..10)
+            .map(|n| open(&db, "fyi", "today", &format!("Case {n}")))
+            .collect();
+        let mut engine = Engine::default();
+        engine.observe(&read(&db));
+        assert_eq!(engine.walked, 10);
+        engine.observe(&read(&db));
+        assert_eq!(engine.walked, 10);
+        write(&db, keys[3], "human", "answer", r#"{"ack":true}"#);
+        assert!(engine.observe(&read(&db)).is_empty());
+        assert_eq!(engine.walked, 11);
+        write(&db, keys[3], "agent", "pickup", "{}");
+        write(
+            &db,
+            keys[3],
+            "agent",
+            "note",
+            r#"{"body":"Again?","reopen":true}"#,
+        );
+        let landed = engine.observe(&read(&db));
+        assert_eq!(landed.len(), 1);
+        assert_eq!(landed[0].key, keys[3]);
+        assert_eq!(engine.walked, 12);
+        db.archive(&keys[5], None).unwrap();
+        engine.observe(&read(&db));
+        assert_eq!(engine.walked, 12);
+        assert_eq!(engine.seen.as_ref().unwrap().len(), 9);
     }
 
     #[test]
