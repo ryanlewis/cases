@@ -4,11 +4,13 @@
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cases_core::{Author, Case, EventType, State, Time, Urgency};
 use cases_store_sqlite::Key;
 
+use super::watch::Snapshot;
 use crate::output;
 
 /// What the screen tells the human about pointing an agent at the store.
@@ -18,7 +20,7 @@ const AGENT_HINT: [&str; 2] = [
 ];
 
 /// The store's cases, counted for the screen.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Stats {
     /// Open cases by urgency: blocking, today, whenever.
     pub(crate) open: [usize; 3],
@@ -74,6 +76,48 @@ impl Stats {
                 }
             }
         }
+        stats
+    }
+}
+
+/// The counts of the store's latest snapshot, since serve started. A
+/// snapshot never changes, and the watch gives the same one until the store
+/// does, so each is counted once, not on every frame that shows it.
+#[derive(Debug)]
+pub(crate) struct Counts {
+    since: Time,
+    /// The snapshot last counted, held so that a new one is never taken for
+    /// it, and its counts.
+    last: Option<(Arc<Snapshot>, Stats)>,
+    /// How many snapshots were counted.
+    #[cfg(test)]
+    counted: usize,
+}
+
+impl Counts {
+    /// Counts with `since` as when serve started.
+    pub(crate) fn new(since: Time) -> Counts {
+        Counts {
+            since,
+            last: None,
+            #[cfg(test)]
+            counted: 0,
+        }
+    }
+
+    /// The counts of `snapshot`.
+    pub(crate) fn of(&mut self, snapshot: Arc<Snapshot>) -> Stats {
+        if let Some((last, stats)) = &self.last
+            && Arc::ptr_eq(last, &snapshot)
+        {
+            return stats.clone();
+        }
+        let stats = Stats::count(&snapshot.cases, self.since);
+        #[cfg(test)]
+        {
+            self.counted += 1;
+        }
+        self.last = Some((snapshot, stats.clone()));
         stats
     }
 }
@@ -422,7 +466,7 @@ mod tests {
 
     /// The counts the first test leaves at zero: an open case of every
     /// urgency, one picked up, one withdrawn, which no count takes, and a
-    /// resume; and the events no count takes: an agent's pickup and
+    /// resume, made as serve started, which counts; and the events no count takes: an agent's pickup and
     /// withdraw, and the human's answer and the close before serve started.
     #[test]
     fn the_screen_counts_every_state_and_the_human_s_events_since_start() {
@@ -459,7 +503,7 @@ mod tests {
             Some(resumed),
             "human",
             "resume",
-            r#"{"resumed_at":"2026-09-16T12:03:00Z"}"#,
+            r#"{"resumed_at":"2026-09-16T12:00:00Z"}"#,
         );
         let picked = open("decision", "today");
         write(
@@ -550,6 +594,51 @@ mod tests {
                 "Ctrl-C quit",
             ]
         );
+    }
+
+    /// A snapshot is counted once, however many frames read it: again
+    /// when the store changes, and for a new snapshot that holds the same.
+    #[test]
+    fn each_snapshot_is_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Db::new(dir.path().join("cases.db")));
+        let fyi =
+            r#"{"kind":"fyi","urgency":"today","title":"T","opened_at":"2026-09-16T12:01:00Z"}"#;
+        write(&db, None, "agent", "open", fyi);
+        let log = Arc::new(super::super::log::Log::new(false, 0));
+        let watch = super::super::watch::Watch::new(
+            Arc::clone(&db),
+            "boot".into(),
+            "http://127.0.0.1:7337/".into(),
+            log,
+        )
+        .unwrap();
+        let mut counts = Counts::new(at("2026-09-16T12:00:00Z"));
+        let one = Stats {
+            open: [0, 1, 0],
+            last_event: Some(at("2026-09-16T12:01:00Z")),
+            ..Stats::default()
+        };
+        for _ in 0..3 {
+            assert_eq!(counts.of(watch.read().unwrap()), one);
+        }
+        assert_eq!(counts.counted, 1);
+        write(&db, None, "agent", "open", fyi);
+        let two = Stats {
+            open: [0, 2, 0],
+            ..one.clone()
+        };
+        for _ in 0..3 {
+            assert_eq!(counts.of(watch.read().unwrap()), two);
+        }
+        assert_eq!(counts.counted, 2);
+        let read = watch.read().unwrap();
+        let same = Arc::new(Snapshot {
+            cases: read.cases.clone(),
+            version: read.version.clone(),
+        });
+        assert_eq!(counts.of(same), two);
+        assert_eq!(counts.counted, 3);
     }
 
     #[test]

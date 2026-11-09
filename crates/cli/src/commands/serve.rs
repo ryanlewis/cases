@@ -41,7 +41,7 @@ use self::app::App;
 use self::binary::Binary;
 use self::http::Timeouts;
 use self::log::{Log, Rotating};
-use self::screen::{Screen, Stats, View};
+use self::screen::{Counts, Screen, View};
 use self::watch::Watch;
 use crate::ctx::Ctx;
 use crate::error::Error;
@@ -635,7 +635,7 @@ async fn step(app: &Arc<App>, painter: Option<Painter>) -> Option<Painter> {
 /// Draws the status screen.
 struct Painter {
     store: String,
-    started: Time,
+    counts: Counts,
     since: Instant,
     keys: bool,
     color: bool,
@@ -649,7 +649,7 @@ impl Painter {
         show(Screen::START);
         Painter {
             store,
-            started,
+            counts: Counts::new(started),
             since: Instant::now(),
             keys,
             color: std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()),
@@ -662,7 +662,7 @@ impl Painter {
         let view = View {
             store: &self.store,
             url: &app.url,
-            stats: read.map(|snapshot| Stats::count(&snapshot.cases, self.started)),
+            stats: read.map(|snapshot| self.counts.of(snapshot)),
             uptime: self.since.elapsed(),
             requests: app.requests.load(Ordering::Relaxed),
             notified: app.watch.notified(),
