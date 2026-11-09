@@ -7,7 +7,7 @@
 // while it is split up and while the way it refetches is made cheaper. App
 // runs on the stand-in page of app-page.js, which must be the first to load
 // it.
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { INDEX, LISTENERS, OTHERS, WAITING, element, form, link, nodes, openApp } from "./app-page.js";
 import { decision, steps } from "./case.js";
@@ -374,6 +374,24 @@ test("forward onto a closed composer's entry opens it again", async () => {
   p.app.unmount();
 });
 
+test("a composer opened while the back of the last one's close is out is not opened again when it lands", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await p.click(link("/message?to=w1"));
+  p.composer.props.onClose();
+  // Before the back lands, a link opens the composer again, and it is drawn.
+  mock.timers.tick(1000);
+  p.document.dispatch("click", { target: link("/message?to=w2"), button: 0, preventDefault() {} });
+  p.app.draw();
+  const key = p.composer.key;
+  mock.timers.tick(1000);
+  await p.settle();
+  assert.equal(p.composer.props.to, "w2");
+  assert.equal(p.composer.key, key);
+  assert.deepEqual(p.entries(), ["/", ">/"]);
+  assert.deepEqual(p.history.state, { composer: { to: "w2", re: "" } });
+  p.app.unmount();
+});
+
 test("back onto the composer's address opens the composer", async () => {
   const p = await openApp({ url: "/message?to=w1", server: { waiting: [a] } });
   p.composer.props.onClose();
@@ -442,19 +460,22 @@ test("sends that stay where they are: an edit, a message, one from the inbox-zer
   assert.ok(p.html.includes("<span>edit recorded on <a"), p.html);
   assert.deepEqual(p.entries(), [">/"]);
   await p.click(link("/message"));
+  p.taken();
   p.composer.props.onSent(kase("fG7bV", "A note", { kind: "message", state: "sent", worker: "w1" }));
   await p.settle();
   assert.ok(p.html.includes('<span>message sent to w1: <a href="/cases/fG7bV-a-note">A note</a></span>'), p.html);
   assert.deepEqual(route(p), { page: "list", show: "inbox" });
+  assert.deepEqual(p.entries(), ["/", ">/"]);
+  assert.deepEqual(p.taken(), []);
   // A send that comes back after the page moved on only says so.
   const sent = p.page.props.sent;
   p.composer.props.onClose();
   await p.settle();
-  await p.click(link("/cases/bC4yR"));
+  await p.click(link("/?show=done"));
   sent("answer", a);
   await p.settle();
   assert.ok(p.html.includes("answer recorded on"), p.html);
-  assert.deepEqual(route(p), { page: "case", id: "bC4yR", show: null });
+  assert.deepEqual(route(p), { page: "list", show: "done" });
   p.app.unmount();
   const z = await openApp({ server: { done: [shut] } });
   z.page.props.sent("withdraw", shut);
@@ -534,6 +555,32 @@ test("a refusal on the list drops a read of the list still out", async () => {
   await p.settle();
   assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
   assert.equal(shown(p), "aB3xQ");
+  p.app.unmount();
+});
+
+test("a read of the list that lands between a refusal and the page's next draw is dropped too", async (t) => {
+  t.after(() => delete globalThis.matchMedia);
+  const fades = [];
+  const extra = (page) => {
+    page.document.startViewTransition = (update) => {
+      fades.push(page.location.pathname);
+      update();
+    };
+    globalThis.matchMedia = () => ({ matches: false });
+  };
+  const p = await openApp({ server: { waiting: [a, b] }, extra });
+  let release;
+  p.server.routes[WAITING] = () => new Promise((r) => (release = r));
+  await event(p, "v2");
+  delete p.server.routes[WAITING];
+  p.page.props.refused({ ...a, revision: 7 });
+  // The read comes back before App draws again.
+  release({ status: 200, body: { list: [b] } });
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  await p.settle();
+  assert.equal(shown(p), "aB3xQ");
+  // Only the first page cross-faded: the pinned page does not.
+  assert.deepEqual(fades, ["/"]);
   p.app.unmount();
 });
 
