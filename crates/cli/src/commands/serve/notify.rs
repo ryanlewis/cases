@@ -4,10 +4,10 @@
 //! The engine is shown the store's cases after each read that finds the
 //! store moved. It compares their events, by case and seq, with the ones it
 //! has seen, so an event counts as new when it appears in the store, not by
-//! its time; a case whose rows did not grow is not looked at again. The
-//! first read only records what is there. A case that leaves
-//! the store is forgotten, so what the engine keeps is bounded by the live
-//! store.
+//! its time; a case with the same rows as before, by their count, highest
+//! seq and how many read, is not looked at again. The first read only
+//! records what is there. A case that leaves the store is forgotten, so
+//! what the engine keeps is bounded by the live store.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -58,11 +58,17 @@ pub(crate) struct Landed {
 type CaseId = (Key, Option<Time>);
 
 /// What the engine keeps of a case: the seqs of its events looked at
-/// already, and how many rows the case had then.
+/// already, and the case's shape then: how many rows it had, its highest
+/// seq, and how many of its rows read as events.
 #[derive(Debug, Default)]
 struct Seen {
     seqs: HashSet<u64>,
-    revision: u64,
+    shape: (u64, u64, usize),
+}
+
+/// A case's shape, as [`Seen`] keeps it.
+fn shape(case: &Case) -> (u64, u64, usize) {
+    (case.revision(), case.last_seq(), case.events().len())
 }
 
 /// Decides, read by read, which cases newly landed on the human.
@@ -89,10 +95,13 @@ impl Engine {
             let Ok(case) = case else { continue };
             let id = (*key, case.opened_at());
             let mut was = before.remove(&id).unwrap_or_default();
-            // A case's rows are only ever added to, so one with as many rows
-            // as before has the same events, and nothing new: its events
-            // are not looked at again.
-            if was.revision == case.revision() {
+            // A case's rows are only ever added to, each at the next seq, so
+            // one of the same shape as before has the same events, and
+            // nothing new: its events are not looked at again. A copy of
+            // the store put in its place can hold other rows in a case of
+            // the same shape only where a row that does not read in one
+            // reads in the other, in the same number, at other seqs.
+            if was.shape == shape(case) {
                 seen.insert(id, was);
                 continue;
             }
@@ -106,7 +115,7 @@ impl Engine {
                 .map(|event| event.seq)
                 .filter(|seq| was.seqs.insert(*seq))
                 .collect();
-            was.revision = case.revision();
+            was.shape = shape(case);
             seen.insert(id, was);
             if first || fresh.is_empty() {
                 continue;
@@ -633,6 +642,73 @@ mod tests {
         assert!(engine.observe(&read(&old)).is_empty());
         write(&old, key, "agent", "note", reopen);
         assert!(engine.observe(&read(&old)).is_empty());
+    }
+
+    /// Writes a row to the case `key` of the store in `dir` straight into
+    /// SQLite, at `seq`, as a hand edit or another cases could.
+    fn row(dir: &tempfile::TempDir, key: Key, seq: u64, author: &str, event: &str, data: &str) {
+        let conn = rusqlite::Connection::open(dir.path().join("cases.db")).unwrap();
+        conn.execute(
+            "INSERT INTO events (case_key, seq, author, event, at, data) VALUES (?1, ?2, ?3, ?4, '', ?5)",
+            rusqlite::params![
+                i64::try_from(key.get()).unwrap(),
+                i64::try_from(seq).unwrap(),
+                author,
+                event,
+                data.as_bytes()
+            ],
+        )
+        .unwrap();
+    }
+
+    /// A copy put in the store's place with as many rows in a case, but an
+    /// event at a seq the old store did not have as one, lands it: a row
+    /// that did not read in the old store and does in the copy, or a seq
+    /// the old store never had.
+    #[test]
+    fn a_copy_with_as_many_rows_lands_an_event_at_a_seq_not_seen() {
+        let store = || {
+            let (dir, db) = scratch();
+            let data = r#"{"kind":"decision","urgency":"today","title":"Copied","options":["Pin","Float"],"opened_at":"2026-09-17T08:00:00Z"}"#;
+            let (key, _) = db
+                .create(&append("agent", "open", data), &Writer::new(None))
+                .unwrap();
+            write(&db, key, "human", "answer", r#"{"choice":1}"#);
+            write(&db, key, "agent", "pickup", "{}");
+            (dir, db, key)
+        };
+        let reopen = r#"{"body":"One more thing?","reopen":true}"#;
+        let note = r#"{"body":"Still on it."}"#;
+        // Its fourth row does not read in the old store, and does in the copy.
+        let (old_dir, old, key) = store();
+        row(&old_dir, key, 4, "agent", "note", "{");
+        let mut engine = Engine::default();
+        engine.observe(&read(&old));
+        let (read_dir, readable, _) = store();
+        row(&read_dir, key, 4, "agent", "note", reopen);
+        assert_eq!(
+            engine.observe(&read(&readable)),
+            [Landed {
+                key,
+                seq: 4,
+                name: Name::Reopen
+            }]
+        );
+        // Its fourth row is seq 4 in the old store, and seq 5 in the copy.
+        let (old_dir, old, key) = store();
+        row(&old_dir, key, 4, "agent", "note", note);
+        let mut engine = Engine::default();
+        engine.observe(&read(&old));
+        let (gap_dir, gap, _) = store();
+        row(&gap_dir, key, 5, "agent", "note", reopen);
+        assert_eq!(
+            engine.observe(&read(&gap)),
+            [Landed {
+                key,
+                seq: 5,
+                name: Name::Reopen
+            }]
+        );
     }
 
     /// Several cases moving in one read land each by its own event, beside
