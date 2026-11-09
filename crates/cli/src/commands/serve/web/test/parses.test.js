@@ -127,15 +127,16 @@ test("a redraw of the same case parses nothing again; an amend that changes the 
   assert.deepEqual(taken(), none, "the amended case again");
 });
 
-test("a script is drawn again when the wrap option changes, and only then", () => {
+test("a script, and the body's code, are drawn again when the wrap option changes, and only then", () => {
   view(approval);
   taken();
   const was = globalThis.window;
   globalThis.window = { casesPrefs: { read: (key) => (key === "wrap" ? "wrap" : "") } };
   try {
     const page = view(approval);
-    assert.deepEqual(taken(), { ...none, codeBlock: 3 });
-    assert.ok(page.includes('aria-pressed="true"'), page);
+    // markdown.js draws the body's code block with the wrap option too.
+    assert.deepEqual(taken(), { ...none, markdown: 1, codeBlock: 3 });
+    assert.ok(page.includes('aria-pressed="true"') && !page.includes('aria-pressed="false"'), page);
     view(approval);
     assert.deepEqual(taken(), none);
   } finally {
