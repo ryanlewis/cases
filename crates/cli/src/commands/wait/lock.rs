@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use crate::error::Error;
-use crate::instance::fnv1a;
+use crate::instance::{self, fnv1a};
 use crate::output;
 
 /// The locks one pickup wait holds, until it is dropped.
@@ -50,7 +50,8 @@ impl From<Refusal> for Error {
     }
 }
 
-/// Takes the lock on each of `scopes` for the store at `store`.
+/// Takes the lock on each of `scopes` for the store at `store`, by whatever
+/// path names it: the locks are beside the store file itself.
 ///
 /// # Errors
 ///
@@ -58,7 +59,8 @@ impl From<Refusal> for Error {
 /// file says so, the process and when it started; or when the directory or
 /// a file cannot be made.
 pub(crate) fn take(store: &Path, scopes: &[Scope]) -> Result<Held, Refusal> {
-    let dir = dir(store);
+    let dir = dir(store)
+        .map_err(|error| Refusal::Failed(Error::new(format!("{}: {error}", store.display()))))?;
     fs::create_dir_all(&dir)
         .map_err(|error| Refusal::Failed(Error::new(format!("{}: {error}", dir.display()))))?;
     let started = output::now().map_err(Refusal::Failed)?;
@@ -103,11 +105,16 @@ pub(crate) fn take(store: &Path, scopes: &[Scope]) -> Result<Held, Refusal> {
 }
 
 /// The directory of the locks for the store at `store`: beside it, named
-/// after it, as SQLite names its `-wal` and `-shm` files.
-fn dir(store: &Path) -> PathBuf {
+/// after it, as SQLite names its `-wal` and `-shm` files. The path is
+/// resolved first ([`instance::resolve`]), so that a symlink to the store
+/// file, by which a second wait would otherwise lock beside the link, finds
+/// the same directory as the store's own path. A path with no symlink in it
+/// gives the directory it always gave.
+fn dir(store: &Path) -> std::io::Result<PathBuf> {
+    let store = instance::resolve(&std::path::absolute(store)?);
     let mut name = store.file_name().unwrap_or_default().to_owned();
     name.push("-waits");
-    store.with_file_name(name)
+    Ok(store.with_file_name(name))
 }
 
 /// The file of the lock on `what` `text`: a slug of the text for people,
@@ -160,9 +167,31 @@ mod tests {
     #[test]
     fn the_directory_is_beside_the_store() {
         assert_eq!(
-            dir(Path::new("/data/cases.db")),
+            dir(Path::new("/data/cases.db")).unwrap(),
             Path::new("/data/cases.db-waits")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_directory_is_beside_the_store_file_by_any_path_to_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = fs::canonicalize(temp.path()).unwrap();
+        let store = real.join("cases.db");
+        let want = real.join("cases.db-waits");
+        // Not there yet: nothing is made, and the path is taken as it is.
+        assert_eq!(dir(&store).unwrap(), want);
+        assert!(fs::read_dir(&real).unwrap().next().is_none());
+        fs::write(&store, "").unwrap();
+        std::os::unix::fs::symlink(&store, real.join("link.db")).unwrap();
+        assert_eq!(dir(&real.join("link.db")).unwrap(), want);
+        assert_eq!(dir(&store).unwrap(), want);
+        // A lock taken by one path is held against the other.
+        let _held = take(&real.join("link.db"), &[("worker", "w".into())]).unwrap();
+        assert!(matches!(
+            take(&store, &[("worker", "w".into())]),
+            Err(Refusal::Held(_))
+        ));
     }
 
     #[test]
