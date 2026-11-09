@@ -84,6 +84,53 @@ test("a send refused for a token from before serve restarted is sent once more",
   assert.ok(calls.filter((c) => c === "GET /v1").length >= 1, "the token is read again");
 });
 
+// A fetch where every POST is refused for an old token, and the token is
+// read again by `reread`, once serve has been reached for it before.
+function restarted(t, reread, post = () => new Response(JSON.stringify({ error: { category: "csrf", message: "bad token" } }), { status: 403 })) {
+  const was = globalThis.fetch;
+  t.after(() => { globalThis.fetch = was; });
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const method = init && init.method ? init.method : "GET";
+    calls.push(`${method} ${url}`);
+    if (url === "/v1") return calls.length === 1 ? new Response(JSON.stringify({ csrf: "tok", build: "b" }), { status: 200 }) : reread();
+    return post(calls.filter((c) => c.startsWith("POST")).length);
+  };
+  return calls;
+}
+
+test("a send refused for an old token, whose token cannot be read again, says it was not recorded", async (t) => {
+  const calls = restarted(t, () => { throw new TypeError("Failed to fetch"); });
+  await api.index();
+  const sent = await send("abc", "answer", { revision: 2 });
+  assert.doesNotMatch(sent.refusal, /may or may not/);
+  assert.match(sent.refusal, /could not be reached/);
+  assert.match(sent.refusal, /not recorded/);
+  assert.equal(sent.current, undefined);
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 1, "the write is not sent again");
+});
+
+test("a message refused for an old token, whose token cannot be read again, says it was not sent", async (t) => {
+  restarted(t, () => { throw new TypeError("Failed to fetch"); });
+  await api.index();
+  const sent = await api.sendMessage({ body: "hi" });
+  assert.doesNotMatch(sent.refusal, /may or may not/);
+  assert.match(sent.refusal, /not sent/);
+});
+
+test("a send whose token is read again, but whose second send cannot reach serve, says the outcome is unknown", async (t) => {
+  const refused = new Response(JSON.stringify({ error: { category: "csrf", message: "bad token" } }), { status: 403 });
+  const calls = restarted(
+    t,
+    () => new Response(JSON.stringify({ csrf: "new", build: "b" }), { status: 200 }),
+    (n) => { if (n === 1) return refused; throw new TypeError("Failed to fetch"); },
+  );
+  await api.index();
+  const sent = await send("abc", "answer", { revision: 2 });
+  assert.match(sent.refusal, /may or may not have been recorded/);
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2);
+});
+
 // A case as serve sends it with an event stored with no data.
 const served = (revision = 2) => ({
   id: "c1Ab2", kind: "decision", state: "open", title: "T", revision, amend_seq: 0, last_seq: 2,
