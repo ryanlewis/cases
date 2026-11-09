@@ -249,7 +249,15 @@ test("a move in the history within the page shown, to a fragment and back, reads
 
 test("a read a later one overtakes is dropped, however late it comes back", async () => {
   const releases = [];
-  const p = await openApp({ server: { waiting: [a, b] } });
+  const fades = [];
+  const extra = (page) => {
+    page.document.startViewTransition = (update) => {
+      fades.push(page.location.pathname);
+      update();
+    };
+    globalThis.matchMedia = () => ({ matches: false });
+  };
+  const p = await openApp({ server: { waiting: [a, b] }, extra });
   p.server.routes[WAITING] = () => new Promise((r) => releases.push(r));
   await p.click(link("/cases/aB3xQ"));
   await p.click(link("/cases/bC4yR"));
@@ -257,9 +265,12 @@ test("a read a later one overtakes is dropped, however late it comes back", asyn
   releases[1]({ status: 200, body: { list: [a, b] } });
   await p.settle();
   assert.equal(shows(p).shown, "bC4yR");
+  assert.equal(fades.length, 2);
   releases[0]({ status: 200, body: { list: [a, b] } });
   await p.settle();
   assert.equal(shows(p).shown, "bC4yR");
+  // Nor does it cross-fade.
+  assert.equal(fades.length, 2);
   // Nor does an overtaken read that failed say so.
   p.server.routes[WAITING] = () => new Promise((r) => releases.push(r));
   await p.click(link("/cases/aB3xQ"));
@@ -270,6 +281,7 @@ test("a read a later one overtakes is dropped, however late it comes back", asyn
   await p.settle();
   assert.ok(!p.html.includes("late"), p.html);
   p.app.unmount();
+  delete globalThis.matchMedia;
 });
 
 test("a refresh keeps the case shown on the list while it is listed; a move to the list picks the first again", async () => {
