@@ -192,12 +192,13 @@ function form(c, { preselect = false, last, component } = {}) {
   const sends = [];
   const refusals = [];
   const props = { ...v.props, c, last, send: async (what, body) => sends.push([what, body]), refuse: (p) => refusals.push(p) };
+  const was = globalThis.window;
   globalThis.window = { casesPrefs: { read: (key) => (key === "approve" && preselect ? "on" : "off") } };
   let m;
   try {
     m = mount(v.type, props);
   } finally {
-    delete globalThis.window;
+    globalThis.window = was;
   }
   const find = (pick, what) => {
     const found = [...nodes(m.tree)].find((n) => n.props && pick(n));
@@ -342,12 +343,13 @@ test("an approval's form: per row its title, note, verdicts numbered and its not
 
 test("the options are read once: a pre-select turned on while the form is open leaves it be", () => {
   const f = form(approval);
+  const was = globalThis.window;
   globalThis.window = { casesPrefs: { read: () => "on" } };
   try {
     f.redraw({ ...approval });
     f.submit();
   } finally {
-    delete globalThis.window;
+    globalThis.window = was;
   }
   assert.deepEqual(f.refusals, [`choose approve, hold or don't run for "row one"`]);
 });
@@ -434,7 +436,7 @@ test("an amend that replaces a briefing's left-out items clears the ticks; a red
   f.submit();
   assert.deepEqual(f.sends, [["answer", { answer: { note: "kept", briefing: "accept", file: [1, 3] } }]]);
   f.redraw({ ...briefing, left_out: ["the docs", "the TUI", "a bench"], revision: 3 });
-  assert.ok(!f.html.includes(" checked/> the"), f.html);
+  assert.ok(!/type="checkbox"[^>]* checked/.test(f.html), f.html);
   f.submit();
   assert.deepEqual(f.sends[1], ["answer", { answer: { note: "kept", briefing: "accept" } }]);
   // A case with no items that gains some clears nothing it had not.
