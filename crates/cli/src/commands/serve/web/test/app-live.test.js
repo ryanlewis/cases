@@ -584,6 +584,32 @@ test("a read of the list that lands between a refusal and the page's next draw i
   p.app.unmount();
 });
 
+test("a refusal on the list while the composer is open pins the case on the composer's entry", async () => {
+  const p = await openApp({ server: { waiting: [a, b] } });
+  await p.click(link("/message?to=w1"));
+  p.page.props.refused({ ...a, revision: 7 });
+  await p.settle();
+  // The case's page takes the place of the composer's entry, and of what
+  // it held.
+  assert.deepEqual(p.entries(), ["/", ">/cases/aB3xQ-first-case"]);
+  assert.equal(p.history.state, null);
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  // Another composer opened while that entry is still the composer's
+  // leaves it as it is.
+  mock.timers.tick(1000);
+  await p.click(link("/message?to=w2"));
+  assert.equal(p.composer.props.to, "w2");
+  assert.equal(p.history.state, null);
+  // Pinned as it is today, a bug: closing the composer takes that entry off
+  // with history.back(), which lands on the list the refusal moved from, so
+  // the page leaves the refused case's page for the list.
+  p.composer.props.onClose();
+  await p.settle();
+  assert.deepEqual(p.entries(), [">/", "/cases/aB3xQ-first-case"]);
+  assert.deepEqual(route(p), { page: "list", show: "inbox" });
+  p.app.unmount();
+});
+
 test("a refusal on the list for a case it does not show leaves the page", async () => {
   const p = await openApp({ server: { waiting: [a, b] } });
   p.page.props.refused({ ...b, revision: 7 });
