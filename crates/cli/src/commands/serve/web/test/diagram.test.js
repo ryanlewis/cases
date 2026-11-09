@@ -83,6 +83,9 @@ test("when mermaid does not load, the code block stays with a line that says so,
   assert.equal(first.shadowRoot, null);
   assert.ok(first.querySelector("code"), "the code block stays");
   mermaid.fail = false;
+  // Whether a diagram that failed so is drawn once mermaid loads is not
+  // pinned here: only that the import is tried again.
+  first.remove();
   const second = fence("flowchart LR\n  C --> D");
   draw(document.body);
   await settle();
@@ -93,7 +96,6 @@ test("when mermaid does not load, the code block stays with a line that says so,
   await settle();
   assert.equal(mermaid.imports, 2, "a loaded mermaid is imported once");
   assert.equal(mermaid.renders.length, 1, "a drawn diagram is not drawn again");
-  first.remove();
   second.remove();
 });
 
