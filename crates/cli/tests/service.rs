@@ -139,12 +139,14 @@ impl Service {
     fn serving(&self) -> (String, (TcpListener, String)) {
         for _ in 0..TRIES {
             let addr = self.install();
-            match TcpListener::bind(&addr) {
+            match common::try_listen(&addr) {
                 Ok(listener) => {
                     let serve = self.env.fake_serve_with(&self.env.store, listener);
                     return (addr, serve);
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    self.calls();
+                }
                 Err(error) => panic!("{addr}: {error}"),
             }
         }
@@ -335,7 +337,11 @@ fn install_takes_the_address_and_name_from_the_config_file() {
             service
                 .env
                 .config(&format!("listen = \"{addr}\"\nname = \"From File\"\n"));
-            (addr.clone(), service.run(&["install"]))
+            let out = service.run(&["install"]);
+            if taken(&out, &addr) {
+                service.calls();
+            }
+            (addr, out)
         })
         .find(|(addr, out)| !taken(out, addr))
         .expect("an address that stayed free");

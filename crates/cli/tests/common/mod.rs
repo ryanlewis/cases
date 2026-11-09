@@ -41,8 +41,14 @@ static FDS: Mutex<()> = Mutex::new(());
 
 /// A listener on `addr`, made while no process starts.
 pub(crate) fn listen(addr: &str) -> TcpListener {
+    try_listen(addr).expect("a listener")
+}
+
+/// A listener on `addr`, made while no process starts, or why there is
+/// none, such as the address being taken.
+pub(crate) fn try_listen(addr: &str) -> std::io::Result<TcpListener> {
     let _alone = FDS.lock().unwrap_or_else(PoisonError::into_inner);
-    TcpListener::bind(addr).expect("a listener")
+    TcpListener::bind(addr)
 }
 
 /// A pipe, made while no process starts.
