@@ -424,3 +424,24 @@ test("a diagram not drawn as mermaid did not load is drawn once it loads, with o
   assert.ok(el.querySelector("code"), "the code block stays in the light tree");
   el.remove();
 });
+
+test("a diagram not drawn as mermaid did not load, whose text then does not parse, is not tried again", async () => {
+  const fresh = await import("../static/diagram.ts?unloaded-then-unparsed");
+  mermaid.fail = true;
+  const el = fence("flowchart LR\n  A -->");
+  fresh.draw(document.body);
+  await settle();
+  mermaid.fail = false;
+  mermaid.svg = () => {
+    throw new Error("Parse error on line 2:\nExpecting 'AMP', got 'EOF'");
+  };
+  fresh.draw(document.body);
+  await settle();
+  assert.equal(error(el), "not drawn: Parse error on line 2: Expecting 'AMP', got 'EOF'");
+  const renders = mermaid.renders.length;
+  fresh.draw(document.body);
+  await settle();
+  assert.equal(mermaid.renders.length, renders, "a parse failure is for good");
+  assert.equal(el.querySelectorAll(".diagram-error").length, 1);
+  el.remove();
+});

@@ -181,7 +181,6 @@ function show(el: Element, svg: string): void {
   const shadow = el.shadowRoot || el.attachShadow({ mode: "open" });
   shadow.adoptedStyleSheets = [host, sheet];
   shadow.replaceChildren(node);
-  unloaded.delete(el);
   el.querySelector(".diagram-error")?.remove();
 }
 
@@ -208,6 +207,7 @@ function fail(el: Element, e: unknown): void {
   if (el.shadowRoot) return;
   drawn.delete(el);
   if (e instanceof Unloaded) unloaded.add(el);
+  else unloaded.delete(el);
   el.querySelector(".diagram-error")?.remove();
   const line = document.createElement("p");
   line.className = "meta diagram-error";
