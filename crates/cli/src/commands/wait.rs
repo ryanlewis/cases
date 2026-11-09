@@ -1113,8 +1113,9 @@ fn listens(args: &Args) -> bool {
 /// A wait that listens for messages (AG-16): the id it records itself by,
 /// made at its first record, the workers it records as listening, the
 /// labels and kinds it waits on, the name it picks messages up as, the doing
-/// line it gives on each worker's first record, the workers whose record has
-/// had it, and when its next heartbeat is due.
+/// line it gives on each worker's first record and on its first after a
+/// lapse, the workers whose live record has had it, and when its next
+/// heartbeat is due.
 #[derive(Debug)]
 struct Listening<'a> {
     id: Option<String>,
