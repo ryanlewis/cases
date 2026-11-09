@@ -423,16 +423,25 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
 }
 
 /// The status and the body's length the answer's `head` gives, read
-/// strictly: the version 1.0 or 1.1, each header's name a token, and one
-/// length, of digits alone; or why it gives none.
+/// strictly: each line ended by CRLF alone, the version 1.0 or 1.1, a
+/// status of three digits, each header's name a token, no transfer coding,
+/// and one length, of digits alone; or why it gives none.
 fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
+    // A bare CR or LF would end a line for some readers and not for
+    // others, so it could hide a header in the one before (RFC 9112, 2.2).
+    if head.split("\r\n").any(|line| line.contains(['\r', '\n'])) {
+        return Err("the answer's line has a bare CR or LF");
+    }
     let mut lines = head.split("\r\n");
     let status = lines
         .next()
         .and_then(|line| {
             let mut parts = line.split(' ');
             matches!(parts.next()?, "HTTP/1.0" | "HTTP/1.1").then_some(())?;
-            parts.next()?.parse::<u16>().ok()
+            // Three digits (RFC 9112, 4).
+            let status = parts.next()?;
+            (status.len() == 3 && status.bytes().all(|b| b.is_ascii_digit())).then_some(())?;
+            status.parse::<u16>().ok()
         })
         .ok_or("the answer's status line is not one")?;
     let mut length = None;
@@ -443,6 +452,11 @@ fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
         let Some((name, value)) = line.split_once(':').filter(|(name, _)| is_token(name)) else {
             return Err("the answer's header is not one");
         };
+        // A transfer coding with a length is an error (RFC 9112, 6.3), and
+        // without one the body's end is not known.
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("the answer has a transfer coding");
+        }
         if !name.eq_ignore_ascii_case("content-length") {
             continue;
         }
@@ -745,6 +759,73 @@ mod tests {
         // and tabs around a length, are taken.
         let fine = b"HTTP/1.0 200 OK\r\nX-a_1.2~!#$%&'*+^`|: v\r\nContent-Length: \t2 \r\n\r\n{}";
         assert_eq!(answer_in(fine, 10).unwrap(), Some((200, b"{}".to_vec())));
+    }
+
+    /// Asserts that `answer_in` refuses each of `bads` as a malformed
+    /// answer, for the reason `why`.
+    fn refused(bads: &[&[u8]], why: &str) {
+        for bad in bads {
+            match answer_in(bad, 10) {
+                Err(ureq::Error::Io(error)) => {
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+                    assert_eq!(error.to_string(), why, "{:?}", String::from_utf8_lossy(bad));
+                }
+                other => panic!("{:?}: {other:?}", String::from_utf8_lossy(bad)),
+            }
+        }
+    }
+
+    #[test]
+    fn an_answer_s_status_is_three_digits() {
+        refused(
+            &[
+                b"HTTP/1.1 +200 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 0200 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 1 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 20 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 65535 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 2\xd9\xa000 OK\r\nContent-Length: 0\r\n\r\n",
+            ],
+            "the answer's status line is not one",
+        );
+        // Any three digits, with or without a reason, are taken.
+        for (fine, status) in [
+            (&b"HTTP/1.1 599 Odd\r\nContent-Length: 0\r\n\r\n"[..], 599),
+            (b"HTTP/1.1 100\r\nContent-Length: 0\r\n\r\n", 100),
+            (b"HTTP/1.1 409 \r\nContent-Length: 0\r\n\r\n", 409),
+        ] {
+            assert_eq!(answer_in(fine, 10).unwrap(), Some((status, Vec::new())));
+        }
+    }
+
+    #[test]
+    fn an_answer_with_a_transfer_coding_fails() {
+        // A transfer coding with a length is an error (RFC 9112, 6.3), and
+        // the reader knows no coding without one.
+        refused(
+            &[
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ntransfer-encoding: identity\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nTRANSFER-ENCODING:\r\nContent-Length: 2\r\n\r\n{}",
+            ],
+            "the answer has a transfer coding",
+        );
+    }
+
+    #[test]
+    fn an_answer_s_head_ends_its_lines_with_crlf_alone() {
+        // A bare LF or CR is neither a line's end nor in one, so it can't
+        // hide a header in the value of the last.
+        refused(
+            &[
+                b"HTTP/1.1 200 OK\r\nX: a\nContent-Length: 9\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nX: a\rContent-Length: 9\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\nX: a\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\n\r\n\r\n{}",
+            ],
+            "the answer's line has a bare CR or LF",
+        );
     }
 
     #[test]
