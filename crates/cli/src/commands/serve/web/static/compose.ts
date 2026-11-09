@@ -367,23 +367,36 @@ interface Sending {
   onSent: (after: Case) => void;
 }
 
+// The guard of the send that went last from any composer. A composer
+// closed while its send is out is gone, and its guard with it, but the send
+// goes on: the human, opening the composer again to write the note again,
+// would send it twice. The browser closes a dialog on a second Escape
+// whatever the page does, so the composer cannot be kept open until its
+// send is answered; this guard outlives it instead.
+let last: Guard | null = null;
+
 // Sends the message the fields give, once, and closes the composer when it
 // is sent; else says why not. Each send has a guard of its own, and lets go
 // of only that one: a send slower than ten seconds does not, when it comes
 // back, let go of the send that went after it. A message sent counts, from
 // whichever send it came: the composer goes, and its guard holds for good,
 // so the answer of a send after it changes nothing; a refusal counts only
-// from the send that went last.
+// from the send that went last. A send out from a composer closed since
+// holds this one as its own would, and says so.
 async function submit(s: Sending, e: Event): Promise<void> {
   e.preventDefault();
   if (s.sending.current?.held) return;
+  if (last?.held && !last.sent) {
+    s.setRefusal("the message sent before is not answered yet: wait for it before sending this one");
+    return;
+  }
   const { body, problem } = drafted(s.f, s.choices, s.re);
   if (problem) {
     s.setRefusal(problem);
     return;
   }
   const guard: Guard = { held: true };
-  s.sending.current = guard;
+  s.sending.current = last = guard;
   const release = setTimeout(() => (guard.held = false), 10000);
   try {
     const { after, refusal: why } = await api.sendMessage(body!);
