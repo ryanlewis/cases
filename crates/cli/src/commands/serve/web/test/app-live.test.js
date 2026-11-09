@@ -647,6 +647,22 @@ for (const [how, close] of Object.entries(closes)) {
   });
 }
 
+test("a refusal keeps where its entry was scrolled, for a later back to it", async () => {
+  const p = await openApp({ server: { waiting: [a, b] } });
+  p.window.scrollY = 80;
+  await p.click(link("/cases/bC4yR"));
+  await p.back();
+  // Back on the list, scrolled as it was; then its case is refused.
+  p.page.props.refused({ ...a, revision: 7 });
+  await p.settle();
+  await p.forward();
+  p.log.length = 0;
+  await p.back();
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  assert.deepEqual(p.log, ["scrollTo 80"]);
+  p.app.unmount();
+});
+
 test("another composer opened over a refusal's case puts no second entry on", async () => {
   const p = await openApp({ server: { waiting: [a, b] } });
   await p.click(link("/message?to=w1"));
