@@ -96,6 +96,48 @@ function scrolled(): Scroll {
   return { y: window.scrollY, list: list ? list.scrollTop : 0, work: work ? work.scrollTop : 0 };
 }
 
+// An open composer has its entry in the history, which back takes off.
+// The page under it keeps where it was scrolled, as a move by a link
+// does, for a back to it after "about" takes the entry's place.
+function useComposerEntry(composing: Composing | null, entry: Entry): void {
+  useEffect(() => {
+    if (!composing) return;
+    if (!entry.on && !(history.state && history.state.composer)) history.replaceState({ ...history.state, scrolled: scrolled() }, "");
+    entry.opened({ to: composing.to, re: composing.re });
+  }, [composing]);
+}
+
+// The title leads with the open cases, and the tab icon shows them (IN-01).
+// Set as the page is drawn, not after it is painted: a hidden tab paints
+// late or not at all, and its title is what shows it has changed.
+function useTitle(data: Data | null): void {
+  useLayoutEffect(() => {
+    if (!data) return;
+    const t = tally(data.inbox);
+    document.title = t.waiting ? `(${t.waiting}) cases` : "cases";
+    const link = document.getElementById("favicon");
+    const href = icon(t);
+    // Chromium loads the new icon when the link's address changes.
+    if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
+  }, [data]);
+}
+
+// A move to another page starts at its top, and a move back by the back
+// or forward button returns to where the page was scrolled.
+function useScroll(data: Data | null, pinned: { current: Route | null }, restore: { current: Scroll | null }): void {
+  const shownRoute = data && data.route;
+  useEffect(() => {
+    if (!shownRoute || shownRoute === pinned.current) return;
+    const to = restore.current;
+    restore.current = null;
+    window.scrollTo(0, to ? to.y : 0);
+    const list = document.querySelector<HTMLElement>(".split > .list");
+    const work = document.querySelector<HTMLElement>(".split > .work");
+    if (to && list) list.scrollTop = to.list;
+    if (work) work.scrollTop = to ? to.work : 0;
+  }, [shownRoute]);
+}
+
 // What the page follows the store with (useLive): the store's version it
 // last read at, a read of what it shows, a check of serve's build, who it
 // takes to be listening after a read of them, and its clock and data.
@@ -405,14 +447,7 @@ function App({ build }: { build: string }) {
     load(route);
   }, [route]);
 
-  // An open composer has its entry in the history, which back takes off.
-  // The page under it keeps where it was scrolled, as a move by a link
-  // does, for a back to it after "about" takes the entry's place.
-  useEffect(() => {
-    if (!composing) return;
-    if (!entry.on && !(history.state && history.state.composer)) history.replaceState({ ...history.state, scrolled: scrolled() }, "");
-    entry.opened({ to: composing.to, re: composing.re });
-  }, [composing]);
+  useComposerEntry(composing, entry);
 
   useLive({ version, refresh, checkBuild, heard, setNow, setData });
 
@@ -481,32 +516,9 @@ function App({ build }: { build: string }) {
     };
   }, []);
 
-  // The title leads with the open cases, and the tab icon shows them (IN-01).
-  // Set as the page is drawn, not after it is painted: a hidden tab paints
-  // late or not at all, and its title is what shows it has changed.
-  useLayoutEffect(() => {
-    if (!data) return;
-    const t = tally(data.inbox);
-    document.title = t.waiting ? `(${t.waiting}) cases` : "cases";
-    const link = document.getElementById("favicon");
-    const href = icon(t);
-    // Chromium loads the new icon when the link's address changes.
-    if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
-  }, [data]);
+  useTitle(data);
 
-  // A move to another page starts at its top, and a move back by the back
-  // or forward button returns to where the page was scrolled.
-  const shownRoute = data && data.route;
-  useEffect(() => {
-    if (!shownRoute || shownRoute === pinned.current) return;
-    const to = restore.current;
-    restore.current = null;
-    window.scrollTo(0, to ? to.y : 0);
-    const list = document.querySelector<HTMLElement>(".split > .list");
-    const work = document.querySelector<HTMLElement>(".split > .work");
-    if (to && list) list.scrollTop = to.list;
-    if (work) work.scrollTop = to ? to.work : 0;
-  }, [shownRoute]);
+  useScroll(data, pinned, restore);
 
   // A write was made: say so once, and go to the next case in the list as
   // it stood before the send, in the order it draws them, or to the list
