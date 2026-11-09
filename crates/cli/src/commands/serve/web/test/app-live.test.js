@@ -587,12 +587,11 @@ test("a read of the list that lands between a refusal and the page's next draw i
 });
 
 // The ways the composer closes, as App hears them: Escape and its close
-// control close its dialog, which calls onClose; a send calls onSent, then
-// closes it; the back button takes its entry off, and the composer, with
-// nothing written, sets nothing for back to answer.
+// control both close its dialog, whose close event calls onClose; a send
+// calls onSent, then closes it; the back button takes its entry off, and
+// the composer, with nothing written, sets nothing for back to answer.
 const closes = {
-  escape: async (p) => p.composer.props.onClose(),
-  close: async (p) => p.composer.props.onClose(),
+  "escape or close control": async (p) => p.composer.props.onClose(),
   send: async (p) => {
     p.composer.props.onSent(kase("fG7bV", "A note", { kind: "message", state: "sent", worker: "w1" }));
     p.composer.props.onClose();
@@ -630,12 +629,13 @@ for (const [how, close] of Object.entries(closes)) {
     assert.deepEqual(p.entries(), ["/", ">/cases/aB3xQ-first-case", "/cases/aB3xQ-first-case"]);
     assert.equal(p.location.pathname, "/cases/aB3xQ-first-case");
     // Back goes to the list the refusal moved from; forward to the case's
-    // page again, then to the composer's entry, which opens it again, as
-    // forward onto any closed composer's entry does.
+    // page again, under the filter it was pinned under, then to the
+    // composer's entry, which opens it again, as forward onto any closed
+    // composer's entry does.
     await p.back();
     assert.deepEqual(route(p), { page: "list", show: "inbox" });
     await p.forward();
-    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: null });
+    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
     assert.equal(p.composer, undefined);
     await p.forward();
     assert.equal(p.composer.props.to, "w1");
@@ -653,6 +653,18 @@ test("back onto the address of the page a refusal pinned keeps it; back elsewher
   await p.back();
   assert.deepEqual(route(p), { page: "case", id: "bC4yR", show: null });
   p.app.unmount();
+  // Back onto another entry at the pinned page's address, from before the
+  // refusal, is a move too: that entry lists the case under its own filter.
+  const o = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a, b] } });
+  await o.click(link("/"));
+  o.page.props.refused({ ...a, revision: 7 });
+  await o.settle();
+  assert.deepEqual(o.entries(), ["/cases/aB3xQ", ">/cases/aB3xQ-first-case"]);
+  o.taken();
+  await o.back();
+  assert.deepEqual(route(o), { page: "case", id: "aB3xQ", show: null });
+  assert.deepEqual(o.taken(), [WAITING, OTHERS, "GET /v1/cases/aB3xQ", LISTENERS]);
+  o.app.unmount();
   // Unpinned, back from a case under a filter to its page with none moves
   // too: it lists the case under its own.
   const q = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a, b] } });

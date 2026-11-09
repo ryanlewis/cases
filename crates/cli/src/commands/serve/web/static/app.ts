@@ -416,7 +416,10 @@ function App({ build }: { build: string }) {
     const back = () => {
       const took = entry.popped();
       const state = history.state;
-      const { route: r, composing: opens } = arrive(here());
+      const { route: at, composing: opens } = arrive(here());
+      // A case's page a refusal pinned keeps its filter in its entry, as its
+      // address cannot name the inbox's (refused).
+      const r: Route = state && state.show ? { ...at, show: state.show } : at;
       if (took) {
         // Back took the composer's entry off: the composer answers it, as
         // it does Escape. While it asks about a note, the entry is back
@@ -435,10 +438,6 @@ function App({ build }: { build: string }) {
         setComposing({ to: state.composer.to || "", re: state.composer.re || "", at: Date.now() });
       }
       if (same(r, routeRef.current)) return;
-      // The page a refusal pinned is the page of its address, which names no
-      // filter for the inbox's: as when closing the composer over it lands
-      // there.
-      if (pinned.current === routeRef.current && same(r, { ...routeRef.current, show: null })) return;
       if (stale.current) {
         location.reload();
         return;
@@ -526,8 +525,10 @@ function App({ build }: { build: string }) {
       // takes its place and the composer's goes on again over it, as on a
       // move under the composer (navigate), so that closing the composer,
       // which takes its entry off, lands on the case and not on the list.
-      if (entry.moved(path)) entry.kept();
-      else history.replaceState(null, "", path);
+      // The entry keeps the filter, which back and forward read (back).
+      const moved = entry.moved(path);
+      history.replaceState({ show }, "", path);
+      if (moved) entry.kept();
       // The inbox's query is none, which on a case's page would list the
       // case under its own filter: a stale refusal's case has moved on from
       // the inbox, and the list would move with it. The route keeps the filter.
