@@ -435,6 +435,10 @@ function App({ build }: { build: string }) {
         setComposing({ to: state.composer.to || "", re: state.composer.re || "", at: Date.now() });
       }
       if (same(r, routeRef.current)) return;
+      // The page a refusal pinned is the page of its address, which names no
+      // filter for the inbox's: as when closing the composer over it lands
+      // there.
+      if (pinned.current === routeRef.current && r.show === null && same(r, { ...routeRef.current, show: null })) return;
       if (stale.current) {
         location.reload();
         return;
@@ -517,7 +521,13 @@ function App({ build }: { build: string }) {
     // list would show the first case again (IN-04, IN-06).
     if (routeRef.current.page === "list" && home.current && home.current.id === current.id) {
       const show = routeRef.current.show!;
-      history.replaceState(null, "", page(current) + query(show));
+      const path = page(current) + query(show);
+      // With the composer open, the entry is the composer's: the case's page
+      // takes its place and the composer's goes on again over it, as on a
+      // move under the composer (navigate), so that closing the composer,
+      // which takes its entry off, lands on the case and not on the list.
+      if (entry.moved(path)) entry.kept();
+      else history.replaceState(null, "", path);
       // The inbox's query is none, which on a case's page would list the
       // case under its own filter: a stale refusal's case has moved on from
       // the inbox, and the list would move with it. The route keeps the filter.
