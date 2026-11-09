@@ -8,7 +8,10 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{check_amend, check_answer, check_open};
+use super::{
+    check_amend, check_answer, check_dropped_links, check_labels, check_new, check_open,
+    check_rows, check_verdicts,
+};
 use crate::case::{Append, Case};
 use crate::error::Category;
 use crate::names::Author;
@@ -629,4 +632,198 @@ fn an_answer_checks_the_rules_of_the_cases_kind() {
         answer_error(&send_back, &case("briefing", |_| {})),
         "sending back needs a reason"
     );
+}
+
+// Which duplicate a check names. When a list has two faults, each check
+// reports the one it meets first, walking the list in order, and within one
+// item checks in a fixed order. These pin that, so a faster scan keeps it.
+
+fn verdict(id: &str, verdict: &str) -> RowVerdict {
+    RowVerdict {
+        id: id.into(),
+        verdict: verdict.into(),
+        ..RowVerdict::default()
+    }
+}
+
+fn new_error(added: &[&str], have: &[&str]) -> String {
+    check_new("label", &strings(added), &strings(have))
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn a_new_value_check_names_the_first_repeat_in_order() {
+    assert_eq!(
+        new_error(&["a", "b", "b", "a"], &[]),
+        "the label \"b\" is given twice"
+    );
+    assert_eq!(
+        new_error(&["a", "b", "a", "b"], &[]),
+        "the label \"a\" is given twice"
+    );
+    assert_eq!(
+        new_error(&["a", "x", "a"], &["x"]),
+        "the case has the label \"x\" already"
+    );
+    assert_eq!(
+        new_error(&["a", "a", "x"], &["x"]),
+        "the label \"a\" is given twice"
+    );
+    // One value both repeated and the case's: its first time is the case's.
+    assert_eq!(
+        new_error(&["x", "x"], &["x"]),
+        "the case has the label \"x\" already"
+    );
+    assert_eq!(
+        check_new("label", &strings(&["a", "b"]), &strings(&["c", "c"])),
+        Ok(())
+    );
+    assert_eq!(
+        check_labels(&strings(&["b", "a"]), &strings(&["c"])),
+        Ok(())
+    );
+}
+
+fn rows_error(rows: &[ApprovalRow], have: &[ApprovalRow]) -> String {
+    check_rows(rows, have).unwrap_err().to_string()
+}
+
+#[test]
+fn a_rows_check_names_the_first_repeated_id_in_order() {
+    assert_eq!(
+        rows_error(&[row("r1"), row("r2"), row("r2"), row("r1")], &[]),
+        "the row id \"r2\" is not unique in the case"
+    );
+    assert_eq!(
+        rows_error(&[row("r2"), row("r3"), row("r1")], &[row("r1"), row("r3")]),
+        "the row id \"r3\" is not unique in the case"
+    );
+    // A repeat is checked after the id's form, and before the row's fields.
+    assert_eq!(
+        rows_error(&[row("r1"), row("r 1"), row("r1")], &[]),
+        "row 2: the id \"r 1\" is not letters, digits, '.', '-' and '_'"
+    );
+    let mut blank = row("r1");
+    blank.label = " ".into();
+    assert_eq!(
+        rows_error(&[row("r1"), blank.clone()], &[]),
+        "the row id \"r1\" is not unique in the case"
+    );
+    blank.id = "r2".into();
+    assert_eq!(
+        rows_error(&[row("r1"), blank, row("r1")], &[]),
+        "row \"r2\" has a blank label"
+    );
+    assert_eq!(check_rows(&[row("r2"), row("r1")], &[row("r3")]), Ok(()));
+}
+
+fn drop_error(drop: &[&str], have: &[&str], links: &[&str]) -> String {
+    let amend = Amend {
+        links: strings(links),
+        drop_links: strings(drop),
+        ..Amend::default()
+    };
+    check_dropped_links(&amend, &strings(have))
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn a_dropped_links_check_names_the_first_fault_in_order() {
+    assert_eq!(
+        drop_error(&["y", "x", "x"], &["x"], &[]),
+        "the case has no link \"y\" to drop"
+    );
+    assert_eq!(
+        drop_error(&["a", "b", "b", "a"], &["a", "b"], &[]),
+        "the link \"b\" is dropped twice"
+    );
+    // A repeat is checked before the case's links, and they before the adds.
+    assert_eq!(
+        drop_error(&["x", "x"], &[], &[]),
+        "the case has no link \"x\" to drop"
+    );
+    assert_eq!(
+        drop_error(&["x", "y", "y"], &["x"], &[]),
+        "the case has no link \"y\" to drop"
+    );
+    assert_eq!(
+        drop_error(&["x", "x"], &["x"], &["x"]),
+        "the link \"x\" is both added and dropped"
+    );
+    assert_eq!(
+        drop_error(&["y", "x"], &["x", "y"], &["x", "y"]),
+        "the link \"y\" is both added and dropped"
+    );
+    assert_eq!(
+        drop_error(&["x", "y", "x"], &["x", "y"], &["y"]),
+        "the link \"y\" is both added and dropped"
+    );
+    let amend = Amend {
+        links: strings(&["z"]),
+        drop_links: strings(&["y", "x"]),
+        ..Amend::default()
+    };
+    assert_eq!(check_dropped_links(&amend, &strings(&["x", "y"])), Ok(()));
+}
+
+fn verdicts_error(verdicts: &[RowVerdict], rows: &[ApprovalRow]) -> String {
+    let answer = Answer {
+        rows: verdicts.to_vec(),
+        ..Answer::default()
+    };
+    check_verdicts(&answer, rows).unwrap_err().to_string()
+}
+
+#[test]
+fn a_verdicts_check_names_the_first_fault_in_order() {
+    let rows = [row("r1"), row("r2"), row("r3")];
+    assert_eq!(
+        verdicts_error(
+            &[
+                verdict("r1", "hold"),
+                verdict("r2", "hold"),
+                verdict("r2", "hold"),
+                verdict("r1", "hold")
+            ],
+            &rows
+        ),
+        "row \"r2\" has two verdicts"
+    );
+    // An unknown row is checked before a repeat, and a repeat before the verdict.
+    assert_eq!(
+        verdicts_error(&[verdict("r9", "hold"), verdict("r9", "hold")], &rows),
+        "the case has no row \"r9\""
+    );
+    assert_eq!(
+        verdicts_error(&[verdict("r1", "hold"), verdict("r1", "maybe")], &rows),
+        "row \"r1\" has two verdicts"
+    );
+    assert_eq!(
+        verdicts_error(&[verdict("r1", "maybe"), verdict("r9", "hold")], &rows),
+        "\"maybe\" is not approve, hold or reject"
+    );
+    // The first row of the case's, in its order, with no verdict.
+    assert_eq!(
+        verdicts_error(&[verdict("r3", "hold"), verdict("r2", "hold")], &rows),
+        "row \"r1\" has no verdict"
+    );
+    assert_eq!(
+        verdicts_error(&[verdict("r1", "hold")], &rows),
+        "row \"r2\" has no verdict"
+    );
+    assert_eq!(
+        verdicts_error(&[verdict("r3", "hold"), verdict("r1", "hold")], &rows),
+        "row \"r2\" has no verdict"
+    );
+    let answer = Answer {
+        rows: vec![
+            verdict("r3", "reject"),
+            verdict("r1", "approve"),
+            verdict("r2", "hold"),
+        ],
+        ..Answer::default()
+    };
+    assert_eq!(check_verdicts(&answer, &rows), Ok(()));
 }
