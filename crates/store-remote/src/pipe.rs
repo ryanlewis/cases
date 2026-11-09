@@ -438,10 +438,15 @@ fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
         .and_then(|line| {
             let mut parts = line.split(' ');
             matches!(parts.next()?, "HTTP/1.0" | "HTTP/1.1").then_some(())?;
-            // Three digits (RFC 9112, 4).
+            // Three digits (RFC 9112, 4), of a final answer: an interim
+            // one (1xx) would leave the real answer to be read as the next
+            // one's, and none is below 100 (RFC 9110, 15).
             let status = parts.next()?;
             (status.len() == 3 && status.bytes().all(|b| b.is_ascii_digit())).then_some(())?;
-            status.parse::<u16>().ok()
+            status
+                .parse::<u16>()
+                .ok()
+                .filter(|s| (200..=599).contains(s))
         })
         .ok_or("the answer's status line is not one")?;
     let mut length = None;
@@ -776,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_s_status_is_three_digits() {
+    fn an_answer_s_status_is_three_digits_of_a_final_answer() {
         refused(
             &[
                 b"HTTP/1.1 +200 OK\r\nContent-Length: 0\r\n\r\n",
@@ -784,14 +789,18 @@ mod tests {
                 b"HTTP/1.1 1 OK\r\nContent-Length: 0\r\n\r\n",
                 b"HTTP/1.1 20 OK\r\nContent-Length: 0\r\n\r\n",
                 b"HTTP/1.1 65535 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 042 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 100 Continue\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 199 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 600 OK\r\nContent-Length: 0\r\n\r\n",
                 b"HTTP/1.1 2\xd9\xa000 OK\r\nContent-Length: 0\r\n\r\n",
             ],
             "the answer's status line is not one",
         );
-        // Any three digits, with or without a reason, are taken.
+        // Any final status, with or without a reason, is taken.
         for (fine, status) in [
             (&b"HTTP/1.1 599 Odd\r\nContent-Length: 0\r\n\r\n"[..], 599),
-            (b"HTTP/1.1 100\r\nContent-Length: 0\r\n\r\n", 100),
+            (b"HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n", 200),
             (b"HTTP/1.1 409 \r\nContent-Length: 0\r\n\r\n", 409),
         ] {
             assert_eq!(answer_in(fine, 10).unwrap(), Some((status, Vec::new())));
