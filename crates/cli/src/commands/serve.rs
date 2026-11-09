@@ -662,7 +662,7 @@ impl Painter {
         let view = View {
             store: &self.store,
             url: &app.url,
-            stats: read.map(|snapshot| self.counts.of(snapshot)),
+            stats: read.map(|snapshot| self.counts.of(&snapshot)),
             uptime: self.since.elapsed(),
             requests: app.requests.load(Ordering::Relaxed),
             notified: app.watch.notified(),

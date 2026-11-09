@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use cases_core::{Author, Case, EventType, State, Time, Urgency};
@@ -86,9 +86,10 @@ impl Stats {
 #[derive(Debug)]
 pub(crate) struct Counts {
     since: Time,
-    /// The snapshot last counted, held so that a new one is never taken for
-    /// it, and its counts.
-    last: Option<(Arc<Snapshot>, Stats)>,
+    /// The snapshot last counted, and its counts. It is held weakly: its
+    /// cases go once the watch lets go of it, but its address is never given
+    /// to a new one while this holds it.
+    last: Option<(Weak<Snapshot>, Stats)>,
     /// How many snapshots were counted.
     #[cfg(test)]
     counted: usize,
@@ -106,9 +107,9 @@ impl Counts {
     }
 
     /// The counts of `snapshot`.
-    pub(crate) fn of(&mut self, snapshot: Arc<Snapshot>) -> Stats {
+    pub(crate) fn of(&mut self, snapshot: &Arc<Snapshot>) -> Stats {
         if let Some((last, stats)) = &self.last
-            && Arc::ptr_eq(last, &snapshot)
+            && std::ptr::eq(last.as_ptr(), Arc::as_ptr(snapshot))
         {
             return stats.clone();
         }
@@ -117,7 +118,7 @@ impl Counts {
         {
             self.counted += 1;
         }
-        self.last = Some((snapshot, stats.clone()));
+        self.last = Some((Arc::downgrade(snapshot), stats.clone()));
         stats
     }
 }
@@ -464,10 +465,11 @@ mod tests {
             .collect()
     }
 
-    /// The counts the first test leaves at zero: an open case of every
-    /// urgency, one picked up, one withdrawn, which no count takes, and a
-    /// resume, made as serve started, which counts; and the events no count takes: an agent's pickup and
-    /// withdraw, and the human's answer and the close before serve started.
+    /// What the first test does not count: an open case of every urgency,
+    /// one picked up, and one withdrawn, which no count takes; a resume made
+    /// as serve started, which counts; and events no count takes: an
+    /// agent's pickup and withdraw, and an answer and a close before serve
+    /// started.
     #[test]
     fn the_screen_counts_every_state_and_the_human_s_events_since_start() {
         let dir = tempfile::tempdir().unwrap();
@@ -620,7 +622,7 @@ mod tests {
             ..Stats::default()
         };
         for _ in 0..3 {
-            assert_eq!(counts.of(watch.read().unwrap()), one);
+            assert_eq!(counts.of(&watch.read().unwrap()), one);
         }
         assert_eq!(counts.counted, 1);
         write(&db, None, "agent", "open", fyi);
@@ -629,7 +631,7 @@ mod tests {
             ..one.clone()
         };
         for _ in 0..3 {
-            assert_eq!(counts.of(watch.read().unwrap()), two);
+            assert_eq!(counts.of(&watch.read().unwrap()), two);
         }
         assert_eq!(counts.counted, 2);
         let read = watch.read().unwrap();
@@ -637,7 +639,7 @@ mod tests {
             cases: read.cases.clone(),
             version: read.version.clone(),
         });
-        assert_eq!(counts.of(same), two);
+        assert_eq!(counts.of(&same), two);
         assert_eq!(counts.counted, 3);
     }
 
