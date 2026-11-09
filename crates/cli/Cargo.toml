@@ -104,11 +104,11 @@ security-framework = { version = "=3.7.0", default-features = false, optional = 
 # leaving the JavaScript the browser runs. Pinned with `=`: oxc's API changes
 # between minor versions, so each bump is a deliberate one.
 [build-dependencies]
-oxc_allocator = "=0.155.0"
-oxc_ast = "=0.155.0"
-oxc_ast_visit = "=0.155.0"
-oxc_parser = "=0.155.0"
-oxc_span = "=0.155.0"
+oxc_allocator = "=0.157.0"
+oxc_ast = "=0.157.0"
+oxc_ast_visit = "=0.157.0"
+oxc_parser = "=0.157.0"
+oxc_span = "=0.157.0"
 # build.rs gzips the vendored mermaid (web/static/vendor/mermaid/).
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
@@ -125,11 +125,11 @@ tempfile = "=3.27.0"
 tokio = { version = "=1.54.1", features = ["io-util", "macros", "rt", "test-util"] }
 # The type strip's own tests (tests/strip.rs), and the check that what the
 # page serves is JavaScript. The same pins as the build's.
-oxc_allocator = "=0.155.0"
-oxc_ast = "=0.155.0"
-oxc_ast_visit = "=0.155.0"
-oxc_parser = "=0.155.0"
-oxc_span = "=0.155.0"
+oxc_allocator = "=0.157.0"
+oxc_ast = "=0.157.0"
+oxc_ast_visit = "=0.157.0"
+oxc_parser = "=0.157.0"
+oxc_span = "=0.157.0"
 
 [lints]
 workspace = true
