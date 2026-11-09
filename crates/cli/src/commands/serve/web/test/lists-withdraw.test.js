@@ -356,7 +356,7 @@ test("a second submit while the first send is out sends nothing", async (t) => {
   await third.done;
 });
 
-test("a send out for more than 10 s lets the next go, and its late answer lets a third go while the second is out", async (t) => {
+test("a send out for more than 10 s lets the next go, and its late answer does not let a third go while the second is out", async (t) => {
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
   const { posts, answer } = serve(t);
@@ -371,19 +371,20 @@ test("a send out for more than 10 s lets the next go, and its late answer lets a
   const b = r.submit();
   await settle();
   assert.equal(posts.length, 2, "after 10 s the guard lets a second withdraw go");
-  // The first answers while the second is out. Pinned as it is today: its
-  // release frees the guard the second holds, so a third is sent while the
-  // second is still out (the case view's sendOnce does not; reported). Each
-  // carries the same revision, so serve records at most one.
+  // The first answers while the second is out: the guard is the second's,
+  // and only the second lets it go.
   answer(0, 409, { error: { category: "transition", message: "no" } });
   await a.done;
+  r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "nothing is sent while the second is out");
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
   const c = r.submit();
   await settle();
-  assert.equal(posts.length, 3);
+  assert.equal(posts.length, 3, "once the second is answered, the next is sent");
   assert.deepEqual(posts.map((p) => p.body.revision), [answered.revision, answered.revision, answered.revision]);
-  answer(1, 409, { error: { category: "transition", message: "no" } });
   answer(2, 409, { error: { category: "transition", message: "no" } });
-  await b.done;
   await c.done;
 });
 

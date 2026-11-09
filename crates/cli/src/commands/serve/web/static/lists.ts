@@ -652,7 +652,8 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   const line = useRef<Line>(lineFrom(c));
   const [reason, setReason] = useState("");
   const [refusal, setRefusal] = useState("");
-  const sending = useRef(false);
+  // The send that is out, which only that send lets go (IN-09).
+  const sending = useRef<object | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const shut = useRef(false);
@@ -680,10 +681,15 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   async function submit(e: Event): Promise<void> {
     e.preventDefault();
     if (sending.current) return;
-    sending.current = true;
-    // As the case view's: a send while one is out does nothing, until it is
-    // answered or 10 s have passed (IN-09).
-    const release = setTimeout(() => (sending.current = false), 10000);
+    const self = {};
+    sending.current = self;
+    // As the case view's (sendOnce, case.ts): a send while one is out does
+    // nothing, until it is answered or 10 s have passed (IN-09). One slower
+    // than 10 s does not, when it comes back, let go of the send after it.
+    const done = () => {
+      if (sending.current === self) sending.current = null;
+    };
+    const release = setTimeout(done, 10000);
     const why = reason.trim();
     try {
       const { revision } = line.current.drawn;
@@ -702,7 +708,7 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
       }
     } finally {
       clearTimeout(release);
-      sending.current = false;
+      done();
     }
   }
   if (!open) {
