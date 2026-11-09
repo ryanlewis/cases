@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { html } from "../static/html.ts";
 import { CaseView, drawnFrom, redrawn, response, verdictOf } from "../static/case.ts";
-import { body, decision, steps } from "./case.js";
+import { body, decision, fields, steps } from "./case.js";
 import { thread } from "../static/thread.ts";
 
 const { open, answer, pickup, note } = steps;
@@ -621,8 +621,6 @@ test("a withdrawn message whose withdraw has no data says who withdrew it, and n
   assert.ok(!page.includes('class="reason"'), page);
 });
 
-// A form's fields, with `extra` set.
-const fields = (extra) => ({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "", ...extra });
 
 test("the form sends other only with a note, as the store wants (IN-03)", () => {
   const c = decision("open", open);
