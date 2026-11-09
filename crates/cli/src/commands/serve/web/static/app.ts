@@ -525,10 +525,13 @@ function App({ build }: { build: string }) {
       // takes its place and the composer's goes on again over it, as on a
       // move under the composer (navigate), so that closing the composer,
       // which takes its entry off, lands on the case and not on the list.
-      // The entry keeps the filter, which back and forward read (back).
+      // The entries keep the filter, which back and forward read (back).
       const moved = entry.moved(path);
-      history.replaceState({ show }, "", path);
-      if (moved) entry.kept();
+      history.replaceState({ ...history.state, show }, "", path);
+      if (moved) {
+        entry.kept();
+        history.replaceState({ ...history.state, show }, "");
+      }
       // The inbox's query is none, which on a case's page would list the
       // case under its own filter: a stale refusal's case has moved on from
       // the inbox, and the list would move with it. The route keeps the filter.

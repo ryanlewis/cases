@@ -614,7 +614,7 @@ for (const [how, close] of Object.entries(closes)) {
     await p.settle();
     // The case's page goes in under the composer, whose entry stays on top.
     assert.deepEqual(p.entries(), ["/", "/cases/aB3xQ-first-case", ">/cases/aB3xQ-first-case"]);
-    assert.deepEqual(p.history.state, { composer: { to: "w1", re: "" } });
+    assert.deepEqual(p.history.state, { composer: { to: "w1", re: "" }, show: "inbox" });
     assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
     assert.ok(p.composer);
     p.taken();
@@ -637,13 +637,44 @@ for (const [how, close] of Object.entries(closes)) {
     await p.forward();
     assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
     assert.equal(p.composer, undefined);
+    p.taken();
     await p.forward();
     assert.equal(p.composer.props.to, "w1");
+    // Under the filter the page was pinned under: nothing is read again.
+    assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+    assert.deepEqual(p.taken(), []);
     p.app.unmount();
   });
 }
 
+test("another composer opened over a refusal's case puts no second entry on", async () => {
+  const p = await openApp({ server: { waiting: [a, b] } });
+  await p.click(link("/message?to=w1"));
+  p.page.props.refused({ ...a, revision: 7 });
+  await p.settle();
+  mock.timers.tick(1000);
+  await p.click(link("/message?to=w2"));
+  assert.equal(p.composer.props.to, "w2");
+  assert.deepEqual(p.entries(), ["/", "/cases/aB3xQ-first-case", ">/cases/aB3xQ-first-case"]);
+  p.composer.props.onClose();
+  await p.settle();
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  p.app.unmount();
+});
+
 test("back onto the address of the page a refusal pinned keeps it; back elsewhere moves", async () => {
+  // Back onto the pinned page's entry, from a page moved to after, shows it
+  // under the filter it was pinned under.
+  const k = await openApp({ server: { waiting: [a, b] } });
+  k.window.scrollY = 80;
+  k.page.props.refused({ ...a, revision: 7 });
+  await k.settle();
+  await k.click(link("/cases/bC4yR"));
+  k.log.length = 0;
+  await k.back();
+  assert.deepEqual(route(k), { page: "case", id: "aB3xQ", show: "inbox" });
+  assert.deepEqual(k.log, ["scrollTo 80"]);
+  k.app.unmount();
   // From the pinned page, back to another case's page moves to it.
   const p = await openApp({ url: "/cases/bC4yR", server: { waiting: [a, b] } });
   await p.click(link("/"));
