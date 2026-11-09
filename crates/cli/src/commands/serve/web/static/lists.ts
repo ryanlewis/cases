@@ -670,13 +670,12 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     line.current = next;
     if (said) setRefusal(said);
   }, [c.revision, c.state]);
-  // A line opened or kept is a new one: no send before it speaks for it.
   function start(): void {
-    newest.current = null;
     line.current = lineFrom(c);
     setRefusal("");
     setOpen(true);
   }
+  // A line kept is done with: no send from it speaks for the next.
   function keep(): void {
     newest.current = null;
     shut.current = true;
