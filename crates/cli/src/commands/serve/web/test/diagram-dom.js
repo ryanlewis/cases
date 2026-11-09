@@ -25,6 +25,11 @@ export default {
 
 registerHooks({
   resolve(specifier, context, next) {
+    // A fresh copy of a module, imported as "x.ts?name", imports its
+    // neighbours as hooks.js has the module itself import them.
+    if (specifier.startsWith(".") && specifier.endsWith(".js") && /\.ts\?/.test(context.parentURL || "")) {
+      return next(new URL(specifier.replace(/\.js$/, ".ts"), context.parentURL).href, context);
+    }
     if (specifier !== "mermaid") return next(specifier, context);
     mermaid.imports += 1;
     if (mermaid.fail) throw new Error("Failed to fetch dynamically imported module: mermaid");

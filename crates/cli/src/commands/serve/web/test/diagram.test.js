@@ -358,3 +358,69 @@ test("a diagram that fails to draw again keeps the one it had, with no line", as
   assert.equal(error(el), undefined);
   el.remove();
 });
+
+test("a diagram whose redraw failed is drawn again on the next change, in the new colours", async () => {
+  let colour = "old";
+  mermaid.svg = () => `<svg><text>${colour}</text></svg>`;
+  const el = fence("flowchart LR");
+  draw(document.body);
+  await settle();
+  mermaid.svg = () => {
+    throw new Error("mermaid did not load");
+  };
+  observers[0].callback();
+  await settle();
+  assert.equal(drawnSvg(el).textContent, "old");
+  colour = "new";
+  mermaid.svg = () => `<svg><text>${colour}</text></svg>`;
+  look.vars = { "--bg": "#000", "--bg-1": "#654321" };
+  const configs = mermaid.configs.length;
+  observers[0].callback();
+  await settle();
+  assert.equal(drawnSvg(el).textContent, "new");
+  assert.equal(mermaid.configs[configs]?.themeVariables.primaryColor, "#654321");
+  assert.equal(error(el), undefined);
+  look.vars = { "--bg": " #0d0f14 ", "--fg": "#eceef4", "--prose": "serif" };
+  el.remove();
+});
+
+test("text that does not parse is not tried again, on a draw or a change", async () => {
+  mermaid.svg = () => {
+    throw new Error("Parse error on line 1:\nExpecting 'AMP', got 'EOF'");
+  };
+  const el = fence("flowchart LR\n  A -->");
+  draw(document.body);
+  await settle();
+  const renders = mermaid.renders.length;
+  mermaid.svg = () => "<svg><text>A</text></svg>";
+  draw(document.body);
+  observers[0].callback();
+  await settle();
+  assert.equal(mermaid.renders.length, renders);
+  assert.equal(el.querySelectorAll(".diagram-error").length, 1);
+  assert.equal(el.shadowRoot, null);
+  el.remove();
+});
+
+test("a diagram not drawn as mermaid did not load is drawn once it loads, with one line while it waits", async () => {
+  // A copy of diagram.ts of its own, which has not loaded mermaid yet.
+  const fresh = await import("../static/diagram.ts?unloaded");
+  mermaid.fail = true;
+  const el = fence("flowchart LR\n  A --> B");
+  const imports = mermaid.imports;
+  fresh.draw(document.body);
+  await settle();
+  assert.equal(error(el), "not drawn: mermaid did not load");
+  fresh.draw(document.body);
+  await settle();
+  assert.equal(mermaid.imports, imports + 2, "each draw tries the import again");
+  assert.equal(el.querySelectorAll(".diagram-error").length, 1, "one line, not one a try");
+  mermaid.fail = false;
+  mermaid.svg = () => "<svg><text>drawn</text></svg>";
+  fresh.draw(document.body);
+  await settle();
+  assert.equal(drawnSvg(el).textContent, "drawn");
+  assert.equal(error(el), undefined, "the line goes once it is drawn");
+  assert.ok(el.querySelector("code"), "the code block stays in the light tree");
+  el.remove();
+});

@@ -49,13 +49,19 @@ const drawn = new Map<Element, string>();
 // The diagrams waiting in the queue: one wait each, which draws in the
 // theme the page has when its turn comes.
 const queued = new Set<Element>();
+// The diagrams not drawn as mermaid did not load: the next draw tries them
+// again, where one whose text does not parse is not.
+const unloaded = new WeakSet<Element>();
+
+// mermaid did not load: not the diagram's fault, and worth another try.
+class Unloaded extends Error {}
 
 // Draw each diagram under `root` that is not drawn yet. A root without one
 // costs a query and nothing is imported.
 export function draw(root: Element): void {
   // Forget the diagrams no longer in the page, such as another case's.
   for (const el of drawn.keys()) if (!el.isConnected) drawn.delete(el);
-  const found = [...root.querySelectorAll(".diagram")].filter((el) => !drawn.has(el) && !el.querySelector(".diagram-error"));
+  const found = [...root.querySelectorAll(".diagram")].filter((el) => !drawn.has(el) && (unloaded.has(el) || !el.querySelector(".diagram-error")));
   if (!found.length) return;
   watch();
   for (const el of found) {
@@ -71,7 +77,7 @@ function mermaid(): Promise<Mermaid> {
     (m) => m.default,
     () => {
       loading = null;
-      throw new Error("mermaid did not load");
+      throw new Unloaded("mermaid did not load");
     },
   );
   return loading;
@@ -175,6 +181,8 @@ function show(el: Element, svg: string): void {
   const shadow = el.shadowRoot || el.attachShadow({ mode: "open" });
   shadow.adoptedStyleSheets = [host, sheet];
   shadow.replaceChildren(node);
+  unloaded.delete(el);
+  el.querySelector(".diagram-error")?.remove();
 }
 
 // A link in a diagram: to a new tab when the page may link to its target,
@@ -194,10 +202,13 @@ function links(a: Element): void {
   a.setAttribute("rel", "noopener noreferrer");
 }
 
-// A diagram that did not draw: the code block stays, with why under it.
+// A diagram that did not draw: the code block stays, with why under it. One
+// drawn before keeps what it drew, and is drawn again on the next change.
 function fail(el: Element, e: unknown): void {
-  drawn.delete(el);
   if (el.shadowRoot) return;
+  drawn.delete(el);
+  if (e instanceof Unloaded) unloaded.add(el);
+  el.querySelector(".diagram-error")?.remove();
   const line = document.createElement("p");
   line.className = "meta diagram-error";
   line.textContent = `not drawn: ${why(e)}`;
