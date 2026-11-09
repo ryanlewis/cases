@@ -142,3 +142,23 @@ test("a script is drawn again when the wrap option changes, and only then", () =
     globalThis.window = was;
   }
 });
+
+test("the last 128 texts are held: the one used longest ago goes first, and a text used again stays", () => {
+  const decision = (text) => ({ ...approval, kind: "decision", options: ["one"], rows: undefined, body: text });
+  const seen = (text) => {
+    taken();
+    view(decision(text));
+    return taken().markdown;
+  };
+  // 129 texts: the first goes, the last 128 stay.
+  for (let i = 0; i <= 128; i++) assert.equal(seen(`first ${i}`), 1);
+  assert.equal(seen("first 128"), 0);
+  assert.equal(seen("first 1"), 0);
+  assert.equal(seen("first 0"), 1);
+  // A text used again is held as the newest: the next to go is the one
+  // after it.
+  for (let i = 0; i < 127; i++) seen(`then ${i}`);
+  assert.equal(seen("first 0"), 0);
+  assert.equal(seen("one more"), 1);
+  assert.equal(seen("first 0"), 0);
+});
