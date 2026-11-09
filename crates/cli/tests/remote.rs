@@ -1385,8 +1385,9 @@ fn a_steady_remote_wait_collects_until_its_timeout() {
 }
 
 /// A steady wait, its server failing from the read it found an answer at:
-/// it holds the answer, and nothing new can come.
-fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child) {
+/// it holds the answer, and nothing new can come. Gives it with the time
+/// it was woken to that read, before which its quiet time cannot start.
+fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child, Instant) {
     let r = Remote::new(&["me"]);
     let answered = r.open(Some(&r.ids[0]), "Answered");
     let left = r.open(Some(&r.ids[0]), "Left open");
@@ -1417,7 +1418,7 @@ fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child) {
         )
         .unwrap();
     r.fake.wake();
-    (r, answered, wait)
+    (r, answered, wait, Instant::now())
 }
 
 /// A steady wait that holds an answer, and whose server then fails every
@@ -1425,32 +1426,39 @@ fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child) {
 /// its timeout and, with none, not never (AG-18).
 #[test]
 fn a_steady_remote_wait_that_cannot_read_while_it_collects_prints_at_the_end_of_its_quiet_time() {
-    let start = Instant::now();
-    let waits = [
+    let mut waits = [
         collecting_through_an_outage(&["--timeout", "60s"]),
         collecting_through_an_outage(&[]),
     ];
-    for (_r, answered, mut wait) in waits {
-        // Its quiet time is 10 s; well past it, the wait is stopped.
-        let ended = soon(Duration::from_secs(25), || {
-            wait.try_wait().unwrap().is_some()
-        });
-        let took = start.elapsed();
-        if !ended {
+    // When each ended, watched together, so that neither is timed by the
+    // other. Its quiet time is 10 s; well past it, a wait is stopped.
+    let mut ended = [None, None];
+    let until = Instant::now() + Duration::from_secs(40);
+    while ended.contains(&None) && Instant::now() < until {
+        for (wait, ended) in waits.iter_mut().zip(&mut ended) {
+            if ended.is_none() && wait.2.try_wait().unwrap().is_some() {
+                *ended = Some(Instant::now());
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    for ((_r, answered, mut wait, woke), ended) in waits.into_iter().zip(ended) {
+        let Some(ended) = ended else {
             wait.kill().unwrap();
             let out = wait.wait_with_output().unwrap();
-            panic!("still waiting after {took:?}: {out:?}");
-        }
+            panic!("still waiting {:?} after it woke: {out:?}", woke.elapsed());
+        };
         let out = Output::from(wait.wait_with_output().unwrap());
         assert_eq!(out.code, 0, "{out:?}");
         let lines: Vec<_> = out.stdout.lines().map(json).collect();
         assert_eq!(lines.len(), 1, "{out:?}");
         assert_eq!(lines[0]["id"], answered.as_str());
+        let took = ended - woke;
         assert!(took >= Duration::from_secs(9), "{took:?}");
         assert_eq!(
-            out.stderr.matches("the server failed (503)").count(),
-            1,
-            "{out:?}"
+            out.stderr,
+            "warning: the server failed (503): the fake failed; the wait goes on, trying again \
+             until it prints what it has\n"
         );
     }
 }
@@ -1478,5 +1486,9 @@ fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout
         took >= Duration::from_secs(3) && took < Duration::from_secs(6),
         "{took:?}"
     );
-    assert!(out.stderr.contains("the server failed (503)"), "{out:?}");
+    assert!(
+        out.stderr
+            .contains("the server failed (503): the fake failed; the wait goes on, trying again until the timeout\n"),
+        "{out:?}"
+    );
 }

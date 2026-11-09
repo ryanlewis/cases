@@ -674,7 +674,7 @@ impl Asked<'_> {
             Err(error) if error.is_missing() => Ok(Some(none)),
             Err(error) if read_before && error.is_transient() => {
                 let until = until(self.deadline, self.mood, collecting);
-                offline.pause(&error, until, self.args, self.far)?;
+                offline.pause(&error, until, collecting.is_some(), self.args, self.far)?;
                 Ok(None)
             }
             Err(error) => Err(error.into()),
@@ -807,7 +807,16 @@ impl Asked<'_> {
         let db = &self.ctx.store;
         let until = until(self.deadline, self.mood, collecting);
         if let (true, Some(version)) = (db.follows(), poller.version()) {
-            return match follow(db, &version, until, self.args, offline, self.far) {
+            let followed = follow(
+                db,
+                &version,
+                until,
+                collecting.is_some(),
+                self.args,
+                offline,
+                self.far,
+            );
+            return match followed {
                 // Its linger has ended: the next read gives the cases.
                 Err(error) if collecting.is_some() && error.status() == Status::Timeout => Ok(()),
                 result => result,
@@ -951,9 +960,9 @@ fn timed_out(args: &Args) -> Error {
 /// Holds polls on a remote or forwarded store, each up to [`HOLD_MAX`] and never past the
 /// deadline, until its version is not `version`. A hold too short to make
 /// is slept, and the version asked for at once at its end. A failure the
-/// next try may not have is waited out, as [`Offline`] says. No hold goes
-/// past the time a pickup wait's locks on the far side, `far`, are held
-/// for.
+/// next try may not have is waited out, as [`Offline`] says, by a wait
+/// `collecting` or not. No hold goes past the time a pickup wait's locks on
+/// the far side, `far`, are held for.
 ///
 /// # Errors
 ///
@@ -964,6 +973,7 @@ fn follow(
     db: &AnyStore,
     version: &Version,
     deadline: Option<Instant>,
+    collecting: bool,
     args: &Args,
     offline: &mut Offline,
     far: Option<&FarLocks>,
@@ -989,7 +999,9 @@ fn follow(
                     return Ok(());
                 }
             }
-            Err(error) if error.is_transient() => offline.pause(&error, deadline, args, far)?,
+            Err(error) if error.is_transient() => {
+                offline.pause(&error, deadline, collecting, args, far)?;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -1011,9 +1023,10 @@ impl Offline {
         self.pause = Duration::ZERO;
     }
 
-    /// Says `error` once in the wait and pauses before the next try, for
-    /// no longer than a pickup wait's locks on the far side, `far`, are
-    /// held for.
+    /// Says `error` once in the wait, and what ends the wait if the store
+    /// stays out of reach: the deadline, or the end of its collecting when
+    /// it is `collecting`. Then pauses before the next try, for no longer
+    /// than a pickup wait's locks on the far side, `far`, are held for.
     ///
     /// # Errors
     ///
@@ -1024,6 +1037,7 @@ impl Offline {
         &mut self,
         error: &Failure,
         deadline: Option<Instant>,
+        collecting: bool,
         args: &Args,
         far: Option<&FarLocks>,
     ) -> Result<(), Error> {
@@ -1037,7 +1051,9 @@ impl Offline {
         }
         if !self.said {
             self.said = true;
-            let until = if deadline.is_some() {
+            let until = if collecting {
+                " until it prints what it has"
+            } else if deadline.is_some() {
                 " until the timeout"
             } else {
                 ""

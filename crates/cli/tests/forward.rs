@@ -677,6 +677,95 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
     );
 }
 
+/// A steady wait with no timeout that holds an answer, and whose connection
+/// then drops with the far side out of reach, prints the answer at the end
+/// of its quiet time, exit 0, rather than wait on it for ever (AG-18).
+#[test]
+fn a_steady_forwarded_wait_that_cannot_reach_the_far_side_while_it_collects_prints_what_it_has() {
+    // The stand-in ssh as ever, but out of reach once the file `.cut`
+    // is there; its relay copies what the wait sends to `.sent`, and
+    // writes the far side's pid to `.far`.
+    let script = SSH
+        .replacen(
+            "echo \"$*\" >> \"@LOG@\"\n",
+            "echo \"$*\" >> \"@LOG@\"\n[ -e \"@LOG@.cut\" ] && exit 255\n",
+            1,
+        )
+        .replacen("exec cat'", "exec tee -a \"@LOG@.sent\"'", 1)
+        .replacen(
+            "perl -e 'setpgrp; ",
+            "perl -e 'setpgrp; open my $f, \">\", \"@LOG@.far\"; print $f $$; close $f; ",
+            1,
+        );
+    let f = Forwarding::with_ssh(&script);
+    let answered = f.open_decision();
+    let left = f.open_decision();
+    f.ok(&["answer", &answered, "--option", "1", "--as", "ryan"]);
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let start = Instant::now();
+    // Since a time before the answer, the wait's first read finds it new,
+    // and it collects from there.
+    let mut wait = spawn(
+        f.env
+            .command([
+                "wait",
+                "--id",
+                &answered,
+                "--id",
+                &left,
+                "--mood",
+                "steady",
+                "--since",
+                "2000-01-01T00:00:00Z",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // Once it holds a poll, it has read the answer: its connection drops,
+    // and every one it dials after fails.
+    let sent = f.env.path("ssh.log.sent");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read_to_string(&sent).is_ok_and(|sent| sent.contains("/store/changes?after=")) {
+        assert!(Instant::now() < until, "the wait held no poll");
+        thread::sleep(Duration::from_millis(50));
+    }
+    fs::write(f.env.path("ssh.log.cut"), "").unwrap();
+    let relay: u32 = fs::read_to_string(f.env.path("relay.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let far: u32 = fs::read_to_string(f.env.path("ssh.log.far"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    signal("KILL", far);
+    signal("KILL", relay);
+    // Its quiet time is 10 s; well past it, the wait is stopped.
+    let until = Instant::now() + Duration::from_secs(40);
+    while wait.try_wait().unwrap().is_none() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let took = start.elapsed();
+    if wait.try_wait().unwrap().is_none() {
+        wait.kill().unwrap();
+        let out = wait.wait_with_output().unwrap();
+        panic!("still waiting after {took:?}: {out:?}");
+    }
+    let waited: Output = wait.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 0, "{waited:?}");
+    let lines: Vec<_> = waited.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{waited:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+    assert!(took >= Duration::from_secs(9), "{took:?}");
+    assert_eq!(
+        waited.stderr,
+        "warning: could not reach the store on ssh://devbox: ssh failed (exit 255); the wait \
+         goes on, trying again until it prints what it has\n"
+    );
+}
+
 #[test]
 fn a_listening_wait_is_recorded_at_the_far_side() {
     let f = Forwarding::new();
