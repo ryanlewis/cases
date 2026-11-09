@@ -654,6 +654,8 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   const [refusal, setRefusal] = useState("");
   // The send that is out, which only that send lets go (IN-09).
   const sending = useRef<object | null>(null);
+  // The send that went last: only its answer speaks for the line.
+  const newest = useRef<object | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const shut = useRef(false);
@@ -683,6 +685,7 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     if (sending.current) return;
     const self = {};
     sending.current = self;
+    newest.current = self;
     // As the case view's (sendOnce, case.ts): a send while one is out does
     // nothing, until it is answered or 10 s have passed (IN-09). One slower
     // than 10 s does not, when it comes back, let go of the send after it.
@@ -698,6 +701,9 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
         if (sent) sent("withdraw", after);
         return;
       }
+      // A send another went after, as this one was out for over 10 s, says
+      // nothing: the newer send's answer does.
+      if (newest.current !== self) return;
       setRefusal(problem);
       // The case as the refusal shows it, unless the stream has already
       // brought a later one: that the line follows as it would have.

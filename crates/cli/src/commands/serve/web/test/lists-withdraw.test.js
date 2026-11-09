@@ -375,9 +375,10 @@ test("a send out for more than 10 s lets the next go, and its late answer does n
   // and only the second lets it go.
   answer(0, 409, { error: { category: "transition", message: "no" } });
   await a.done;
-  r.submit();
+  const between = r.submit();
   await settle();
   assert.equal(posts.length, 2, "nothing is sent while the second is out");
+  await between.done;
   answer(1, 409, { error: { category: "transition", message: "no" } });
   await b.done;
   const c = r.submit();
@@ -476,4 +477,52 @@ test("a send answered at once frees the guard for good: its 10 s does not free t
   assert.equal(posts.length, 2, "the first's timer is gone with its answer");
   answer(1, 409, { error: { category: "transition", message: "no" } });
   await b.done;
+});
+
+test("the late answer of a send that another went after does not undo what the newer send's answer said", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  // The second is refused as stale, with the case picked up: the line takes it.
+  answer(1, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await b.done;
+  r.draw();
+  const said = r.refusal();
+  // Then the first comes back, refused as stale with the case as it was.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), said, "the refusal is the newer send's");
+  const c = r.submit();
+  await settle();
+  assert.equal(posts[2].body.revision, pickedUp.revision, "the next goes at the case the newer refusal showed");
+  answer(2, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await c.done;
+});
+
+test("the late success of a send that another went after is still passed to the page, as it landed", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  answer(0, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await a.done;
+  assert.deepEqual(r.sent, [["withdraw", answered.revision + 1]]);
+  answer(1, 409, { error: { category: "transition", message: "the case is withdrawn" } });
+  await b.done;
+  assert.equal(posts.length, 2);
 });
