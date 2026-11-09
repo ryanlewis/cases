@@ -561,6 +561,101 @@ mod tests {
         );
     }
 
+    /// A copy of the store put in its place has the same keys and open
+    /// times, so its cases are the ones seen. What the copy holds that the
+    /// old store did not lands; an event at a seq seen already does not,
+    /// whatever it is; and an untouched copy lands nothing.
+    #[test]
+    fn a_copy_of_the_store_put_in_its_place_lands_only_what_is_new() {
+        // A store whose decision was answered and picked up: on no one.
+        let store = || {
+            let (dir, db) = scratch();
+            let data = r#"{"kind":"decision","urgency":"today","title":"Copied","options":["Pin","Float"],"opened_at":"2026-09-17T08:00:00Z"}"#;
+            let (key, _) = db
+                .create(&append("agent", "open", data), &Writer::new(None))
+                .unwrap();
+            write(&db, key, "human", "answer", r#"{"choice":1}"#);
+            write(&db, key, "agent", "pickup", "{}");
+            (dir, db, key)
+        };
+        let reopen = r#"{"body":"One more thing?","reopen":true}"#;
+        let (_old_dir, old, key) = store();
+        let mut engine = Engine::default();
+        engine.observe(&read(&old));
+        let (_same_dir, same, _) = store();
+        assert!(engine.observe(&read(&same)).is_empty());
+        let (_more_dir, more, _) = store();
+        write(&more, key, "agent", "note", reopen);
+        assert_eq!(
+            engine.observe(&read(&more)),
+            [Landed {
+                key,
+                seq: 4,
+                name: Name::Reopen
+            }]
+        );
+        // Another fourth event, in a copy without the note: its seq was
+        // seen, so it is not new.
+        let (_other_dir, other, _) = store();
+        write(
+            &other,
+            key,
+            "agent",
+            "amend",
+            r#"{"body":"Fixed.","reopen":true}"#,
+        );
+        assert!(engine.observe(&read(&other)).is_empty());
+        // The old store back, and the note in it later: seen already.
+        assert!(engine.observe(&read(&old)).is_empty());
+        write(&old, key, "agent", "note", reopen);
+        assert!(engine.observe(&read(&old)).is_empty());
+    }
+
+    /// Several cases moving in one read land each by its own event, beside
+    /// cases that did not move.
+    #[test]
+    fn several_cases_moving_in_one_read_land_each_once() {
+        let (_dir, db) = scratch();
+        let still = open(&db, "fyi", "today", "Still");
+        let answered = open(&db, "decision", "today", "Answered");
+        write(&db, answered, "human", "answer", r#"{"choice":1}"#);
+        write(&db, answered, "agent", "pickup", "{}");
+        let mut engine = Engine::default();
+        engine.observe(&read(&db));
+        write(
+            &db,
+            answered,
+            "agent",
+            "note",
+            r#"{"body":"Again?","reopen":true}"#,
+        );
+        let first = open(&db, "question", "blocking", "First");
+        let second = open(&db, "fyi", "whenever", "Second");
+        let landed = engine.observe(&read(&db));
+        assert_eq!(
+            landed,
+            [
+                Landed {
+                    key: answered,
+                    seq: 4,
+                    name: Name::Reopen
+                },
+                Landed {
+                    key: first,
+                    seq: 1,
+                    name: Name::Open
+                },
+                Landed {
+                    key: second,
+                    seq: 1,
+                    name: Name::Open
+                },
+            ]
+        );
+        assert!(!landed.iter().any(|landed| landed.key == still));
+        assert!(engine.observe(&read(&db)).is_empty());
+    }
+
     #[test]
     fn an_item_says_what_landed_and_where_it_is() {
         let (_dir, db) = scratch();
