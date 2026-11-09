@@ -3,6 +3,7 @@
 //! kind or urgency this version does not know, which is `unknown`, and for an
 //! open or amend by the side that does not open its kind, which is `author`.
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -237,18 +238,21 @@ fn changes_rest(amend: &Amend, case: &Case) -> bool {
 /// Refuses a link to drop that the case does not have, one given twice, and
 /// one the same amend adds.
 fn check_dropped_links(amend: &Amend, have: &[String]) -> Result<(), Error> {
-    for (i, link) in amend.drop_links.iter().enumerate() {
-        if amend.drop_links[..i].contains(link) {
+    let have: BTreeSet<&str> = have.iter().map(String::as_str).collect();
+    let added: BTreeSet<&str> = amend.links.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    for link in &amend.drop_links {
+        if !seen.insert(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the link {link:?} is dropped twice"
             )));
         }
-        if !have.contains(link) {
+        if !have.contains(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has no link {link:?} to drop"
             )));
         }
-        if amend.links.contains(link) {
+        if added.contains(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the link {link:?} is both added and dropped"
             )));
@@ -381,14 +385,16 @@ fn check_choice(answer: &Answer, given: usize, options: usize) -> Result<(), Err
 
 /// An approval's answer gives each of the case's `rows` one verdict.
 fn check_verdicts(answer: &Answer, rows: &[ApprovalRow]) -> Result<(), Error> {
-    for (i, verdict) in answer.rows.iter().enumerate() {
-        if !rows.iter().any(|row| row.id == verdict.id) {
+    let ids: BTreeSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    let mut seen = BTreeSet::new();
+    for verdict in &answer.rows {
+        if !ids.contains(verdict.id.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has no row {:?}",
                 verdict.id
             )));
         }
-        if answer.rows[..i].iter().any(|v| v.id == verdict.id) {
+        if !seen.insert(verdict.id.as_str()) {
             return Err(Error::invalid(format!(
                 "row {:?} has two verdicts",
                 verdict.id
@@ -401,10 +407,7 @@ fn check_verdicts(answer: &Answer, rows: &[ApprovalRow]) -> Result<(), Error> {
             )));
         }
     }
-    if let Some(row) = rows
-        .iter()
-        .find(|row| !answer.rows.iter().any(|v| v.id == row.id))
-    {
+    if let Some(row) = rows.iter().find(|row| !seen.contains(row.id.as_str())) {
         return Err(Error::invalid(format!("row {:?} has no verdict", row.id)));
     }
     Ok(())
@@ -537,13 +540,15 @@ fn check_labels(added: &[String], have: &[String]) -> Result<(), Error> {
 
 /// Refuses a value given twice in `added`, or one the case already has.
 fn check_new(what: &str, added: &[String], have: &[String]) -> Result<(), Error> {
-    for (i, value) in added.iter().enumerate() {
-        if added[..i].contains(value) {
+    let have: BTreeSet<&str> = have.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    for value in added {
+        if !seen.insert(value.as_str()) {
             return Err(Error::invalid(format!(
                 "the {what} {value:?} is given twice"
             )));
         }
-        if have.contains(value) {
+        if have.contains(value.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has the {what} {value:?} already"
             )));
@@ -556,6 +561,7 @@ fn check_new(what: &str, added: &[String], have: &[String]) -> Result<(), Error>
 /// digits, `.`, `-` and `_`, unique in the case, and its label, script and
 /// link are not blank. Its `by` is left out, for the agent, or `human`.
 fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
+    let mut ids: BTreeSet<&str> = have.iter().map(|row| row.id.as_str()).collect();
     for (i, row) in rows.iter().enumerate() {
         let id = &row.id;
         let id_fits = !id.is_empty()
@@ -568,7 +574,7 @@ fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
                 i + 1
             )));
         }
-        if rows[..i].iter().chain(have).any(|other| &other.id == id) {
+        if !ids.insert(id.as_str()) {
             return Err(Error::invalid(format!(
                 "the row id {id:?} is not unique in the case"
             )));
