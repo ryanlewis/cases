@@ -165,14 +165,18 @@ async fn store(State(app): State<Arc<App>>, request: Request) -> Response {
     );
     let answered = tokio::task::spawn_blocking(move || {
         let answer = dial::handle_http(&app.db, &request, &app.leases);
-        (answer.status(), answer.body().to_string().into_bytes())
+        (answer.status(), answer.body().clone())
     })
     .await;
     match answered {
-        Ok((status, body)) => json(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            body,
-        ),
+        Ok((status, body)) => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let response = json(status, body.to_string().into_bytes());
+            match body["error"]["message"].as_str() {
+                Some(message) => failed(response, message),
+                None => response,
+            }
+        }
         Err(error) => Refusal::store(error).into_response(),
     }
 }
@@ -499,15 +503,21 @@ impl IntoResponse for Refusal {
                 case: self.case.as_ref(),
             },
         };
-        let mut response = match serde_json::to_vec(&body) {
+        let response = match serde_json::to_vec(&body) {
             Ok(body) => json(self.status, body),
             Err(_) => self.status.into_response(),
         };
-        if self.status.is_server_error() {
-            response.extensions_mut().insert(Failure(self.message));
-        }
-        response
+        failed(response, &self.message)
     }
+}
+
+/// `response`, with `cause` attached for the log when it is a 500 or
+/// another server error.
+fn failed(mut response: Response, cause: &str) -> Response {
+    if response.status().is_server_error() {
+        response.extensions_mut().insert(Failure(cause.to_owned()));
+    }
+    response
 }
 
 /// A JSON response of `body`. API responses are never cached.
@@ -1149,6 +1159,45 @@ mod tests {
             "{lines:?}"
         );
         assert_eq!(app.requests.load(Ordering::Relaxed), 2);
+    }
+
+    /// A store route that fails with a 500 logs its cause on the line
+    /// before the request's, as the inbox's routes do; one refused with a
+    /// 404 logs the request alone. The responses are the store's own.
+    #[tokio::test]
+    async fn a_store_route_s_500_logs_its_cause_before_the_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("cases.db");
+        std::fs::create_dir(&store).unwrap();
+        let app = Arc::new(App {
+            log: Arc::new(Log::new(false, 16)),
+            ..app(&dir, &[], &[])
+        });
+        let cases = format!("/v1/stores/{}/store/cases", cases_store_remote::DIAL_STORE);
+        let (status, failed) = through(&app, "GET", &cases, "").await;
+        let cause = format!("store {} is a directory, not a file", store.display());
+        assert_eq!(status, 500, "{failed}");
+        assert_eq!(
+            failed,
+            serde_json::json!({"error": {"category": "store", "message": cause}})
+        );
+        let (status, refused) = through(&app, "GET", "/v1/stores/other/store/cases", "").await;
+        assert_eq!(status, 404, "{refused}");
+        let lines = app.log.last();
+        let request = |line: &str| {
+            // The line is `{at} {method} {uri} {status} {ms}ms`.
+            let (_, rest) = line.split_once(' ').unwrap();
+            let (rest, ms) = rest.rsplit_once(' ').unwrap();
+            assert!(
+                ms.strip_suffix("ms").unwrap().parse::<u128>().is_ok(),
+                "{line}"
+            );
+            rest.to_owned()
+        };
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0], format!("error: {cause}"));
+        assert_eq!(request(&lines[1]), format!("GET {cases} 500"));
+        assert_eq!(request(&lines[2]), "GET /v1/stores/other/store/cases 404");
     }
 
     /// A renewal is a store route's lock renewal, as `Client::hold` sends
