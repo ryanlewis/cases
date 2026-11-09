@@ -147,7 +147,7 @@ test("the 15 s poll reads the listeners alone, while the inbox-zero panel or the
   assert.equal(p.page.props.data.listeners, null);
   p.app.unmount();
   // On a case's page the poll reads nothing, until the composer opens.
-  const q = await openApp({ server: { waiting: [a] } });
+  const q = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a] } });
   q.taken();
   await q.tick(15000);
   assert.deepEqual(q.taken(), []);
@@ -157,10 +157,11 @@ test("the 15 s poll reads the listeners alone, while the inbox-zero panel or the
   q.app.unmount();
 });
 
-// A page that sends `version` as serve's build from GET /v1, with
-// `forms` as what typed() finds.
+// A page whose serve, once it is up, says it is build b2 from GET /v1,
+// with `forms` as what typed() finds; `options` go to openApp, `server`
+// over the two cases it lists.
 async function upgraded(forms = [], options = {}) {
-  const p = await openApp({ server: { waiting: [a, b], ...options.server }, ...options });
+  const p = await openApp({ ...options, server: { waiting: [a, b], ...options.server } });
   p.server.build = "b2";
   p.found["#case form.respond, #compose form, form.row-confirm"] = forms;
   p.taken();
@@ -302,6 +303,7 @@ test("the composer opens over the page shown, with its own entry in the history,
   assert.equal(p.composer, undefined);
   assert.deepEqual(p.entries(), [">/cases/bC4yR", "/cases/bC4yR"]);
   // The page under it kept where it was scrolled.
+  assert.deepEqual(p.history.state, { scrolled: { y: 50, list: 0, work: 0 } });
   await p.forward();
   assert.deepEqual(p.history.state, { composer: { to: "w1", re: "bC4yR" } });
   p.app.unmount();
@@ -498,7 +500,7 @@ test("the line a send leaves goes when its animation ends, or when dismissed", a
   p.page.props.sent("amend", a);
   await p.settle();
   let prevented = false;
-  const dismiss = [recordedLine(p).props.children].flat()[1].props.children;
+  const dismiss = [...nodes(recordedLine(p))].find((v) => v.props["aria-label"] === "dismiss this confirmation");
   dismiss.props.onClick({ preventDefault: () => (prevented = true) });
   await p.settle();
   assert.equal(prevented, true);
@@ -629,9 +631,10 @@ test("the options chip and the ? key open their dialogs", async () => {
   p.app.unmount();
 });
 
-test("a code block's copy button copies through App's listener", async () => {
+test("a code block's copy button copies through App's listener", async (t) => {
   const copied = [];
   const nav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  t.after(() => Object.defineProperty(globalThis, "navigator", nav));
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async (t) => copied.push(t) } } });
   const p = await openApp({ server: { waiting: [a] } });
   const code = { textContent: "echo hi\n", parentElement: { classList: { contains: () => false } } };
@@ -641,10 +644,10 @@ test("a code block's copy button copies through App's listener", async () => {
   await p.click(button);
   assert.deepEqual(copied, ["echo hi"]);
   p.app.unmount();
-  Object.defineProperty(globalThis, "navigator", nav);
 });
 
-test("a notification's click moves the page to its case", async () => {
+test("a notification's click moves the page to its case", async (t) => {
+  t.after(() => delete globalThis.Notification);
   const shownNotes = [];
   const extra = (page) => {
     page.window.Notification = true;
@@ -667,7 +670,6 @@ test("a notification's click moves the page to its case", async () => {
   assert.deepEqual(route(p), { page: "case", id: "bC4yR", show: null });
   assert.deepEqual(p.entries(), ["/", ">/cases/bC4yR-second-case"]);
   p.app.unmount();
-  delete globalThis.Notification;
 });
 
 // A browser with BroadcastChannel and, unless `locks` is false, Web Locks:
@@ -713,8 +715,9 @@ function tabs({ locks = true } = {}) {
   return { made, lock, extra, restore };
 }
 
-test("with locks, the tab that holds the lock holds the stream and passes each version to the others", async () => {
+test("with locks, the tab that holds the lock holds the stream and passes each version to the others", async (ctx) => {
   const t = tabs();
+  ctx.after(t.restore);
   const p = await openApp({ server: { waiting: [a] }, extra: t.extra });
   assert.deepEqual(t.lock.asked, ["cases-stream"]);
   assert.equal(p.streams.length, 0);
@@ -743,11 +746,11 @@ test("with locks, the tab that holds the lock holds the stream and passes each v
   assert.equal(p.streams[0].closed, true);
   assert.equal(t.lock.released, true);
   assert.equal(channel.closed, true);
-  t.restore();
 });
 
-test("with locks, a tab without the stream reads on the holder's versions and its opens", async () => {
+test("with locks, a tab without the stream reads on the holder's versions and its opens", async (ctx) => {
   const t = tabs();
+  ctx.after(t.restore);
   const p = await openApp({ server: { waiting: [a] }, extra: t.extra });
   const channel = t.made[0];
   p.taken();
@@ -770,11 +773,11 @@ test("with locks, a tab without the stream reads on the holder's versions and it
   p.app.unmount();
   await t.lock.grant();
   assert.equal(p.streams.length, 0);
-  t.restore();
 });
 
-test("with a channel and no locks, only a shown tab holds a stream", async () => {
+test("with a channel and no locks, only a shown tab holds a stream", async (ctx) => {
   const t = tabs({ locks: false });
+  ctx.after(t.restore);
   const p = await openApp({ server: { waiting: [a] }, extra: (page) => (t.extra(page), (page.document.hidden = true)) });
   assert.equal(p.streams.length, 0);
   p.document.hidden = false;
@@ -785,5 +788,4 @@ test("with a channel and no locks, only a shown tab holds a stream", async () =>
   p.stream.onopen();
   assert.equal(t.made[0].posted.length, 1);
   p.app.unmount();
-  t.restore();
 });
