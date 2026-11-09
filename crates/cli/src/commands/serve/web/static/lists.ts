@@ -654,7 +654,8 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   const [refusal, setRefusal] = useState("");
   // The send that is out, which only that send lets go (IN-09).
   const sending = useRef<object | null>(null);
-  // The send that went last: only its answer speaks for the line.
+  // The send that went last on the line as it is open now: only its answer
+  // speaks for the line.
   const newest = useRef<object | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -669,12 +670,15 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     line.current = next;
     if (said) setRefusal(said);
   }, [c.revision, c.state]);
+  // A line opened or kept is a new one: no send before it speaks for it.
   function start(): void {
+    newest.current = null;
     line.current = lineFrom(c);
     setRefusal("");
     setOpen(true);
   }
   function keep(): void {
+    newest.current = null;
     shut.current = true;
     setOpen(false);
     setReason("");

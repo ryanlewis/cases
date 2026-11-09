@@ -526,3 +526,25 @@ test("the late success of a send that another went after is still passed to the 
   await b.done;
   assert.equal(posts.length, 2);
 });
+
+test("the answer of a send from before the line was kept and opened again says nothing in the new line", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  r.keep();
+  r.bring(pickedUp);
+  r.press();
+  // The first send comes back stale, with the case as it was: the line,
+  // opened on the case picked up, is the human's new one.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), "");
+  const b = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await b.done;
+});
