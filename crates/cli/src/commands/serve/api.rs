@@ -23,7 +23,7 @@ use crate::instance;
 use crate::output::{self, Actors, CaseJson};
 
 /// The most a write's body may hold.
-const MAX_BODY: usize = 1 << 20;
+pub(crate) const MAX_BODY: usize = 1 << 20;
 
 /// `GET /v1`: the build, which a page compares with its own (IN-12), and the
 /// CSRF token its writes carry (IN-11).

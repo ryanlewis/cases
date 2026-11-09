@@ -47,6 +47,10 @@ const FORWARDED_HOST_HEADER: &str = "x-forwarded-host";
 /// reached by over HTTP (`forward = "http://…"`), as over a pipe.
 const STORE_ROUTES: &str = "/v1/stores/";
 
+// A store route's body is read as an inbox write's is, so the most it may
+// hold is the store protocol's.
+const _: () = assert!(api::MAX_BODY == cases_store_remote::REQUEST_LIMIT);
+
 /// What every request is served with.
 #[derive(Debug)]
 pub(crate) struct App {
