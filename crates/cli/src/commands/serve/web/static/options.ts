@@ -174,8 +174,16 @@ function writeCursor(c: Cursor | null): void {
   try {
     if (c) localStorage.setItem(CURSOR, JSON.stringify(c));
     else localStorage.removeItem(CURSOR);
-  } catch (e) {
-    // localStorage cannot be written: this tab's copy stands in.
+  } catch {
+    // localStorage cannot be written: this tab's copy stands in. A cursor
+    // it still holds is older than this tab's copy. Read back, it would show
+    // again what this tab has shown, so it is removed. A full quota still
+    // allows that.
+    try {
+      localStorage.removeItem(CURSOR);
+    } catch {
+      // Nor can it be removed.
+    }
   }
 }
 
