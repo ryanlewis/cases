@@ -138,6 +138,92 @@ function useScroll(data: Data | null, pinned: { current: Route | null }, restore
   }, [shownRoute]);
 }
 
+// What the page's links and the back and forward buttons move it with
+// (useLinks): the composer's entry in the history and what back does to it,
+// the route shown, whether serve is a newer build, where a page returned to
+// was scrolled, the keys dialog, and App's moves.
+interface Links {
+  entry: Entry;
+  composerBack: { current: (() => boolean) | null };
+  routeRef: { current: Route };
+  stale: { current: boolean };
+  restore: { current: Scroll | null };
+  keysDialog: { current: HTMLDialogElement | null };
+  navigate: (path: string, fromComposer?: boolean) => void;
+  shut: () => void;
+  setComposing: (composing: Composing | null) => void;
+  setRoute: (route: Route) => void;
+}
+
+// Links to the app's pages move within it; the browser's back and
+// forward buttons too, back to where each page was scrolled.
+// An effect of App's, in its place, run once with what App's first draw
+// gave it.
+function useLinks({ entry, composerBack, routeRef, stale, restore, keysDialog, navigate, shut, setComposing, setRoute }: Links): void {
+  useEffect(() => {
+    const click = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element).closest && (e.target as Element).closest<HTMLAnchorElement>("a[href]");
+      if (!a || a.target || a.hasAttribute("download")) return;
+      const url = new URL(a.href, location.href);
+      if (url.origin !== location.origin || !where(url)) return;
+      // A link within the page shown, such as #thread, is the browser's.
+      if (url.pathname === location.pathname && url.search === location.search && a.href.includes("#")) return;
+      e.preventDefault();
+      navigate(url.pathname + url.search, a.closest("#compose") !== null);
+    };
+    // A move within the page shown, to a fragment and back, keeps it. A
+    // move to another page loads a newer build, as a link does.
+    const back = () => {
+      const took = entry.popped();
+      const state = history.state;
+      const { route: at, composing: opens } = arrive(here());
+      // A case's page a refusal pinned keeps its filter in its entry, as its
+      // address cannot name the inbox's (refused).
+      const r: Route = state && state.show ? { ...at, show: state.show } : at;
+      if (took) {
+        // Back took the composer's entry off: the composer answers it, as
+        // it does Escape. While it asks about a note, the entry is back
+        // on. One not drawn yet, as the page has not been read, goes. A
+        // back past the page under it, as a jump from the back button's
+        // list, moves the page too, below.
+        const answer = composerBack.current;
+        if (!answer) shut();
+        else if (answer()) entry.kept();
+      } else if (opens) {
+        setComposing(opens);
+      } else if (state && state.composer && !entry.on) {
+        // Forward to the entry of a composer closed before opens it
+        // again, rather than being a place that back leaves at once.
+        entry.adopted(state.composer);
+        setComposing({ to: state.composer.to || "", re: state.composer.re || "", at: Date.now() });
+      }
+      if (same(r, routeRef.current)) return;
+      if (stale.current) {
+        location.reload();
+        return;
+      }
+      restore.current = state && state.scrolled;
+      setRoute(r);
+    };
+    // A code block's copy button (code.js).
+    const copy = (e: MouseEvent) => {
+      const button = (e.target as Element).closest && (e.target as Element).closest<HTMLElement>(".copy-code");
+      if (button) void copyCode(button);
+    };
+    document.addEventListener("click", click);
+    document.addEventListener("click", copy);
+    window.addEventListener("popstate", back);
+    keys(() => keysDialog.current);
+    notify(navigate);
+    return () => {
+      document.removeEventListener("click", click);
+      document.removeEventListener("click", copy);
+      window.removeEventListener("popstate", back);
+    };
+  }, []);
+}
+
 // What the page follows the store with (useLive): the store's version it
 // last read at, a read of what it shows, a check of serve's build, who it
 // takes to be listening after a read of them, and its clock and data.
@@ -451,70 +537,7 @@ function App({ build }: { build: string }) {
 
   useLive({ version, refresh, checkBuild, heard, setNow, setData });
 
-  // Links to the app's pages move within it; the browser's back and
-  // forward buttons too, back to where each page was scrolled.
-  useEffect(() => {
-    const click = (e: MouseEvent) => {
-      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      const a = (e.target as Element).closest && (e.target as Element).closest<HTMLAnchorElement>("a[href]");
-      if (!a || a.target || a.hasAttribute("download")) return;
-      const url = new URL(a.href, location.href);
-      if (url.origin !== location.origin || !where(url)) return;
-      // A link within the page shown, such as #thread, is the browser's.
-      if (url.pathname === location.pathname && url.search === location.search && a.href.includes("#")) return;
-      e.preventDefault();
-      navigate(url.pathname + url.search, a.closest("#compose") !== null);
-    };
-    // A move within the page shown, to a fragment and back, keeps it. A
-    // move to another page loads a newer build, as a link does.
-    const back = () => {
-      const took = entry.popped();
-      const state = history.state;
-      const { route: at, composing: opens } = arrive(here());
-      // A case's page a refusal pinned keeps its filter in its entry, as its
-      // address cannot name the inbox's (refused).
-      const r: Route = state && state.show ? { ...at, show: state.show } : at;
-      if (took) {
-        // Back took the composer's entry off: the composer answers it, as
-        // it does Escape. While it asks about a note, the entry is back
-        // on. One not drawn yet, as the page has not been read, goes. A
-        // back past the page under it, as a jump from the back button's
-        // list, moves the page too, below.
-        const answer = composerBack.current;
-        if (!answer) shut();
-        else if (answer()) entry.kept();
-      } else if (opens) {
-        setComposing(opens);
-      } else if (state && state.composer && !entry.on) {
-        // Forward to the entry of a composer closed before opens it
-        // again, rather than being a place that back leaves at once.
-        entry.adopted(state.composer);
-        setComposing({ to: state.composer.to || "", re: state.composer.re || "", at: Date.now() });
-      }
-      if (same(r, routeRef.current)) return;
-      if (stale.current) {
-        location.reload();
-        return;
-      }
-      restore.current = state && state.scrolled;
-      setRoute(r);
-    };
-    // A code block's copy button (code.js).
-    const copy = (e: MouseEvent) => {
-      const button = (e.target as Element).closest && (e.target as Element).closest<HTMLElement>(".copy-code");
-      if (button) void copyCode(button);
-    };
-    document.addEventListener("click", click);
-    document.addEventListener("click", copy);
-    window.addEventListener("popstate", back);
-    keys(() => keysDialog.current);
-    notify(navigate);
-    return () => {
-      document.removeEventListener("click", click);
-      document.removeEventListener("click", copy);
-      window.removeEventListener("popstate", back);
-    };
-  }, []);
+  useLinks({ entry, composerBack, routeRef, stale, restore, keysDialog, navigate, shut, setComposing, setRoute });
 
   useTitle(data);
 
