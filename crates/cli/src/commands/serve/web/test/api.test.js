@@ -93,7 +93,7 @@ function restarted(t, reread, post = () => new Response(JSON.stringify({ error: 
   globalThis.fetch = async (url, init) => {
     const method = init && init.method ? init.method : "GET";
     calls.push(`${method} ${url}`);
-    if (url === "/v1") return calls.length === 1 ? new Response(JSON.stringify({ csrf: "tok", build: "b" }), { status: 200 }) : reread();
+    if (url === "/v1") return calls.filter((c) => c === "GET /v1").length === 1 ? new Response(JSON.stringify({ csrf: "tok", build: "b" }), { status: 200 }) : reread();
     return post(calls.filter((c) => c.startsWith("POST")).length);
   };
   return calls;
@@ -116,6 +116,19 @@ test("a message refused for an old token, whose token cannot be read again, says
   const sent = await api.sendMessage({ body: "hi" });
   assert.doesNotMatch(sent.refusal, /may or may not/);
   assert.match(sent.refusal, /not sent/);
+});
+
+test("a send whose first token read cannot reach serve says it was not recorded, and is not sent", async (t) => {
+  const fresh = await import("../static/api.ts?no-token");
+  const calls = serve(t, () => { throw new Error("unexpected"); });
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${init && init.method ? init.method : "GET"} ${url}`);
+    throw new TypeError("Failed to fetch");
+  };
+  const sent = await fresh.send("abc", "answer", { revision: 2 });
+  assert.doesNotMatch(sent.refusal, /may or may not/);
+  assert.match(sent.refusal, /not recorded/);
+  assert.deepEqual(calls, ["GET /v1"]);
 });
 
 test("a send whose token is read again, but whose second send cannot reach serve, says the outcome is unknown", async (t) => {

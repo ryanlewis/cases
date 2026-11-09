@@ -111,7 +111,7 @@ async function post(path: string, body: unknown): Promise<Reply<Case>> {
 
 // POSTs as post does, and gives the case in the reply as serve sent it.
 async function postServed(path: string, body: unknown): Promise<Reply<ServedCase>> {
-  if (!token) await index();
+  if (!token) await tokenFor();
   const send = () =>
     fetch(`/v1/${path}`, {
       method: "POST",
@@ -121,20 +121,25 @@ async function postServed(path: string, body: unknown): Promise<Reply<ServedCase
     }).then(read<ServedCase>);
   let response = await send();
   if (response.status === 403 && category(response) === "csrf") {
-    // serve checks the token before it writes anything, so a write whose
-    // token cannot be read again was not recorded.
-    try {
-      await index();
-    } catch (e) {
-      throw new Unsent();
-    }
+    // serve checks the token before it writes anything, so nothing was
+    // written yet.
+    await tokenFor();
     response = await send();
   }
   return response;
 }
 
-// A write refused for its token, whose token could not be read again: it
-// was not recorded.
+// Reads the token for a write not sent, or not written, yet; throws Unsent
+// when serve does not give it.
+async function tokenFor(): Promise<void> {
+  try {
+    await index();
+  } catch (e) {
+    throw new Unsent();
+  }
+}
+
+// A write whose token could not be read: it was not recorded.
 class Unsent extends Error {}
 
 // Sends the human's message, `body`, and says what came of it, as send
@@ -177,8 +182,7 @@ export async function send(id: string, what: Exclude<What, "message">, body: Wri
     // write would send it again and have it accepted. The form keeps its
     // revision, so a second send is refused as stale if the first was
     // recorded, and the stream redraws the case when serve is back. A write
-    // refused for its token, whose token could not be read again, was not
-    // recorded at all.
+    // whose token could not be read was not recorded at all.
     if (e instanceof Unsent) return { refusal: "serve could not be reached for the token a write needs, so this was not recorded. send it again once serve is back." };
     return { refusal: "serve could not be reached, so this may or may not have been recorded. check the thread before sending again." };
   }
