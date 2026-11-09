@@ -324,8 +324,9 @@ const { Composer } = await import("../static/compose.ts");
 await import("../static/app.ts");
 // start() may wait on serve for its build before it draws.
 for (let i = 0; i < 5 && !rendered.length; i++) await new Promise((r) => setImmediate(r));
+if (!rendered.length) throw new Error("app.ts's start() drew nothing within 5 turns of the event loop");
 const App = rendered[0].vnode.type;
-export const first = { build: rendered[0].vnode.props.build, scrollRestoration: history.scrollRestoration, parent: rendered[0].parent, requests: firstPage.requests };
+export const first = { build: rendered[0].vnode.props.build, scrollRestoration: history.scrollRestoration, parent: rendered[0].parent, body: firstPage.document.body, requests: firstPage.requests };
 
 // App, mounted on a page loaded at `url` (see setUp), its clock at NOW and
 // its timers the test's to move. `extra(page)` runs before the mount, to

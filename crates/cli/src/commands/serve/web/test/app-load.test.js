@@ -6,7 +6,7 @@
 // the stand-in page of app-page.js, which must be the first to load it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LISTENERS, OTHERS, WAITING, card, first, link, openApp } from "./app-page.js";
+import { LISTENERS, NOW, OTHERS, WAITING, card, first, link, openApp } from "./app-page.js";
 import { decision, steps } from "./case.js";
 
 // A case `id` titled `title`, open and due today unless `fields` say
@@ -25,7 +25,7 @@ function shows(p) {
 test("start() mounts App into the body, with the build the page says, and leaves the scroll to it", async () => {
   assert.equal(first.build, "b1");
   assert.equal(first.scrollRestoration, "manual");
-  assert.equal(first.parent, globalThis.document.body);
+  assert.equal(first.parent, first.body);
   assert.deepEqual(first.requests, []);
 });
 
@@ -42,7 +42,7 @@ test("the first load of / reads the two lists and the listeners, once each, and 
   assert.equal(p.favicon.getAttribute("href"), "/favicon.svg?n=2");
   // A first page starts at its top; the address is left as it was.
   assert.deepEqual(p.log, ["scrollTo 0"]);
-  assert.equal(p.page.props.now, Date.parse("2026-09-25T13:45:00Z"));
+  assert.equal(p.page.props.now, NOW);
   p.app.unmount();
 });
 
@@ -71,10 +71,10 @@ test("a case's page reads the case too, and lists it under its own filter", asyn
   const p = await openApp({ url: "/cases/cD5zS-closed-case", server: { waiting: [a], done: [shut] } });
   assert.deepEqual(p.requests, [WAITING, OTHERS, "GET /v1/cases/cD5zS", LISTENERS]);
   assert.deepEqual(shows(p), { route: { page: "case", id: "cD5zS", show: null }, show: "done", inbox: ["aB3xQ"], done: ["cD5zS"], shown: "cD5zS" });
+  p.app.unmount();
   // Its filter given, the case is listed under it.
   const q = await openApp({ url: "/cases/cD5zS?show=all", server: { waiting: [a], done: [shut] } });
   assert.equal(shows(q).show, "all");
-  p.app.unmount();
   q.app.unmount();
 });
 
@@ -155,11 +155,11 @@ test("the composer's address opens it over the list, and the address bar says th
   assert.equal(p.composer.props.to, "w1");
   assert.equal(p.composer.props.re, "aB3xQ");
   assert.ok(p.html.includes('<div id="compose">'), p.html);
+  p.app.unmount();
   // With no filter, over the inbox.
   const q = await openApp({ url: "/message" });
   assert.deepEqual(shows(q).route, { page: "list", show: "inbox" });
   assert.equal(q.composer.props.to, "");
-  p.app.unmount();
   q.app.unmount();
 });
 
@@ -247,7 +247,8 @@ test("a move in the history within the page shown, to a fragment and back, reads
   p.app.unmount();
 });
 
-test("a read a later one overtakes is dropped, however late it comes back", async () => {
+test("a read a later one overtakes is dropped, however late it comes back", async (t) => {
+  t.after(() => delete globalThis.matchMedia);
   const releases = [];
   const fades = [];
   const extra = (page) => {
@@ -281,7 +282,6 @@ test("a read a later one overtakes is dropped, however late it comes back", asyn
   await p.settle();
   assert.ok(!p.html.includes("late"), p.html);
   p.app.unmount();
-  delete globalThis.matchMedia;
 });
 
 test("a refresh keeps the case shown on the list while it is listed; a move to the list picks the first again", async () => {
@@ -310,7 +310,8 @@ test("a refresh keeps the case shown on the list while it is listed; a move to t
   p.app.unmount();
 });
 
-test("a move to another page cross-fades where the browser can and motion is not reduced; a refresh does not", async () => {
+test("a move to another page cross-fades where the browser can and motion is not reduced; a refresh does not", async (t) => {
+  t.after(() => delete globalThis.matchMedia);
   const fades = [];
   let reduced = false;
   const extra = (page) => {
@@ -333,10 +334,10 @@ test("a move to another page cross-fades where the browser can and motion is not
   assert.deepEqual(fades, ["/", "/cases/bC4yR"]);
   assert.equal(shows(p).shown, "aB3xQ");
   p.app.unmount();
-  delete globalThis.matchMedia;
 });
 
-test("a read overtaken while its cross-fade waits to draw is dropped", async () => {
+test("a read overtaken while its cross-fade waits to draw is dropped", async (t) => {
+  t.after(() => delete globalThis.matchMedia);
   const waiting = [];
   const extra = (page) => {
     page.document.startViewTransition = (update) => waiting.push(update);
@@ -355,7 +356,6 @@ test("a read overtaken while its cross-fade waits to draw is dropped", async () 
   await p.settle();
   assert.equal(shows(p).shown, "aB3xQ");
   p.app.unmount();
-  delete globalThis.matchMedia;
 });
 
 test("j and k open the next and previous card through App's links", async () => {
