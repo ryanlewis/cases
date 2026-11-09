@@ -22,6 +22,15 @@ SEG = re.compile(
 # Where a segment ends, to cut out its arguments.
 END = re.compile(r'&&|\|\||;|\n(?!\s)|\|(?!\|)')
 
+# A heredoc's body is data, such as a case body written to a file, not commands.
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2(?=\s|$)", re.S)
+# Shell glue that only moves or tests text: with it, a command is still
+# bookkeeping. `cat` writes a case's body file or prints a wait's output, and
+# `jq`, `head` and `tail` read a line. Anything else is work, such as `git`,
+# `make` or `grep` over the code.
+GLUE = set("echo printf cat jq head tail cd true false test [ [[ ] ]] if then else elif fi do done ! { } ( ) :".split())
+ASSIGN = re.compile(r'^[A-Za-z_]\w*=(?:"?\$\(\s*(.*?)\)?"?|\S*)$', re.S)
+
 EXIT = re.compile(r'Exit code (\d+)')
 BG = re.compile(r'running in background with ID: (\w+)')
 
@@ -71,6 +80,73 @@ def cases_segments(cmd):
             continue
         out.append((sub, args))
     return out
+
+
+def _pieces(cmd):
+    """A command's simple commands: split at &&, ||, ;, |, a newline, ( and
+    ), outside quotes, with heredoc bodies and backslash-newlines removed. A
+    `$(...)` stays whole in its piece."""
+    cmd = HEREDOC.sub("<<HEREDOC", cmd or "").replace("\\\n", " ")
+    pieces, cur, quote, depth, i = [], [], None, 0, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                cur.append(cmd[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch == "\\":
+            cur.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch
+        elif cmd.startswith("$(", i):
+            depth += 1
+            cur.append("$(")
+            i += 2
+            continue
+        elif ch == ")" and depth:
+            depth -= 1
+        elif not depth and (cmd.startswith("&&", i) or cmd.startswith("||", i)):
+            pieces.append("".join(cur))
+            cur = []
+            i += 2
+            continue
+        elif not depth and ch in ";|\n()":
+            pieces.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    pieces.append("".join(cur))
+    return [p.strip() for p in pieces if p.strip()]
+
+
+def _bookkeeping(piece):
+    """Whether one simple command is cases bookkeeping: a `cases` call, an
+    assignment of what one prints (`id=$(cases open ...)`), a plain
+    assignment, or glue."""
+    words = piece.split()
+    # Leading assignments: env for the command, or the whole piece.
+    while words and ASSIGN.match(words[0]) and "$(" not in words[0]:
+        words = words[1:]
+    if not words:
+        return True
+    m = ASSIGN.match(piece) if "$(" in words[0] else None
+    if m:
+        inner = (m.group(1) or "").split()
+        return bool(inner) and re.fullmatch(r"(?:\S*/)?cases", inner[0]) is not None
+    head = words[0]
+    return re.fullmatch(r"(?:\S*/)?cases", head) is not None or head in GLUE
+
+
+def bookkeeping_only(cmd):
+    """Whether every simple command of a shell command is cases bookkeeping or glue."""
+    return all(_bookkeeping(p) for p in _pieces(cmd))
 
 
 def has_flag(args, flag):
@@ -251,7 +327,14 @@ class Transcript:
         return sum(r.get("total_cost_usd") or 0 for r in self.results)
 
     def call_classes(self):
-        """Sort each API call that made only `cases` tool calls into ask or extra.
+        """Sort each API call that made only `cases` bookkeeping into ask or extra.
+
+        A call counts only when each of its tool calls is bookkeeping: a Bash
+        command whose every simple command is a `cases` call, an assignment of
+        what one prints, or glue (see GLUE), with at least one `cases` call or
+        read of a wait's output; another tool reading a wait's output; or the
+        cases skill. Work chained with bookkeeping, such as `git commit ... &&
+        cases close ...`, is not counted: it is the call the skill asks for.
 
         An ask opens a case (in chat, that is the turn that asks); every other
         cases-only call (close, a separate wait, reading wait output, show,
@@ -267,11 +350,12 @@ class Transcript:
         for ci, ts in per_call.items():
             tagged = []
             for t in ts:
-                if t.segments:
-                    tagged.append(set(t.subs))
-                elif t.name == "Skill" and "cases" in str(t.input.get("skill", "")):
+                reads = any(tid + ".output" in json.dumps(t.input) for tid in wait_files)
+                if t.name == "Skill" and "cases" in str(t.input.get("skill", "")):
                     tagged.append({"skill"})
-                elif any(tid + ".output" in json.dumps(t.input) for tid in wait_files):
+                elif t.name == "Bash" and (t.segments or reads) and bookkeeping_only(t.cmd):
+                    tagged.append(set(t.subs) | ({"wait-read"} if reads else set()))
+                elif t.name != "Bash" and reads:
                     tagged.append({"wait-read"})
                 else:
                     tagged.append(None)

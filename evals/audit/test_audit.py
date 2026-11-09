@@ -195,6 +195,39 @@ class Audit(unittest.TestCase):
         self.assertEqual(tl.merge_after_checks(s), (1, 0))
         self.assertEqual(tl.code_review_level(s), (1, 0))
 
+    def cost_of(self, *cmds):
+        f = SessionFile()
+        f.user("go")
+        for cmd in cmds:
+            f.bash(cmd)
+        return rules_cases.cost(self.session(f))
+
+    def test_work_chained_with_bookkeeping_is_not_a_cases_only_call(self):
+        c = self.cost_of('git commit -qam "Pin bun" && cases close A --revision 3 --outcome "Pinned bun."',
+                         "make test; cases close A --revision 3 --outcome done",
+                         "cargo build && id=$(cases open --kind fyi --title t --worker w) && cases wait --id \"$id\"")
+        self.assertEqual((c["ask"], c["extra"]), (0, 0))
+
+    def test_bookkeeping_and_its_glue_are_cases_only_calls(self):
+        c = self.cost_of(
+            'cases close A --revision 3 --outcome "Ran make; all green" && '
+            'id=$(cases open --kind fyi --title t --worker w) && cases wait --id "$id" --since "$id" --pickup --by w',
+            "cat > q.md <<'EOF'\nWe could run make deploy && rm -rf build; which?\nEOF\n"
+            "cases open --kind question --title q --body-file q.md --worker w",
+            'cd /repo && cases show A --answer | jq .answer',
+            'echo "$id"; cases list --worker w',
+            "cases wait --label L --worker w --pickup --by w --since x || true")
+        self.assertEqual((c["ask"], c["extra"]), (2, 3))
+
+    def test_reading_a_waits_output_is_a_cases_only_call(self):
+        f = SessionFile()
+        f.user("go")
+        f.bash("cases wait --id A --since A --pickup --by w", bg=True)
+        f.tool("Read", {"file_path": "/nonexistent/b1.output"})
+        f.bash("cat /nonexistent/b1.output && git push")
+        c = rules_cases.cost(self.session(f))
+        self.assertEqual((c["ask"], c["extra"]), (0, 2))
+
     def test_the_report_holds_no_transcript_text(self):
         f = SessionFile()
         f.user("the secret word is pelican")
