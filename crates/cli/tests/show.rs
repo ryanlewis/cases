@@ -596,3 +596,43 @@ fn show_names_a_messages_worker_as_its_recipient() {
     assert!(text.contains("\nto:       w1\n"), "{text}");
     assert!(!text.contains("worker:"), "{text}");
 }
+
+#[test]
+fn a_case_that_does_not_fold_is_refused_alike_by_its_id_or_part_of_it() {
+    let env = Env::new();
+    let good = env.open_fyi("Good");
+    let bad = env.insert(None, 1, "agent", "open", "{}");
+    let whole = env.cases(&["show", &bad]);
+    assert_eq!(whole.code, 1, "{whole:?}");
+    assert!(
+        whole.stderr.starts_with(&format!("Error: {bad}: ")),
+        "{whole:?}"
+    );
+    let part = env.cases(&["show", &bad[1..bad.len() - 1]]);
+    assert_eq!((part.code, &part.stderr), (1, &whole.stderr), "{part:?}");
+
+    // Listed among the cases a part matches, it has no title. More that do
+    // not fold are stored until one shares a letter with the good case.
+    let mut bad = vec![bad];
+    let letter = loop {
+        if let Some(c) = good.chars().find(|c| bad.iter().any(|id| id.contains(*c))) {
+            break c.to_string();
+        }
+        bad.push(env.insert(None, 1, "agent", "open", "{}"));
+    };
+    let mut want = String::new();
+    let mut n = 0;
+    for id in std::iter::once(&good).chain(&bad) {
+        if id.contains(&letter) {
+            n += 1;
+            let title = if id == &good { "Good" } else { "" };
+            writeln!(want, "  {id}  {title}").unwrap();
+        }
+    }
+    let out = env.cases(&["show", &letter]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(
+        out.stderr,
+        format!("Error: {letter:?} matches {n} cases:\n{want}")
+    );
+}

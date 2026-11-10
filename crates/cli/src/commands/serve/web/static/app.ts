@@ -96,6 +96,168 @@ function scrolled(): Scroll {
   return { y: window.scrollY, list: list ? list.scrollTop : 0, work: work ? work.scrollTop : 0 };
 }
 
+// An open composer has its entry in the history, which back takes off.
+// The page under it keeps where it was scrolled, as a move by a link
+// does, for a back to it after "about" takes the entry's place.
+function useComposerEntry(composing: Composing | null, entry: Entry): void {
+  useEffect(() => {
+    if (!composing) return;
+    if (!entry.on && !(history.state && history.state.composer)) history.replaceState({ ...history.state, scrolled: scrolled() }, "");
+    entry.opened({ to: composing.to, re: composing.re });
+  }, [composing]);
+}
+
+// The title leads with the open cases, and the tab icon shows them (IN-01).
+// Set as the page is drawn, not after it is painted: a hidden tab paints
+// late or not at all, and its title is what shows it has changed.
+function useTitle(data: Data | null): void {
+  useLayoutEffect(() => {
+    if (!data) return;
+    const t = tally(data.inbox);
+    document.title = t.waiting ? `(${t.waiting}) cases` : "cases";
+    const link = document.getElementById("favicon");
+    const href = icon(t);
+    // Chromium loads the new icon when the link's address changes.
+    if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
+  }, [data]);
+}
+
+// A move to another page starts at its top, and a move back by the back
+// or forward button returns to where the page was scrolled.
+function useScroll(data: Data | null, pinned: { current: Route | null }, restore: { current: Scroll | null }): void {
+  const shownRoute = data && data.route;
+  useEffect(() => {
+    if (!shownRoute || shownRoute === pinned.current) return;
+    const to = restore.current;
+    restore.current = null;
+    window.scrollTo(0, to ? to.y : 0);
+    const list = document.querySelector<HTMLElement>(".split > .list");
+    const work = document.querySelector<HTMLElement>(".split > .work");
+    if (to && list) list.scrollTop = to.list;
+    if (work) work.scrollTop = to ? to.work : 0;
+  }, [shownRoute]);
+}
+
+// What the page follows the store with (useLive): the store's version it
+// last read at, a read of what it shows, a check of serve's build, who it
+// takes to be listening after a read of them, and its clock and data.
+interface Live {
+  version: { current: string };
+  refresh: () => Promise<void>;
+  checkBuild: () => Promise<void>;
+  heard: (read: Listener[] | null) => Listener[] | null;
+  setNow: (now: number) => void;
+  setData: (update: (was: Data | null) => Data | null) => void;
+}
+
+// The page following the store: the event stream, the minute's tick and
+// the 15 s read of who is listening, each an effect of App's, in App's
+// order. Each runs once, with what App's first draw gave it.
+function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live): void {
+  // The event stream (IN-06). One tab of the browser holds it, shown or
+  // hidden: a browser allows six connections to one address, shared by all
+  // its tabs, and each stream holds one. The holder is the tab that holds
+  // the "cases-stream" lock; it passes each version to the other tabs, which
+  // read the store at once too. When the holder goes, the lock passes to
+  // another tab, which opens its stream from the last version it had, which
+  // serve answers at once if the store has moved since. So a hidden tab
+  // follows the store, and its title with it, as a shown one does. Where
+  // the browser has no locks, only a tab that is shown holds a stream, as
+  // before.
+  useEffect(() => {
+    const channel = "BroadcastChannel" in window ? new BroadcastChannel("cases-store") : null;
+    const locks = channel && "locks" in navigator ? navigator.locks : null;
+    let stream: EventSource | null = null;
+    let dropped = false;
+    let gone = false;
+    let release: (() => void) | null = null;
+    const seen = (v: string) => {
+      if (v === version.current) return;
+      version.current = v;
+      refresh();
+    };
+    const open = () => {
+      if (stream || !window.EventSource || (channel && !locks && document.hidden)) return;
+      const after = version.current ? `?after=${encodeURIComponent(version.current)}` : "";
+      stream = new EventSource(`/v1/changes${after}`);
+      stream.onmessage = (e) => {
+        if (channel) channel.postMessage(e.data);
+        seen(e.data);
+      };
+      stream.onerror = () => (dropped = true);
+      // Whenever the stream opens, serve may be another build: it may have
+      // been upgraded while this tab held no stream, or while the stream was
+      // down (IN-12). A read set off as the stream dropped, as when serve
+      // restarts, may have failed with it: read again.
+      stream.onopen = () => {
+        checkBuild();
+        if (dropped) refresh();
+        // The other tabs hold no stream of their own: they check the build
+        // too, and read again after a drop.
+        if (channel && locks) channel.postMessage({ opened: true, dropped });
+        dropped = false;
+      };
+    };
+    const close = () => {
+      if (stream) stream.close();
+      stream = null;
+    };
+    if (channel) {
+      channel.onmessage = (e) => {
+        if (typeof e.data === "string") return seen(e.data);
+        checkBuild();
+        if (e.data && e.data.dropped) refresh();
+      };
+    }
+    const visibility = () => (document.hidden ? close() : open());
+    if (locks) {
+      // Held until this page goes: the browser lets it go with the page.
+      locks
+        .request("cases-stream", () => {
+          if (gone) return undefined;
+          open();
+          return new Promise<void>((resolve) => (release = resolve));
+        })
+        .catch(() => {});
+    } else {
+      document.addEventListener("visibilitychange", visibility);
+      open();
+    }
+    return () => {
+      gone = true;
+      close();
+      if (release) release();
+      document.removeEventListener("visibilitychange", visibility);
+      if (channel) channel.close();
+    };
+  }, []);
+
+  // Ages stay right, and a lost message is caught up, once a minute. So is
+  // an upgrade, for a browser whose stream did not come back after serve
+  // restarted (IN-12).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      refresh();
+      checkBuild();
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Who is listening changes with no event in the store, as each wait
+  // refreshes its record (ST-16): while the page shows it, on the inbox-zero
+  // panel or in the composer, it is read again every 15 s.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (!document.querySelector(".zero-panel, #compose")) return;
+      const listeners = heard(await api.listeners());
+      setNow(Date.now());
+      setData((was) => (was ? { ...was, listeners } : was));
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
+}
+
 function App({ build }: { build: string }) {
   const [first] = useState(() => arrive(here()));
   const [route, setRoute] = useState<Route>(first.route);
@@ -285,117 +447,9 @@ function App({ build }: { build: string }) {
     load(route);
   }, [route]);
 
-  // An open composer has its entry in the history, which back takes off.
-  // The page under it keeps where it was scrolled, as a move by a link
-  // does, for a back to it after "about" takes the entry's place.
-  useEffect(() => {
-    if (!composing) return;
-    if (!entry.on && !(history.state && history.state.composer)) history.replaceState({ ...history.state, scrolled: scrolled() }, "");
-    entry.opened({ to: composing.to, re: composing.re });
-  }, [composing]);
+  useComposerEntry(composing, entry);
 
-  // The event stream (IN-06). One tab of the browser holds it, shown or
-  // hidden: a browser allows six connections to one address, shared by all
-  // its tabs, and each stream holds one. The holder is the tab that holds
-  // the "cases-stream" lock; it passes each version to the other tabs, which
-  // read the store at once too. When the holder goes, the lock passes to
-  // another tab, which opens its stream from the last version it had, which
-  // serve answers at once if the store has moved since. So a hidden tab
-  // follows the store, and its title with it, as a shown one does. Where
-  // the browser has no locks, only a tab that is shown holds a stream, as
-  // before.
-  useEffect(() => {
-    const channel = "BroadcastChannel" in window ? new BroadcastChannel("cases-store") : null;
-    const locks = channel && "locks" in navigator ? navigator.locks : null;
-    let stream: EventSource | null = null;
-    let dropped = false;
-    let gone = false;
-    let release: (() => void) | null = null;
-    const seen = (v: string) => {
-      if (v === version.current) return;
-      version.current = v;
-      refresh();
-    };
-    const open = () => {
-      if (stream || !window.EventSource || (channel && !locks && document.hidden)) return;
-      const after = version.current ? `?after=${encodeURIComponent(version.current)}` : "";
-      stream = new EventSource(`/v1/changes${after}`);
-      stream.onmessage = (e) => {
-        if (channel) channel.postMessage(e.data);
-        seen(e.data);
-      };
-      stream.onerror = () => (dropped = true);
-      // Whenever the stream opens, serve may be another build: it may have
-      // been upgraded while this tab held no stream, or while the stream was
-      // down (IN-12). A read set off as the stream dropped, as when serve
-      // restarts, may have failed with it: read again.
-      stream.onopen = () => {
-        checkBuild();
-        if (dropped) refresh();
-        // The other tabs hold no stream of their own: they check the build
-        // too, and read again after a drop.
-        if (channel && locks) channel.postMessage({ opened: true, dropped });
-        dropped = false;
-      };
-    };
-    const close = () => {
-      if (stream) stream.close();
-      stream = null;
-    };
-    if (channel) {
-      channel.onmessage = (e) => {
-        if (typeof e.data === "string") return seen(e.data);
-        checkBuild();
-        if (e.data && e.data.dropped) refresh();
-      };
-    }
-    const visibility = () => (document.hidden ? close() : open());
-    if (locks) {
-      // Held until this page goes: the browser lets it go with the page.
-      locks
-        .request("cases-stream", () => {
-          if (gone) return undefined;
-          open();
-          return new Promise<void>((resolve) => (release = resolve));
-        })
-        .catch(() => {});
-    } else {
-      document.addEventListener("visibilitychange", visibility);
-      open();
-    }
-    return () => {
-      gone = true;
-      close();
-      if (release) release();
-      document.removeEventListener("visibilitychange", visibility);
-      if (channel) channel.close();
-    };
-  }, []);
-
-  // Ages stay right, and a lost message is caught up, once a minute. So is
-  // an upgrade, for a browser whose stream did not come back after serve
-  // restarted (IN-12).
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(Date.now());
-      refresh();
-      checkBuild();
-    }, 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Who is listening changes with no event in the store, as each wait
-  // refreshes its record (ST-16): while the page shows it, on the inbox-zero
-  // panel or in the composer, it is read again every 15 s.
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      if (!document.querySelector(".zero-panel, #compose")) return;
-      const listeners = heard(await api.listeners());
-      setNow(Date.now());
-      setData((was) => (was ? { ...was, listeners } : was));
-    }, 15000);
-    return () => clearInterval(timer);
-  }, []);
+  useLive({ version, refresh, checkBuild, heard, setNow, setData });
 
   // Links to the app's pages move within it; the browser's back and
   // forward buttons too, back to where each page was scrolled.
@@ -416,7 +470,10 @@ function App({ build }: { build: string }) {
     const back = () => {
       const took = entry.popped();
       const state = history.state;
-      const { route: r, composing: opens } = arrive(here());
+      const { route: at, composing: opens } = arrive(here());
+      // A case's page a refusal pinned keeps its filter in its entry, as its
+      // address cannot name the inbox's (refused).
+      const r: Route = state && state.show ? { ...at, show: state.show } : at;
       if (took) {
         // Back took the composer's entry off: the composer answers it, as
         // it does Escape. While it asks about a note, the entry is back
@@ -459,32 +516,9 @@ function App({ build }: { build: string }) {
     };
   }, []);
 
-  // The title leads with the open cases, and the tab icon shows them (IN-01).
-  // Set as the page is drawn, not after it is painted: a hidden tab paints
-  // late or not at all, and its title is what shows it has changed.
-  useLayoutEffect(() => {
-    if (!data) return;
-    const t = tally(data.inbox);
-    document.title = t.waiting ? `(${t.waiting}) cases` : "cases";
-    const link = document.getElementById("favicon");
-    const href = icon(t);
-    // Chromium loads the new icon when the link's address changes.
-    if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
-  }, [data]);
+  useTitle(data);
 
-  // A move to another page starts at its top, and a move back by the back
-  // or forward button returns to where the page was scrolled.
-  const shownRoute = data && data.route;
-  useEffect(() => {
-    if (!shownRoute || shownRoute === pinned.current) return;
-    const to = restore.current;
-    restore.current = null;
-    window.scrollTo(0, to ? to.y : 0);
-    const list = document.querySelector<HTMLElement>(".split > .list");
-    const work = document.querySelector<HTMLElement>(".split > .work");
-    if (to && list) list.scrollTop = to.list;
-    if (work) work.scrollTop = to ? to.work : 0;
-  }, [shownRoute]);
+  useScroll(data, pinned, restore);
 
   // A write was made: say so once, and go to the next case in the list as
   // it stood before the send, in the order it draws them, or to the list
@@ -517,7 +551,18 @@ function App({ build }: { build: string }) {
     // list would show the first case again (IN-04, IN-06).
     if (routeRef.current.page === "list" && home.current && home.current.id === current.id) {
       const show = routeRef.current.show!;
-      history.replaceState(null, "", page(current) + query(show));
+      const path = page(current) + query(show);
+      // With the composer open, the entry is the composer's: the case's page
+      // takes its place and the composer's goes on again over it, as on a
+      // move under the composer (navigate), so that closing the composer,
+      // which takes its entry off, lands on the case and not on the list.
+      // The entries keep the filter, which back and forward read (back).
+      const moved = entry.moved(path);
+      history.replaceState({ ...history.state, show }, "", path);
+      if (moved) {
+        entry.kept();
+        history.replaceState({ ...history.state, show }, "");
+      }
       // The inbox's query is none, which on a case's page would list the
       // case under its own filter: a stale refusal's case has moved on from
       // the inbox, and the list would move with it. The route keeps the filter.

@@ -1383,3 +1383,145 @@ fn a_steady_remote_wait_collects_until_its_timeout() {
         holds(&r.fake)
     );
 }
+
+/// A steady wait, its server failing from the read it found an answer at:
+/// it holds the answer, and nothing new can come. Gives it with the time
+/// it was woken to that read, before which its quiet time cannot start.
+fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child, Instant) {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    // The first read and held poll, and the read the answer wakes it to;
+    // then every request fails.
+    for _ in 0..3 {
+        r.fake.fault(PASS);
+    }
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let mut args = vec!["--id", &answered, "--id", &left, "--mood", "steady"];
+    args.extend(timeout);
+    let wait = r.wait(&args);
+    assert!(soon(Duration::from_secs(10), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    (r, answered, wait, Instant::now())
+}
+
+/// A steady wait that holds an answer, and whose server then fails every
+/// request, prints the answer at the end of its quiet time, exit 0: not at
+/// its timeout and, with none, not never (AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_read_while_it_collects_prints_at_the_end_of_its_quiet_time() {
+    let mut waits = [
+        collecting_through_an_outage(&["--timeout", "60s"]),
+        collecting_through_an_outage(&[]),
+    ];
+    // When each ended, watched together, so that neither is timed by the
+    // other. Its quiet time is 10 s; well past it, a wait is stopped.
+    let mut ended = [None, None];
+    let until = Instant::now() + Duration::from_secs(40);
+    while ended.contains(&None) && Instant::now() < until {
+        for (wait, ended) in waits.iter_mut().zip(&mut ended) {
+            if ended.is_none() && wait.2.try_wait().unwrap().is_some() {
+                *ended = Some(Instant::now());
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    for ((_r, answered, mut wait, woke), ended) in waits.into_iter().zip(ended) {
+        let Some(ended) = ended else {
+            wait.kill().unwrap();
+            let out = wait.wait_with_output().unwrap();
+            panic!("still waiting {:?} after it woke: {out:?}", woke.elapsed());
+        };
+        let out = Output::from(wait.wait_with_output().unwrap());
+        assert_eq!(out.code, 0, "{out:?}");
+        let lines: Vec<_> = out.stdout.lines().map(json).collect();
+        assert_eq!(lines.len(), 1, "{out:?}");
+        assert_eq!(lines[0]["id"], answered.as_str());
+        let took = ended - woke;
+        assert!(took >= Duration::from_secs(9), "{took:?}");
+        assert_eq!(
+            out.stderr,
+            "warning: the server failed (503): the fake failed; the wait goes on, trying again \
+             until it prints what it has\n"
+        );
+    }
+}
+
+/// A steady wait that holds nothing rides a failing server out until its
+/// timeout, as an eager one does, and ends there with nothing, exit 2.
+#[test]
+fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Unanswered");
+    r.fake.fault(PASS);
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let start = Instant::now();
+    let out = Output::from(
+        r.wait(&["--id", &id, "--mood", "steady", "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    let took = start.elapsed();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        took >= Duration::from_secs(3) && took < Duration::from_secs(6),
+        "{took:?}"
+    );
+    assert!(
+        out.stderr
+            .contains("the server failed (503): the fake failed; the wait goes on, trying again until the timeout\n"),
+        "{out:?}"
+    );
+}
+
+/// The reads of cases that `args` sends, as request lines.
+fn case_reads(r: &Remote, args: &[&str]) -> Vec<String> {
+    let before = r.fake.lines().len();
+    r.ok(args);
+    r.fake.lines()[before..]
+        .iter()
+        .filter(|line| line.starts_with("GET ") && line.contains("/store/cases"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn show_answer_and_inbox_read_the_case_they_name_once() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(None, "Read once");
+    let part = &id[1..id.len() - 1];
+    let store = format!("GET /v1/stores/{}/store/cases", r.ids[0]);
+    // The case by its key, for a whole id; the list, for part of one.
+    let (one, all) = (format!("{store}/1 HTTP/1.1"), format!("{store} HTTP/1.1"));
+    for (args, want) in [
+        (vec!["show", id.as_str()], &one),
+        (vec!["show", part], &all),
+        (vec!["inbox", "--print", id.as_str()], &one),
+        (vec!["answer", id.as_str(), "--ack"], &one),
+    ] {
+        assert_eq!(
+            case_reads(&r, &args),
+            std::slice::from_ref(want),
+            "{args:?}"
+        );
+    }
+}
