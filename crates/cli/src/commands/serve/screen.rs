@@ -2,6 +2,7 @@
 //! the store's cases by state and urgency, what happened since serve
 //! started, and the last lines of the log, redrawn in place.
 
+use std::borrow::Borrow;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::{Arc, Weak};
@@ -43,9 +44,10 @@ pub(crate) struct Stats {
 
 impl Stats {
     /// Counts `cases`, with `since` as when serve started.
-    pub(crate) fn count(cases: &[(Key, Case)], since: Time) -> Stats {
+    pub(crate) fn count<C: Borrow<Case>>(cases: &[(Key, C)], since: Time) -> Stats {
         let mut stats = Stats::default();
         for (_, case) in cases {
+            let case = case.borrow();
             match case.state() {
                 State::Open => {
                     let at = match case.urgency() {
