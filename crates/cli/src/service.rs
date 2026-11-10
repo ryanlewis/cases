@@ -321,11 +321,9 @@ impl Manager {
         }
         let args = ["--user", "is-active", UNIT];
         let ran = (self.run)(self.system.program(), &args)?;
-        match (ran.code, ran.output.trim()) {
-            (Some(0), _) | (Some(_), "activating") => Ok(true),
-            (Some(_), "inactive" | "failed" | "deactivating" | "maintenance" | "unknown") => {
-                Ok(false)
-            }
+        match (self.exit_code(&args, &ran)?, ran.output.trim()) {
+            (0, _) | (_, "activating") => Ok(true),
+            (_, "inactive" | "failed" | "deactivating" | "maintenance" | "unknown") => Ok(false),
             _ => Err(self.failed(&args, &ran)),
         }
     }
@@ -370,9 +368,9 @@ impl Manager {
         let target = self.target();
         let args = ["print", target.as_str()];
         let ran = (self.run)(self.system.program(), &args)?;
-        match ran.code {
-            Some(0) => Ok(true),
-            Some(LAUNCHD_NO_SERVICE) => Ok(false),
+        match self.exit_code(&args, &ran)? {
+            0 => Ok(true),
+            LAUNCHD_NO_SERVICE => Ok(false),
             _ => Err(self.failed(&args, &ran)),
         }
     }
@@ -380,10 +378,16 @@ impl Manager {
     /// Runs the system's program with `args`, which must succeed.
     fn run(&self, args: &[&str]) -> Result<(), Error> {
         let ran = (self.run)(self.system.program(), args)?;
-        if ran.code == Some(0) {
+        if self.exit_code(args, &ran)? == 0 {
             return Ok(());
         }
         Err(self.failed(args, &ran))
+    }
+
+    /// The status a command exited with. One killed by a signal has none,
+    /// and is an error whatever it printed.
+    fn exit_code(&self, args: &[&str], ran: &Ran) -> Result<i32, Error> {
+        ran.code.ok_or_else(|| self.failed(args, ran))
     }
 
     /// The error for a command that failed: the command, its status and its
@@ -1136,6 +1140,30 @@ WantedBy=default.target
             let error = manager.active().unwrap_err().to_string();
             assert!(error.contains("killed by a signal"), "{state:?}: {error}");
         }
+    }
+
+    /// launchd's query, and a command that must succeed, killed by a signal
+    /// are errors that say so.
+    #[test]
+    fn a_command_killed_by_a_signal_is_an_error_that_says_so() {
+        let killed = || -> Runner {
+            Box::new(|_, _| {
+                Ok(Ran {
+                    code: None,
+                    output: String::new(),
+                })
+            })
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let launchd = Manager::new(System::Launchd, dir.path().join("a"), 501, killed());
+        let error = launchd.active().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            format!("launchctl print gui/501/{LABEL}: killed by a signal")
+        );
+        let systemd = Manager::new(System::Systemd, dir.path().join("b"), 501, killed());
+        let error = systemd.install(&spec(dir.path())).unwrap_err().to_string();
+        assert_eq!(error, "systemctl --user daemon-reload: killed by a signal");
     }
 
     #[test]
