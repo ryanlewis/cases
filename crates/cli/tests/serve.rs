@@ -1287,24 +1287,37 @@ fn stop_begun(addr: &str) {
             Ok(_) => {}
         }
         assert!(Instant::now() < deadline, "the stop did not begin");
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
-/// Waits until a thread of `pid` is held in a write to stdout, as on a
-/// terminal whose output is stopped: `/proc` gives the call a thread is in,
-/// by its number (1 is `write`) and its first argument (the fd).
-#[cfg(target_os = "linux")]
-fn held_writing(pid: i32) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+/// The number of the `write` system call, as `/proc` gives it.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const WRITE: u32 = 1;
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const WRITE: u32 = 64;
+
+/// Whether a thread of `pid` is held in a write to stdout within `within`,
+/// as on a terminal whose output is stopped: `/proc` gives the call a
+/// thread is in, by its number and its first argument (the fd).
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn held_writing(pid: i32, within: Duration) -> bool {
+    let call = format!("{WRITE} 0x1 ");
+    let deadline = Instant::now() + within;
     loop {
         let tasks = fs::read_dir(format!("/proc/{pid}/task")).unwrap();
         if tasks.flatten().any(|task| {
             fs::read_to_string(task.path().join("syscall"))
-                .is_ok_and(|call| call.starts_with("1 0x1 "))
+                .is_ok_and(|text| text.starts_with(&call))
         }) {
-            return;
+            return true;
         }
-        assert!(Instant::now() < deadline, "no write of {pid} was held");
+        if Instant::now() >= deadline {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -1357,7 +1370,10 @@ fn on_a_terminal_the_last_frame_shows_what_the_stop_closed() {
 /// (Ctrl-S), where the write that puts the terminal back cannot finish: it
 /// exits a moment later whatever that write does. On Linux, where `/proc`
 /// shows that serve's output is held.
-#[cfg(target_os = "linux")]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     let env = Env::new();
@@ -1369,15 +1385,23 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     let token = csrf(&addr);
     terminal.type_keys("\x13");
     // A load of the page is counted and logged on the screen, so serve draws
-    // a frame, which the stopped terminal holds.
-    let mut page = common::serve::connect(&addr);
-    write!(
-        page,
-        "GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
-    std::io::Read::read_to_end(&mut page, &mut Vec::new()).unwrap();
-    held_writing(pid);
+    // a frame within a tick, which the stopped terminal holds. Loaded again
+    // if a frame went out before the Ctrl-S was in force.
+    let mut loads = 0;
+    loop {
+        let mut page = common::serve::connect(&addr);
+        write!(
+            page,
+            "GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        std::io::Read::read_to_end(&mut page, &mut Vec::new()).unwrap();
+        loads += 1;
+        if held_writing(pid, Duration::from_secs(2)) {
+            break;
+        }
+        assert!(loads < 3, "no write of {pid} was held");
+    }
     let stalled = held(&addr, &token);
     let signal = |pid: i32| {
         if let Some(pid) = rustix::process::Pid::from_raw(pid) {
@@ -1392,9 +1416,10 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
         ends_within(pid, Duration::from_secs(3)),
         "serve did not end on a stopped terminal"
     );
-    std::mem::forget(reap);
     // Ctrl-Q lets the terminal show what was held.
     terminal.type_keys("\x11");
     terminal.wait_for("exit=130");
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
     drop(stalled);
 }
