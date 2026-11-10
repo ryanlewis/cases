@@ -1070,7 +1070,7 @@ impl Offline {
 
     /// The error that ends a wait whose time has run out. One `collecting`
     /// times out, and gives what it has. One that is not gives the failure
-    /// of its last try, if that failed: the store could not say whether
+    /// [`Offline::pause`] kept, if any: the store could not say whether
     /// anything came, so it is not the timeout that says nothing did.
     fn ended(&self, collecting: bool, args: &Args) -> Error {
         match &self.failing {
@@ -1741,7 +1741,7 @@ mod tests {
         let error = offline.pause(&failure, past, false, &args, None);
         assert_eq!(error.unwrap_err().status(), Status::Timeout);
         // After a try that failed in good time, it is that failure.
-        let soon = Some(Instant::now() + Duration::from_millis(5));
+        let soon = Some(Instant::now() + Duration::from_millis(200));
         offline.pause(&failure, soon, false, &args, None).unwrap();
         let error = offline.pause(&failure, past, false, &args, None);
         let error = error.unwrap_err();

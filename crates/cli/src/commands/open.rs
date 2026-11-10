@@ -117,8 +117,8 @@ pub(crate) struct Args {
 
     /// Then wait on the case, as `cases wait --id ID --since ID --pickup
     /// --by WORKER` does: the id is printed first, and the case's line once
-    /// it is your turn, picked up when answered. Exit 2 at --timeout. Not
-    /// with --json.
+    /// it is your turn, picked up when answered. At --timeout, exit 2, or 1
+    /// if the store could not be read. Not with --json.
     #[arg(long, conflicts_with = "json")]
     wait: bool,
 
