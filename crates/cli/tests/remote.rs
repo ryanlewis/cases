@@ -1489,6 +1489,31 @@ fn a_remote_wait_tries_once_more_at_its_timeout() {
     assert!(!out.stderr.contains("Error:"), "{out:?}");
 }
 
+/// The one try at the timeout gets a second to answer. A store that failed
+/// before it and gives no answer in that time cannot be told from one still
+/// down, so the wait ends with the failure, exit 1, even if it is back and
+/// only slow. Running the wait again then finds it.
+#[test]
+fn a_remote_wait_that_failed_and_gets_no_answer_at_its_timeout_exits_1() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Slow at the end");
+    r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
+    r.fake.fault(Fault::Slow(Duration::from_secs(2)));
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr
+            .ends_with("Error: the server is limiting requests; try again in 10 s\n"),
+        "{out:?}"
+    );
+}
+
 /// A wait whose server fails for a while and is back before its timeout has
 /// heard from the store since: nothing came, exit 2.
 #[test]
