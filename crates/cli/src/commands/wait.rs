@@ -1113,8 +1113,9 @@ fn listens(args: &Args) -> bool {
 /// A wait that listens for messages (AG-16): the id it records itself by,
 /// made at its first record, the workers it records as listening, the
 /// labels and kinds it waits on, the name it picks messages up as, the doing
-/// line it gives on each worker's first record, the workers whose record has
-/// had it, and when its next heartbeat is due.
+/// line it gives on each worker's first record and on its first after a
+/// lapse, the workers whose live record has had it, and when its next
+/// heartbeat is due.
 #[derive(Debug)]
 struct Listening<'a> {
     id: Option<String>,
@@ -1179,11 +1180,23 @@ impl<'a> Listening<'a> {
                 }
             },
         };
+        // The store keeps no doing line for a worker none of whose waits is
+        // listening, so a worker whose records have all lapsed, as they do
+        // when beats fail for longer than [`LAPSE`](cases_core::LAPSE), has
+        // lost the line it was given: its next record gives it again. A
+        // store that cannot be read leaves the workers as they were.
+        if self.doing.is_some()
+            && let Ok(waits) = db.waits()
+        {
+            self.given
+                .retain(|worker| waits.iter().any(|wait| wait.worker == *worker));
+        }
         let mut failed = false;
         for worker in self.workers {
-            // The doing line goes on each worker's first record alone, so
-            // that a later `cases doing` is not put back, even by a beat
-            // that tries again after another worker's write failed.
+            // The doing line goes on each worker's first record alone, and
+            // on the first after a lapse, so that a later `cases doing` is
+            // not put back, even by a beat that tries again after another
+            // worker's write failed.
             let doing = self.doing.filter(|_| !self.given.contains(worker.as_str()));
             match db.listen(&id, worker, self.labels, &self.kinds, doing) {
                 Ok(()) => {
@@ -1811,5 +1824,54 @@ mod tests {
         assert_eq!(doing_of(&db, "ada"), None);
         assert_eq!(doing_of(&db, "bo"), None);
         assert!(listening.due.unwrap() > Instant::now() + RETRY / 2);
+    }
+
+    /// A record that lapses takes the worker's doing line with it, as the
+    /// store keeps no line for a worker none of whose waits is listening.
+    /// Once a beat writes again, after beats that failed for longer than a
+    /// record lives, the record it makes has the line again, while a line
+    /// cleared before the lapse stays cleared on a record that lived.
+    #[test]
+    fn a_record_that_lapsed_while_beats_failed_gets_its_doing_line_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(AtomicI64::new(100));
+        let db = clocked(&dir.path().join("cases.db"), &clock);
+        make(&db);
+        let gone = dir.path().join("gone");
+        std::fs::write(&gone, "not a database, but a file of text").unwrap();
+        let unreachable = clocked(&gone, &clock);
+        let workers = ["ada".to_owned()];
+        let mut listening = listening(&workers, &[], Some("reading"));
+        let mut warned = HashSet::new();
+
+        listening.beat(&db, &mut warned);
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+
+        // Every beat fails for longer than a record lives.
+        let lapse = i64::try_from(cases_core::LAPSE.as_secs()).unwrap();
+        for secs in [115, 130, 145] {
+            clock.store(secs, Ordering::SeqCst);
+            listening.due = Some(Instant::now());
+            listening.beat(&unreachable, &mut warned);
+        }
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        clock.store(100 + lapse + 1, Ordering::SeqCst);
+        assert!(db.waits().unwrap().is_empty(), "the record has lapsed");
+
+        // The next beat that succeeds gives the line again.
+        listening.due = Some(Instant::now());
+        listening.beat(&db, &mut warned);
+        assert_eq!(heard(&db).len(), 1);
+        assert_eq!(doing_of(&db, "ada").as_deref(), Some("reading"));
+
+        // A line cleared while that record lives stays cleared.
+        let AnyStore::Local(local) = &db else {
+            unreachable!()
+        };
+        local.set_doing("ada", "").unwrap();
+        clock.store(100 + lapse + 16, Ordering::SeqCst);
+        listening.due = Some(Instant::now());
+        listening.beat(&db, &mut warned);
+        assert_eq!(doing_of(&db, "ada"), None);
     }
 }
