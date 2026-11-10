@@ -698,4 +698,70 @@ CREATE TABLE archive_events (
         assert_eq!(polled, [new]);
         assert_eq!(poller.version(), Some(&db.version().unwrap()));
     }
+
+    /// A store with only part of the upgrade, as a read that cannot upgrade
+    /// it finds it, has no id: its version is the older store's, whichever
+    /// part it has. With all of it, the version has the id, and the tag.
+    #[test]
+    fn a_store_with_part_of_the_upgrade_is_read_with_no_id() {
+        // The version of an older store with `parts` of the upgrade made
+        // by hand, read under another writer's lock.
+        let read = |parts: &str| {
+            let (dir, db) = scratch();
+            let conn = older(&db);
+            drop(db);
+            conn.execute_batch(parts).unwrap();
+            drop(conn);
+            let path = dir.path().join("cases.db");
+            let mut lock = Connection::open(&path).unwrap();
+            let tx = lock
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let db = Db::new(&path).with_busy_timeout(std::time::Duration::from_millis(50));
+            let version = db.version().unwrap();
+            drop(tx);
+            version
+        };
+        let older = read("");
+        // Two cases made, a note, and an archive: four changes.
+        assert_eq!(older.as_str(), ".4.2.1.");
+        let column = "ALTER TABLE meta ADD COLUMN store_id TEXT;";
+        let id = "UPDATE meta SET store_id = 'hV3kQ9mZr2pX7wLc0tBnAg';";
+        let logs = super::REMOVALS;
+        for parts in [
+            column.to_owned(),
+            format!("{column}{id}"),
+            logs.to_owned(),
+            format!("{logs}{column}"),
+            format!("{logs}{column}{id}DROP TRIGGER gone_log;"),
+            format!("{logs}{column}{id}DROP TABLE removed;"),
+        ] {
+            assert_eq!(read(&parts), older, "{parts}");
+        }
+        // The removal at change 4 was logged in the table the older store
+        // dropped, so it has no tag; the note at change 3 has one.
+        let whole = read(&format!("{logs}{column}{id}"));
+        assert_eq!(whole.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.4.2.1.");
+        let at_note = read(&format!(
+            "{logs}{column}{id}UPDATE sqlite_sequence SET seq = 3 WHERE name = 'events';"
+        ));
+        let (head, tag) = at_note
+            .as_str()
+            .split_at("hV3kQ9mZr2pX7wLc0tBnAg.3.2.1.".len());
+        assert_eq!(head, "hV3kQ9mZr2pX7wLc0tBnAg.3.2.1.");
+        assert!(tag.ends_with('Z'), "{at_note:?}: no tag");
+
+        // A store with no counter yet for its events or its cases counts
+        // from 0, and no row has the change 0, so it has no tag.
+        let none = read(&format!(
+            "{logs}{column}{id}DELETE FROM sqlite_sequence WHERE name IN ('events', 'cases');"
+        ));
+        assert_eq!(none.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.0.0.1.");
+        let no_events = read(&format!(
+            "{logs}{column}{id}DELETE FROM sqlite_sequence WHERE name = 'events';"
+        ));
+        assert_eq!(no_events.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.0.2.1.");
+        let older_none = read("DELETE FROM sqlite_sequence;");
+        assert_eq!(older_none.as_str(), ".0.0.1.");
+    }
 }
