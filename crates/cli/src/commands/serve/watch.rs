@@ -31,9 +31,10 @@ use crate::output::{self, Actors, CaseJson};
 /// The store's cases as one read found them, and their version.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
-    /// The cases that fold, in the order they were opened. A case that did
-    /// not change since the snapshot before is the one that snapshot held,
-    /// shared, not a copy.
+    /// The cases that fold, in the order they were opened. A case the
+    /// poller did not fold again since the snapshot before is the one that
+    /// snapshot held, shared, not a copy. After a read of every case, such
+    /// as the first, or one after a failed read, every case is a new copy.
     pub(crate) cases: Vec<(Key, Arc<Case>)>,
     /// The store's version, as the poller read it with the cases, in the
     /// same read transaction: so it names this moment of the store and no
