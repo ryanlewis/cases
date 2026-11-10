@@ -653,6 +653,110 @@ function marked(text: string, recommended: boolean, picked: boolean): ComponentC
   return html`<span>${text}${recommended && html` <span class="badge recommended">recommended</span>`}${picked && html` <span class="badge last-pick">your last pick</span>`}</span>`;
 }
 
+// What the fields of the answer form draw from: the case `c`, the form's
+// fields `f`, the answer a follow-up reopened, whether approve is
+// pre-selected, and the setters Respond keeps its state with.
+interface Form {
+  c: Case;
+  f: Fields;
+  last?: EventData | undefined;
+  preselect: boolean;
+  set: (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => void;
+  setIn: (key: "verdicts" | "rowNotes", id: string) => (value: string) => void;
+  tick: (n: number) => (e: Event) => void;
+}
+
+// The fields of the answer form for the case's kind, above its note: none
+// for an fyi, which is acknowledged, or a kind the form has no fields for.
+function fieldsOf(form: Form): ComponentChildren {
+  switch (form.c.kind) {
+    case "decision":
+      return decisionFields(form);
+    case "approval":
+      return (form.c.rows || []).map((row) => approvalRow(form, row));
+    case "signoff":
+      return signoffFields(form);
+    case "briefing":
+      return briefingFields(form);
+    case "stuck":
+      return stuckFields(form);
+    case "question":
+      return questionFields(form);
+  }
+  return null;
+}
+
+// A decision's options, numbered, then other.
+function decisionFields({ c, f, last, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>choose one</legend>
+  ${(c.options || []).map((option, i) => html`<${Choice} name="choice" value=${String(i + 1)} n=${i + 1} required checked=${f.choice === String(i + 1)} onPick=${set("choice")}>${marked(option, c.recommend === i + 1, !!last && last.choice === i + 1)}<//>`)}
+  <${Choice} name="choice" value="other" n=${(c.options || []).length + 1} required checked=${f.choice === "other"} onPick=${set("choice")}>${marked("other, see note", false, !!last && !!last.other)}<//>
+</fieldset>`;
+}
+
+// An approval's row: what it is, its three verdicts, and its own note.
+function approvalRow({ f, preselect, setIn }: Form, row: ApprovalRow): ComponentChildren {
+  const verdict = `verdict.${row.id}`;
+  const pick = setIn("verdicts", row.id);
+  const human = byHuman(row);
+  const chosen = verdictOf(f.verdicts, row.id, preselect && !human);
+  // A row whose verdict is only pre-selected, which the number keys
+  // treat as having none (keys.js).
+  const preset = !of(f.verdicts, row.id) && !!chosen;
+  const words = verdictWords(row);
+  return html`<fieldset class="row" key=${row.id} data-preset=${preset || undefined} data-by=${row.by || undefined}>
+  <legend class="row-title">${row.label}${human && html` <span class="badge by-human" title="a step you carry out">you</span>`}</legend>
+  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdown(row.note) }} />`}
+  <p><${Link} href=${row.link || ""} /></p>
+  <${Script} text=${row.script || ""} />
+  <div class="verdicts">
+    ${(["approve", "hold", "reject"] as const).map(
+      (value, i) =>
+        html`<${Choice} name=${verdict} value=${value} n=${i + 1} required checked=${chosen === value} onPick=${pick}>${words[i]![0]} <span class="hint">${words[i]![1]}</span><//>`,
+    )}
+  </div>
+  <label>note on this row <${Text} name=${`note.${row.id}`} rows="1" value=${of(f.rowNotes, row.id) || ""} onInput=${setIn("rowNotes", row.id)} /></label>
+</fieldset>`;
+}
+
+// A signoff's accept and request for changes.
+function signoffFields({ f, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>sign off</legend>
+  <${Choice} name="signoff" value="accept" n=${1} required checked=${f.signoff === "accept"} onPick=${set("signoff")}>accept<//>
+  <${Choice} name="signoff" value="changes" n=${2} required checked=${f.signoff === "changes"} onPick=${set("signoff")}>request changes (comment required)<//>
+</fieldset>`;
+}
+
+// A briefing's accept and send back, then a tick box per left-out item.
+function briefingFields({ c, f, set, tick }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>judge the work</legend>
+  <${Choice} name="briefing" value="accept" n=${1} required checked=${f.briefing === "accept"} onPick=${set("briefing")}>accept<//>
+  <${Choice} name="briefing" value="send_back" n=${2} required checked=${f.briefing === "send_back"} onPick=${set("briefing")}>send back (reason required)<//>
+</fieldset>
+${(c.left_out || []).length > 0 && html`<fieldset class="file">
+  <legend>file what was left out</legend>
+  ${c.left_out!.map((item, i) => html`<label class="choice"><input type="checkbox" name="file" value=${String(i + 1)} checked=${f.file.includes(i + 1)} onChange=${tick(i + 1)} /> ${item}</label>`)}
+</fieldset>`}`;
+}
+
+// A stuck case's guidance, with its text, and its drop.
+function stuckFields({ f, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>unblock</legend>
+  <${Choice} name="stuck" value="text" n=${1} checked=${f.stuck === "text"} onPick=${set("stuck")}>give guidance<//>
+  <label>guidance <${Text} name="text" rows="4" value=${f.text} onInput=${set("text")} /></label>
+  <${Choice} name="stuck" value="drop" n=${2} checked=${f.stuck === "drop"} onPick=${set("stuck")}>drop it<//>
+</fieldset>`;
+}
+
+// A question's reply.
+function questionFields({ f, set }: Form): ComponentChildren {
+  return html`<label>reply <${Text} name="text" rows="4" required value=${f.text} onInput=${set("text")} /></label>`;
+}
+
 // The form that answers an open case, shaped by its kind. Its fields keep
 // what was typed and chosen while the case is redrawn. On a follow-up,
 // `last` is the answer it reopened.
@@ -670,17 +774,7 @@ function Respond({
   const [f, setF] = useState<Fields>({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "" });
   // Read once, so an option changed while the form is open leaves it be.
   const [preselect] = useState(preselected);
-  const set = (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => setF((was) => ({ ...was, [key]: value }));
-  const setIn = (key: "verdicts" | "rowNotes", id: string) => (value: string) => setF((was) => ({ ...was, [key]: { ...was[key], [id]: value } }));
-  const note = () => f.note.trim();
-  // Ticks or unticks a briefing's left-out item `n` to file.
-  const tick = (n: number) => (e: Event) => {
-    const on = (e.target as HTMLInputElement).checked;
-    setF((was) => ({ ...was, file: on ? [...was.file.filter((m) => m !== n), n] : was.file.filter((m) => m !== n) }));
-  };
-  const sendingBack = c.kind === "briefing" && f.briefing === "send_back";
-  // The choices that need the note, which the store refuses without one.
-  const noteNeeded = sendingBack || (c.kind === "decision" && f.choice === "other") || (c.kind === "signoff" && f.signoff === "changes");
+  const { set, setIn, tick } = setters(setF);
   // An amend that replaces a briefing's left-out items numbers them anew:
   // the ticks made against the old list go, rather than file other items.
   const items = JSON.stringify(c.left_out || []);
@@ -691,6 +785,35 @@ function Respond({
     setF((was) => ({ ...was, file: [] }));
   }, [items]);
 
+  const { submit, drop, park } = sends(c, f, preselect, send, refuse);
+  const fields = fieldsOf({ c, f, last, preselect, set, setIn, tick });
+  return html`<form class="respond" data-write="answer" onSubmit=${submit}>
+  ${fields}
+  ${noteField(c, f, set)}
+  ${actions(c, drop, park)}
+</form>`;
+}
+
+// The form's setters of its fields, over Respond's `setF`.
+function setters(setF: (next: (was: Fields) => Fields) => void): Pick<Form, "set" | "setIn" | "tick"> {
+  const set = (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => setF((was) => ({ ...was, [key]: value }));
+  const setIn = (key: "verdicts" | "rowNotes", id: string) => (value: string) => setF((was) => ({ ...was, [key]: { ...was[key], [id]: value } }));
+  // Ticks or unticks a briefing's left-out item `n` to file.
+  const tick = (n: number) => (e: Event) => {
+    const on = (e.target as HTMLInputElement).checked;
+    setF((was) => ({ ...was, file: toggled(was.file, n, on) }));
+  };
+  return { set, setIn, tick };
+}
+
+// The items to file `file`, with `n` ticked, once, or unticked.
+function toggled(file: number[], n: number, on: boolean): number[] {
+  return on ? [...file.filter((m) => m !== n), n] : file.filter((m) => m !== n);
+}
+
+// What the form's submit, drop and park send for case `c` from its fields `f`.
+function sends(c: Case, f: Fields, preselect: boolean, send: (what: Sends, body: Body) => Promise<void>, refuse: (problem: string) => void) {
+  const note = () => f.note.trim();
   function submit(e: Event): void {
     e.preventDefault();
     const { answer, problem } = response(c, f, preselect);
@@ -702,81 +825,28 @@ function Respond({
   }
   const drop = () => send("answer", { answer: note() ? { drop: true, note: note() } : { drop: true } });
   const park = () => send("park", note() ? { note: note() } : {});
+  return { submit, drop, park };
+}
 
-  let fields: ComponentChildren = null;
-  switch (c.kind) {
-    case "decision":
-      fields = html`<fieldset>
-  <legend>choose one</legend>
-  ${(c.options || []).map((option, i) => html`<${Choice} name="choice" value=${String(i + 1)} n=${i + 1} required checked=${f.choice === String(i + 1)} onPick=${set("choice")}>${marked(option, c.recommend === i + 1, !!last && last.choice === i + 1)}<//>`)}
-  <${Choice} name="choice" value="other" n=${(c.options || []).length + 1} required checked=${f.choice === "other"} onPick=${set("choice")}>${marked("other, see note", false, !!last && !!last.other)}<//>
-</fieldset>`;
-      break;
-    case "approval":
-      fields = (c.rows || []).map((row) => {
-        const verdict = `verdict.${row.id}`;
-        const pick = setIn("verdicts", row.id);
-        const human = byHuman(row);
-        const chosen = verdictOf(f.verdicts, row.id, preselect && !human);
-        // A row whose verdict is only pre-selected, which the number keys
-        // treat as having none (keys.js).
-        const preset = !of(f.verdicts, row.id) && !!chosen;
-        const words = verdictWords(row);
-        return html`<fieldset class="row" key=${row.id} data-preset=${preset || undefined} data-by=${row.by || undefined}>
-  <legend class="row-title">${row.label}${human && html` <span class="badge by-human" title="a step you carry out">you</span>`}</legend>
-  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdown(row.note) }} />`}
-  <p><${Link} href=${row.link || ""} /></p>
-  <${Script} text=${row.script || ""} />
-  <div class="verdicts">
-    ${(["approve", "hold", "reject"] as const).map(
-      (value, i) =>
-        html`<${Choice} name=${verdict} value=${value} n=${i + 1} required checked=${chosen === value} onPick=${pick}>${words[i]![0]} <span class="hint">${words[i]![1]}</span><//>`,
-    )}
-  </div>
-  <label>note on this row <${Text} name=${`note.${row.id}`} rows="1" value=${of(f.rowNotes, row.id) || ""} onInput=${setIn("rowNotes", row.id)} /></label>
-</fieldset>`;
-      });
-      break;
-    case "signoff":
-      fields = html`<fieldset>
-  <legend>sign off</legend>
-  <${Choice} name="signoff" value="accept" n=${1} required checked=${f.signoff === "accept"} onPick=${set("signoff")}>accept<//>
-  <${Choice} name="signoff" value="changes" n=${2} required checked=${f.signoff === "changes"} onPick=${set("signoff")}>request changes (comment required)<//>
-</fieldset>`;
-      break;
-    case "briefing":
-      fields = html`<fieldset>
-  <legend>judge the work</legend>
-  <${Choice} name="briefing" value="accept" n=${1} required checked=${f.briefing === "accept"} onPick=${set("briefing")}>accept<//>
-  <${Choice} name="briefing" value="send_back" n=${2} required checked=${f.briefing === "send_back"} onPick=${set("briefing")}>send back (reason required)<//>
-</fieldset>
-${(c.left_out || []).length > 0 && html`<fieldset class="file">
-  <legend>file what was left out</legend>
-  ${c.left_out!.map((item, i) => html`<label class="choice"><input type="checkbox" name="file" value=${String(i + 1)} checked=${f.file.includes(i + 1)} onChange=${tick(i + 1)} /> ${item}</label>`)}
-</fieldset>`}`;
-      break;
-    case "stuck":
-      fields = html`<fieldset>
-  <legend>unblock</legend>
-  <${Choice} name="stuck" value="text" n=${1} checked=${f.stuck === "text"} onPick=${set("stuck")}>give guidance<//>
-  <label>guidance <${Text} name="text" rows="4" value=${f.text} onInput=${set("text")} /></label>
-  <${Choice} name="stuck" value="drop" n=${2} checked=${f.stuck === "drop"} onPick=${set("stuck")}>drop it<//>
-</fieldset>`;
-      break;
-    case "question":
-      fields = html`<label>reply <${Text} name="text" rows="4" required value=${f.text} onInput=${set("text")} /></label>`;
-      break;
-  }
-  return html`<form class="respond" data-write="answer" onSubmit=${submit}>
-  ${fields}
-  <label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${noteNeeded} value=${f.note} onInput=${set("note")} /></label>
-  <div class="actions">
+// The note under the fields: the signoff's comment, the reason a briefing
+// is sent back with, or the note to the agent, required where the choice
+// made needs it.
+function noteField(c: Case, f: Fields, set: Form["set"]): ComponentChildren {
+  const sendingBack = c.kind === "briefing" && f.briefing === "send_back";
+  // The choices that need the note, which the store refuses without one.
+  const noteNeeded = sendingBack || (c.kind === "decision" && f.choice === "other") || (c.kind === "signoff" && f.signoff === "changes");
+  return html`<label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${noteNeeded} value=${f.note} onInput=${set("note")} /></label>`;
+}
+
+// The form's send button, labelled acknowledge for an fyi, and its drop,
+// or park for a stuck case.
+function actions(c: Case, drop: () => void, park: () => void): ComponentChildren {
+  return html`<div class="actions">
     <button type="submit" class="primary" id="respond-send" aria-keyshortcuts=${SEND_SHORTCUTS}>${c.kind === "fyi" ? "acknowledge" : "send"} <${Hint} keys=${SEND} /></button>
     ${c.kind === "stuck"
       ? html`<button type="button" id="respond-park" onClick=${park}>park</button>`
       : html`<button type="button" id="respond-drop" onClick=${drop}>drop</button>`}
-  </div>
-</form>`;
+  </div>`;
 }
 
 // The human's withdraw of a case an agent has, answered or picked up, such as
