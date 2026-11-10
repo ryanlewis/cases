@@ -197,4 +197,49 @@ mod tests {
         assert_eq!(cases.len(), 3);
         assert!(cases.values().all(Result::is_ok));
     }
+
+    /// The statements each idle read runs, with nothing changed since the
+    /// last: a poll, and the version, each run in its transaction the same
+    /// five reads of the store. SQLite runs one more for them, the pragma
+    /// behind `pragma_table_info`.
+    #[test]
+    fn an_idle_read_runs_five_statements() {
+        use std::sync::{Arc, Mutex};
+
+        use rusqlite::trace::{TraceEvent, TraceEventCodes};
+
+        let (_dir, db) = scratch();
+        let key = create(&db);
+        note(&db, key);
+        let mut poller = db.poller();
+        poller.poll().unwrap();
+        let run: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = Arc::clone(&run);
+        db.with_connection_mut(|conn| {
+            conn.trace_v2(
+                TraceEventCodes::SQLITE_TRACE_STMT,
+                Some(move |event: TraceEvent<'_>| {
+                    if let TraceEvent::Stmt(statement, _) = event {
+                        seen.lock().unwrap().push(statement.sql().into_owned());
+                    }
+                }),
+            )
+            .unwrap();
+        });
+        // The reads run since the last call, apart from the transaction's
+        // begin and commit and the pragma SQLite runs for one of them.
+        let reads = || {
+            let run = std::mem::take(&mut *run.lock().unwrap());
+            let (around, reads): (Vec<_>, Vec<_>) = run.into_iter().partition(|sql| {
+                sql.starts_with("BEGIN") || sql == "COMMIT" || sql.starts_with("PRAGMA ")
+            });
+            assert_eq!(around.len(), 3, "{around:#?}");
+            reads
+        };
+        poller.poll().unwrap();
+        let polled = reads();
+        assert_eq!(polled.len(), 5, "a poll: {polled:#?}");
+        db.version().unwrap();
+        assert_eq!(reads(), polled, "the version");
+    }
 }

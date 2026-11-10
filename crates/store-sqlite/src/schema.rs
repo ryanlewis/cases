@@ -188,12 +188,12 @@ fn upgrade_or_wait(conn: &mut Connection, path: &Path) -> Result<(), Error> {
 /// transaction, and leaves the store as it was when it fails. An older
 /// cases goes on reading and writing the store after, as before.
 fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
-    if upgraded(conn)? {
+    if upgraded(conn)?.is_some() {
         return Ok(());
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another cases may have upgraded it while this one waited.
-    if !upgraded(&tx)? {
+    if upgraded(&tx)?.is_none() {
         check_version(&tx, path)?;
         if !has_store_id(&tx)? {
             tx.execute_batch("ALTER TABLE meta ADD COLUMN store_id TEXT")?;
@@ -208,21 +208,25 @@ fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether the store has its id and the log of removals.
-pub(crate) fn upgraded(conn: &Connection) -> Result<bool, Error> {
-    let logged: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE (type, name) IN
-         (VALUES ('table', 'removed'), ('trigger', 'removed_log'),
-                 ('table', 'gone'), ('trigger', 'gone_log'))",
+/// The store's id, when the store has its id and the log of removals, as
+/// it does once upgraded; `None` otherwise. It is read each time, never
+/// kept: another cases can upgrade the store at any time.
+pub(crate) fn upgraded(conn: &Connection) -> Result<Option<String>, Error> {
+    // The tables and triggers of the log, and the id's column, are looked
+    // up first, in the catalog: a statement that names the column does not
+    // prepare in a store without it.
+    let ready: bool = conn.query_row(
+        "SELECT (SELECT count(*) FROM sqlite_master WHERE (type, name) IN
+                 (VALUES ('table', 'removed'), ('trigger', 'removed_log'),
+                         ('table', 'gone'), ('trigger', 'gone_log'))) >= 4
+            AND (SELECT count(*) FROM pragma_table_info('meta') WHERE name = 'store_id') > 0",
         [],
         |row| row.get(0),
     )?;
-    if logged < 4 || !has_store_id(conn)? {
-        return Ok(false);
+    if !ready {
+        return Ok(None);
     }
-    let id: Option<String> =
-        conn.query_row("SELECT max(store_id) FROM meta", [], |row| row.get(0))?;
-    Ok(id.is_some())
+    Ok(conn.query_row("SELECT max(store_id) FROM meta", [], |row| row.get(0))?)
 }
 
 /// Whether `meta` has the column for the store id.
