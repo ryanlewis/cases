@@ -18,7 +18,6 @@ mod common;
 mod fake;
 
 use std::fs;
-use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
@@ -137,12 +136,11 @@ impl Home {
     }
 }
 
-/// An address on `127.0.0.1` where nothing listens.
+/// An address where nothing listens. Port 0 takes no connection, ever (refused
+/// on Linux, unavailable on macOS): a port freed for the test could be taken
+/// by another test before the command dials it.
 fn nobody() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("http://127.0.0.1:{port}")
+    "http://127.0.0.1:0".to_owned()
 }
 
 #[test]
