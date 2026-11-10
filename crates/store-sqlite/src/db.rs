@@ -111,6 +111,14 @@ impl Db {
         f(&open.conn, open.generation)
     }
 
+    /// Runs `f` with the store's connection to change, for a test.
+    #[cfg(test)]
+    pub(crate) fn with_connection_mut<T>(&self, f: impl FnOnce(&mut Connection) -> T) -> T {
+        let mut state = self.lock();
+        let open = self.connect(&mut state, false).unwrap();
+        f(&mut open.conn)
+    }
+
     /// Where the store is.
     #[must_use]
     pub fn path(&self) -> &Path {

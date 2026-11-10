@@ -60,11 +60,35 @@ function old(at: Time | undefined, now: number): string {
   return a === "now" ? "now" : `${a} ago`;
 }
 
+// `parse`, remembered by what it is given: the case view is drawn again on
+// every keystroke in its form and every event of the store, and its texts
+// change only when the case does. The arguments are the key, so they must
+// hold all the HTML depends on that can change while the page is open: the
+// text, and the wrap option, which every code block, a script's or one in
+// markdown, draws on its button (code.js). The page's origin, for links,
+// does not change. The last `size` held are kept.
+function remembered<A extends unknown[]>(parse: (...args: A) => string, size = 128): (...args: A) => string {
+  const held = new Map<string, string>();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    let html = held.get(key);
+    if (html === undefined) html = parse(...args);
+    else held.delete(key);
+    held.set(key, html);
+    if (held.size > size) held.delete(held.keys().next().value!);
+    return html;
+  };
+}
+const markdownOf = remembered((text: string | undefined, _wrap: boolean) => markdown(text));
+// Inline markdown has no code blocks, so no wrap option.
+const inlineMarkdownOf = remembered(inlineMarkdown);
+const scriptOf = remembered((text: string, wrap: boolean) => codeBlock(text, isDiff(text), wrap));
+
 // Markdown, with any diagram in it drawn once it is in the page
 // (diagram.js).
 function Markdown({ text, class: classes = "body" }: { text: string | undefined; class?: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const body = markdown(text);
+  const body = markdownOf(text, wrapped());
   useEffect(() => {
     if (ref.current) draw(ref.current);
   }, [body]);
@@ -73,7 +97,7 @@ function Markdown({ text, class: classes = "body" }: { text: string | undefined;
 
 // A row's script as a code block (code.js), drawn as a diff when it is one.
 function Script({ text }: { text: string }) {
-  return html`<div class="code" dangerouslySetInnerHTML=${{ __html: codeBlock(text, isDiff(text), wrapped()) }} />`;
+  return html`<div class="code" dangerouslySetInnerHTML=${{ __html: scriptOf(text, wrapped()) }} />`;
 }
 
 // A link of the case's or a row's: an address the page may link to
@@ -552,64 +576,96 @@ function Choice({
 // decision's other and a signoff's request for changes need the note, as a
 // briefing sent back does (IN-14): the store refuses them without one.
 export function response(c: Case, f: Fields, preselect: boolean): { answer: Answer; problem?: never } | { answer?: never; problem: string } {
-  const answer: Answer = {};
   const note = f.note.trim();
-  if (note) answer.note = note;
+  const given = byKind(c, f, note, preselect);
+  if (typeof given === "string") return { problem: given };
+  return { answer: note ? { note, ...given } : given };
+}
+
+// What a kind's answer holds besides the note, or the problem that keeps it
+// from being sent.
+type Given = Answer | string;
+
+// The response the fields give to case `c`, by its kind; `note` is the
+// note, trimmed. A kind with no response of its own, a message, which is
+// never open, gives none.
+function byKind(c: Case, f: Fields, note: string, preselect: boolean): Given {
   switch (c.kind) {
     case "decision":
-      if (!f.choice) return { problem: "choose an option" };
-      if (f.choice === "other" && !note) return { problem: "other needs a note: say what you want instead" };
-      if (f.choice === "other") answer.other = true;
-      else answer.choice = Number(f.choice);
-      break;
+      return decided(f, note);
     case "approval":
-      answer.rows = [];
-      for (const row of c.rows || []) {
-        const verdict = verdictOf(f.verdicts, row.id, preselect && !byHuman(row));
-        if (!verdict) {
-          const [approve, hold, reject] = verdictWords(row).map(([word]) => word);
-          return { problem: `choose ${approve}, ${hold} or ${reject} for "${row.label}"` };
-        }
-        const rowNote = (of(f.rowNotes, row.id) || "").trim();
-        answer.rows.push(
-          (rowNote ? { id: row.id, verdict, note: rowNote } : { id: row.id, verdict }) as RowVerdict,
-        );
-      }
-      break;
+      return judged(c, f, preselect);
     case "signoff":
-      if (!f.signoff) return { problem: "choose accept or request changes" };
-      if (f.signoff === "changes" && !note) return { problem: "requesting changes needs a comment: say what to change" };
-      answer.signoff = f.signoff as Answer["signoff"] & string;
-      break;
-    case "stuck": {
-      const text = f.text.trim();
-      // Guidance typed without its button chosen still means guidance.
-      const choice = f.stuck || (text ? "text" : "");
-      if (choice === "drop") answer.drop = true;
-      else if (choice === "text" && text) answer.text = text;
-      else if (choice === "text") return { problem: "write the guidance, or choose drop" };
-      else return { problem: "choose guidance or drop, or park it" };
-      break;
-    }
-    case "question": {
-      const text = f.text.trim();
-      if (!text) return { problem: "write the reply" };
-      answer.text = text;
-      break;
-    }
+      return signedOff(f, note);
+    case "stuck":
+      return unstuck(f);
+    case "question":
+      return replied(f);
     case "fyi":
-      answer.ack = true;
-      break;
+      return { ack: true };
     case "briefing":
-      if (!f.briefing) return { problem: "choose accept or send back" };
-      if (f.briefing === "send_back" && !note) return { problem: "sending back needs a reason: say what to fix" };
-      answer.briefing = f.briefing as Answer["briefing"] & string;
-      // A tick past the list, from before an amend shortened it, files nothing.
-      const file = f.file.filter((n) => n <= (c.left_out || []).length).sort((a, b) => a - b);
-      if (file.length) answer.file = file;
-      break;
+      return briefed(c, f, note);
   }
-  return { answer };
+  return {};
+}
+
+// A decision's option, or other with the note.
+function decided(f: Fields, note: string): Given {
+  if (!f.choice) return "choose an option";
+  if (f.choice === "other" && !note) return "other needs a note: say what you want instead";
+  return f.choice === "other" ? { other: true } : { choice: Number(f.choice) };
+}
+
+// An approval's verdict on each of its rows, with the row's note.
+function judged(c: Case, f: Fields, preselect: boolean): Given {
+  const rows: RowVerdict[] = [];
+  for (const row of c.rows || []) {
+    const verdict = verdictOf(f.verdicts, row.id, preselect && !byHuman(row));
+    if (!verdict) {
+      const [approve, hold, reject] = verdictWords(row).map(([word]) => word);
+      return `choose ${approve}, ${hold} or ${reject} for "${row.label}"`;
+    }
+    const rowNote = (of(f.rowNotes, row.id) || "").trim();
+    rows.push((rowNote ? { id: row.id, verdict, note: rowNote } : { id: row.id, verdict }) as RowVerdict);
+  }
+  return { rows };
+}
+
+// A signoff's accept, or its request for changes with the note.
+function signedOff(f: Fields, note: string): Given {
+  if (!f.signoff) return "choose accept or request changes";
+  if (f.signoff === "changes" && !note) return "requesting changes needs a comment: say what to change";
+  return { signoff: f.signoff as Answer["signoff"] & string };
+}
+
+// A stuck case's guidance, or its drop.
+function unstuck(f: Fields): Given {
+  const text = f.text.trim();
+  // Guidance typed without its button chosen still means guidance.
+  const choice = f.stuck || (text ? "text" : "");
+  if (choice === "drop") return { drop: true };
+  if (choice === "text" && text) return { text };
+  if (choice === "text") return "write the guidance, or choose drop";
+  return "choose guidance or drop, or park it";
+}
+
+// A question's reply.
+function replied(f: Fields): Given {
+  const text = f.text.trim();
+  if (!text) return "write the reply";
+  return { text };
+}
+
+// A briefing's accept, or its send back with the note, and the left-out
+// items ticked to file, in order.
+function briefed(c: Case, f: Fields, note: string): Given {
+  if (!f.briefing) return "choose accept or send back";
+  if (f.briefing === "send_back" && !note) return "sending back needs a reason: say what to fix";
+  const answer: Answer = { briefing: f.briefing as Answer["briefing"] & string };
+  // A tick past the list, from before an amend shortened it, files nothing.
+  const file = f.file.filter((n) => n <= (c.left_out || []).length).sort((a, b) => a - b);
+  if (file.length) answer.file = file;
+  return answer;
 }
 
 // A choice's text with its marks: "recommended" on the option the agent
@@ -619,6 +675,110 @@ export function response(c: Case, f: Fields, preselect: boolean): { answer: Answ
 function marked(text: string, recommended: boolean, picked: boolean): ComponentChildren {
   if (!recommended && !picked) return text;
   return html`<span>${text}${recommended && html` <span class="badge recommended">recommended</span>`}${picked && html` <span class="badge last-pick">your last pick</span>`}</span>`;
+}
+
+// What the fields of the answer form draw from: the case `c`, the form's
+// fields `f`, the answer a follow-up reopened, whether approve is
+// pre-selected, and the setters Respond keeps its state with.
+interface Form {
+  c: Case;
+  f: Fields;
+  last?: EventData | undefined;
+  preselect: boolean;
+  set: (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => void;
+  setIn: (key: "verdicts" | "rowNotes", id: string) => (value: string) => void;
+  tick: (n: number) => (e: Event) => void;
+}
+
+// The fields of the answer form for the case's kind, above its note: none
+// for an fyi, which is acknowledged, or a kind the form has no fields for.
+function fieldsOf(form: Form): ComponentChildren {
+  switch (form.c.kind) {
+    case "decision":
+      return decisionFields(form);
+    case "approval":
+      return (form.c.rows || []).map((row) => approvalRow(form, row));
+    case "signoff":
+      return signoffFields(form);
+    case "briefing":
+      return briefingFields(form);
+    case "stuck":
+      return stuckFields(form);
+    case "question":
+      return questionFields(form);
+  }
+  return null;
+}
+
+// A decision's options, numbered, then other.
+function decisionFields({ c, f, last, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>choose one</legend>
+  ${(c.options || []).map((option, i) => html`<${Choice} name="choice" value=${String(i + 1)} n=${i + 1} required checked=${f.choice === String(i + 1)} onPick=${set("choice")}>${marked(option, c.recommend === i + 1, !!last && last.choice === i + 1)}<//>`)}
+  <${Choice} name="choice" value="other" n=${(c.options || []).length + 1} required checked=${f.choice === "other"} onPick=${set("choice")}>${marked("other, see note", false, !!last && !!last.other)}<//>
+</fieldset>`;
+}
+
+// An approval's row: what it is, its three verdicts, and its own note.
+function approvalRow({ f, preselect, setIn }: Form, row: ApprovalRow): ComponentChildren {
+  const verdict = `verdict.${row.id}`;
+  const pick = setIn("verdicts", row.id);
+  const human = byHuman(row);
+  const chosen = verdictOf(f.verdicts, row.id, preselect && !human);
+  // A row whose verdict is only pre-selected, which the number keys
+  // treat as having none (keys.js).
+  const preset = !of(f.verdicts, row.id) && !!chosen;
+  const words = verdictWords(row);
+  return html`<fieldset class="row" key=${row.id} data-preset=${preset || undefined} data-by=${row.by || undefined}>
+  <legend class="row-title">${row.label}${human && html` <span class="badge by-human" title="a step you carry out">you</span>`}</legend>
+  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdownOf(row.note) }} />`}
+  <p><${Link} href=${row.link || ""} /></p>
+  <${Script} text=${row.script || ""} />
+  <div class="verdicts">
+    ${(["approve", "hold", "reject"] as const).map(
+      (value, i) =>
+        html`<${Choice} name=${verdict} value=${value} n=${i + 1} required checked=${chosen === value} onPick=${pick}>${words[i]![0]} <span class="hint">${words[i]![1]}</span><//>`,
+    )}
+  </div>
+  <label>note on this row <${Text} name=${`note.${row.id}`} rows="1" value=${of(f.rowNotes, row.id) || ""} onInput=${setIn("rowNotes", row.id)} /></label>
+</fieldset>`;
+}
+
+// A signoff's accept and request for changes.
+function signoffFields({ f, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>sign off</legend>
+  <${Choice} name="signoff" value="accept" n=${1} required checked=${f.signoff === "accept"} onPick=${set("signoff")}>accept<//>
+  <${Choice} name="signoff" value="changes" n=${2} required checked=${f.signoff === "changes"} onPick=${set("signoff")}>request changes (comment required)<//>
+</fieldset>`;
+}
+
+// A briefing's accept and send back, then a tick box per left-out item.
+function briefingFields({ c, f, set, tick }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>judge the work</legend>
+  <${Choice} name="briefing" value="accept" n=${1} required checked=${f.briefing === "accept"} onPick=${set("briefing")}>accept<//>
+  <${Choice} name="briefing" value="send_back" n=${2} required checked=${f.briefing === "send_back"} onPick=${set("briefing")}>send back (reason required)<//>
+</fieldset>
+${(c.left_out || []).length > 0 && html`<fieldset class="file">
+  <legend>file what was left out</legend>
+  ${c.left_out!.map((item, i) => html`<label class="choice"><input type="checkbox" name="file" value=${String(i + 1)} checked=${f.file.includes(i + 1)} onChange=${tick(i + 1)} /> ${item}</label>`)}
+</fieldset>`}`;
+}
+
+// A stuck case's guidance, with its text, and its drop.
+function stuckFields({ f, set }: Form): ComponentChildren {
+  return html`<fieldset>
+  <legend>unblock</legend>
+  <${Choice} name="stuck" value="text" n=${1} checked=${f.stuck === "text"} onPick=${set("stuck")}>give guidance<//>
+  <label>guidance <${Text} name="text" rows="4" value=${f.text} onInput=${set("text")} /></label>
+  <${Choice} name="stuck" value="drop" n=${2} checked=${f.stuck === "drop"} onPick=${set("stuck")}>drop it<//>
+</fieldset>`;
+}
+
+// A question's reply.
+function questionFields({ f, set }: Form): ComponentChildren {
+  return html`<label>reply <${Text} name="text" rows="4" required value=${f.text} onInput=${set("text")} /></label>`;
 }
 
 // The form that answers an open case, shaped by its kind. Its fields keep
@@ -638,17 +798,7 @@ function Respond({
   const [f, setF] = useState<Fields>({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "" });
   // Read once, so an option changed while the form is open leaves it be.
   const [preselect] = useState(preselected);
-  const set = (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => setF((was) => ({ ...was, [key]: value }));
-  const setIn = (key: "verdicts" | "rowNotes", id: string) => (value: string) => setF((was) => ({ ...was, [key]: { ...was[key], [id]: value } }));
-  const note = () => f.note.trim();
-  // Ticks or unticks a briefing's left-out item `n` to file.
-  const tick = (n: number) => (e: Event) => {
-    const on = (e.target as HTMLInputElement).checked;
-    setF((was) => ({ ...was, file: on ? [...was.file.filter((m) => m !== n), n] : was.file.filter((m) => m !== n) }));
-  };
-  const sendingBack = c.kind === "briefing" && f.briefing === "send_back";
-  // The choices that need the note, which the store refuses without one.
-  const noteNeeded = sendingBack || (c.kind === "decision" && f.choice === "other") || (c.kind === "signoff" && f.signoff === "changes");
+  const { set, setIn, tick } = setters(setF);
   // An amend that replaces a briefing's left-out items numbers them anew:
   // the ticks made against the old list go, rather than file other items.
   const items = JSON.stringify(c.left_out || []);
@@ -659,6 +809,35 @@ function Respond({
     setF((was) => ({ ...was, file: [] }));
   }, [items]);
 
+  const { submit, drop, park } = sends(c, f, preselect, send, refuse);
+  const fields = fieldsOf({ c, f, last, preselect, set, setIn, tick });
+  return html`<form class="respond" data-write="answer" onSubmit=${submit}>
+  ${fields}
+  ${noteField(c, f, set)}
+  ${actions(c, drop, park)}
+</form>`;
+}
+
+// The form's setters of its fields, over Respond's `setF`.
+function setters(setF: (next: (was: Fields) => Fields) => void): Pick<Form, "set" | "setIn" | "tick"> {
+  const set = (key: Exclude<keyof Fields, "verdicts" | "rowNotes" | "file">) => (value: string) => setF((was) => ({ ...was, [key]: value }));
+  const setIn = (key: "verdicts" | "rowNotes", id: string) => (value: string) => setF((was) => ({ ...was, [key]: { ...was[key], [id]: value } }));
+  // Ticks or unticks a briefing's left-out item `n` to file.
+  const tick = (n: number) => (e: Event) => {
+    const on = (e.target as HTMLInputElement).checked;
+    setF((was) => ({ ...was, file: toggled(was.file, n, on) }));
+  };
+  return { set, setIn, tick };
+}
+
+// The items to file `file`, with `n` ticked, once, or unticked.
+function toggled(file: number[], n: number, on: boolean): number[] {
+  return on ? [...file.filter((m) => m !== n), n] : file.filter((m) => m !== n);
+}
+
+// What the form's submit, drop and park send for case `c` from its fields `f`.
+function sends(c: Case, f: Fields, preselect: boolean, send: (what: Sends, body: Body) => Promise<void>, refuse: (problem: string) => void) {
+  const note = () => f.note.trim();
   function submit(e: Event): void {
     e.preventDefault();
     const { answer, problem } = response(c, f, preselect);
@@ -670,81 +849,28 @@ function Respond({
   }
   const drop = () => send("answer", { answer: note() ? { drop: true, note: note() } : { drop: true } });
   const park = () => send("park", note() ? { note: note() } : {});
+  return { submit, drop, park };
+}
 
-  let fields: ComponentChildren = null;
-  switch (c.kind) {
-    case "decision":
-      fields = html`<fieldset>
-  <legend>choose one</legend>
-  ${(c.options || []).map((option, i) => html`<${Choice} name="choice" value=${String(i + 1)} n=${i + 1} required checked=${f.choice === String(i + 1)} onPick=${set("choice")}>${marked(option, c.recommend === i + 1, !!last && last.choice === i + 1)}<//>`)}
-  <${Choice} name="choice" value="other" n=${(c.options || []).length + 1} required checked=${f.choice === "other"} onPick=${set("choice")}>${marked("other, see note", false, !!last && !!last.other)}<//>
-</fieldset>`;
-      break;
-    case "approval":
-      fields = (c.rows || []).map((row) => {
-        const verdict = `verdict.${row.id}`;
-        const pick = setIn("verdicts", row.id);
-        const human = byHuman(row);
-        const chosen = verdictOf(f.verdicts, row.id, preselect && !human);
-        // A row whose verdict is only pre-selected, which the number keys
-        // treat as having none (keys.js).
-        const preset = !of(f.verdicts, row.id) && !!chosen;
-        const words = verdictWords(row);
-        return html`<fieldset class="row" key=${row.id} data-preset=${preset || undefined} data-by=${row.by || undefined}>
-  <legend class="row-title">${row.label}${human && html` <span class="badge by-human" title="a step you carry out">you</span>`}</legend>
-  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdown(row.note) }} />`}
-  <p><${Link} href=${row.link || ""} /></p>
-  <${Script} text=${row.script || ""} />
-  <div class="verdicts">
-    ${(["approve", "hold", "reject"] as const).map(
-      (value, i) =>
-        html`<${Choice} name=${verdict} value=${value} n=${i + 1} required checked=${chosen === value} onPick=${pick}>${words[i]![0]} <span class="hint">${words[i]![1]}</span><//>`,
-    )}
-  </div>
-  <label>note on this row <${Text} name=${`note.${row.id}`} rows="1" value=${of(f.rowNotes, row.id) || ""} onInput=${setIn("rowNotes", row.id)} /></label>
-</fieldset>`;
-      });
-      break;
-    case "signoff":
-      fields = html`<fieldset>
-  <legend>sign off</legend>
-  <${Choice} name="signoff" value="accept" n=${1} required checked=${f.signoff === "accept"} onPick=${set("signoff")}>accept<//>
-  <${Choice} name="signoff" value="changes" n=${2} required checked=${f.signoff === "changes"} onPick=${set("signoff")}>request changes (comment required)<//>
-</fieldset>`;
-      break;
-    case "briefing":
-      fields = html`<fieldset>
-  <legend>judge the work</legend>
-  <${Choice} name="briefing" value="accept" n=${1} required checked=${f.briefing === "accept"} onPick=${set("briefing")}>accept<//>
-  <${Choice} name="briefing" value="send_back" n=${2} required checked=${f.briefing === "send_back"} onPick=${set("briefing")}>send back (reason required)<//>
-</fieldset>
-${(c.left_out || []).length > 0 && html`<fieldset class="file">
-  <legend>file what was left out</legend>
-  ${c.left_out!.map((item, i) => html`<label class="choice"><input type="checkbox" name="file" value=${String(i + 1)} checked=${f.file.includes(i + 1)} onChange=${tick(i + 1)} /> ${item}</label>`)}
-</fieldset>`}`;
-      break;
-    case "stuck":
-      fields = html`<fieldset>
-  <legend>unblock</legend>
-  <${Choice} name="stuck" value="text" n=${1} checked=${f.stuck === "text"} onPick=${set("stuck")}>give guidance<//>
-  <label>guidance <${Text} name="text" rows="4" value=${f.text} onInput=${set("text")} /></label>
-  <${Choice} name="stuck" value="drop" n=${2} checked=${f.stuck === "drop"} onPick=${set("stuck")}>drop it<//>
-</fieldset>`;
-      break;
-    case "question":
-      fields = html`<label>reply <${Text} name="text" rows="4" required value=${f.text} onInput=${set("text")} /></label>`;
-      break;
-  }
-  return html`<form class="respond" data-write="answer" onSubmit=${submit}>
-  ${fields}
-  <label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${noteNeeded} value=${f.note} onInput=${set("note")} /></label>
-  <div class="actions">
+// The note under the fields: the signoff's comment, the reason a briefing
+// is sent back with, or the note to the agent, required where the choice
+// made needs it.
+function noteField(c: Case, f: Fields, set: Form["set"]): ComponentChildren {
+  const sendingBack = c.kind === "briefing" && f.briefing === "send_back";
+  // The choices that need the note, which the store refuses without one.
+  const noteNeeded = sendingBack || (c.kind === "decision" && f.choice === "other") || (c.kind === "signoff" && f.signoff === "changes");
+  return html`<label>${c.kind === "signoff" ? "comment" : sendingBack ? "reason: what to fix" : "note to the agent"} <${Hint} keys=${["n"]} /> <${Text} name="note" rows="3" shortcut="n" required=${noteNeeded} value=${f.note} onInput=${set("note")} /></label>`;
+}
+
+// The form's send button, labelled acknowledge for an fyi, and its drop,
+// or park for a stuck case.
+function actions(c: Case, drop: () => void, park: () => void): ComponentChildren {
+  return html`<div class="actions">
     <button type="submit" class="primary" id="respond-send" aria-keyshortcuts=${SEND_SHORTCUTS}>${c.kind === "fyi" ? "acknowledge" : "send"} <${Hint} keys=${SEND} /></button>
     ${c.kind === "stuck"
       ? html`<button type="button" id="respond-park" onClick=${park}>park</button>`
       : html`<button type="button" id="respond-drop" onClick=${drop}>drop</button>`}
-  </div>
-</form>`;
+  </div>`;
 }
 
 // The human's withdraw of a case an agent has, answered or picked up, such as

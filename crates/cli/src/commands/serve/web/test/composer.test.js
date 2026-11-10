@@ -215,9 +215,30 @@ test("a click on the backdrop closes the composer, but not one that started insi
   // Pressed inside and let go outside, as a drag is: no close.
   c.act(() => dialog().onPointerDown({ target: inside, currentTarget: on }));
   c.act(() => dialog().onClick({ target: on, currentTarget: on }));
-  // Pressed on the backdrop and let go inside: no close.
+  // Pressed on the backdrop and let go inside: no close. The browser sends
+  // the click to the dialog, the nearest element both were in.
   c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
-  c.act(() => dialog().onClick({ target: inside, currentTarget: on }));
+  c.act(() => dialog().onPointerUp?.({ target: inside, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.deepEqual(c.log.slice(2), ["close"]);
+});
+
+test("a press on the backdrop let go inside the composer, as a browser sends it, does not close it", () => {
+  const c = open();
+  const dialog = () => c.find((v) => v.type === "dialog").props;
+  const on = {};
+  const inside = {};
+  // Pressed on the backdrop, let go on the note: the click goes to the
+  // dialog, which both are in. No close.
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerUp?.({ target: inside, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.deepEqual(c.log.slice(2), []);
+  // Pressed and let go on the backdrop, every event as a browser sends it:
+  // it closes.
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerUp?.({ target: on, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
   assert.deepEqual(c.log.slice(2), ["close"]);
 });
 

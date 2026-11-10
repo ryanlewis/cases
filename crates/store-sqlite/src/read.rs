@@ -88,21 +88,18 @@ struct At {
 
 impl At {
     fn read(tx: &Transaction<'_>) -> Result<At, Error> {
-        let seq = |name: &str| -> Result<i64, Error> {
-            Ok(tx.query_row(
-                "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = ?1), 0)",
-                [name],
-                |row| row.get(0),
-            )?)
-        };
         // A store not upgraded yet, as one that could not be written when
         // it was opened, has no id and no logs: no id, no tag.
-        let store: Option<String> = if crate::schema::upgraded(tx)? {
-            tx.query_row("SELECT max(store_id) FROM meta", [], |row| row.get(0))?
-        } else {
-            None
-        };
-        let change = seq("events")?;
+        let store = crate::schema::upgraded(tx)?;
+        // The highest change and key, each 0 before its first, and the
+        // number of cases, in one statement.
+        let (change, key, count) = tx.query_row(
+            "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0),
+                    coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'cases'), 0),
+                    (SELECT count(*) FROM cases)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
         let tag = if store.is_some() {
             tag(tx, change)?
         } else {
@@ -111,8 +108,8 @@ impl At {
         Ok(At {
             store: store.unwrap_or_default(),
             change,
-            key: seq("cases")?,
-            count: tx.query_row("SELECT count(*) FROM cases", [], |row| row.get(0))?,
+            key,
+            count,
             tag,
         })
     }
@@ -290,7 +287,7 @@ fn read_row(found: &rusqlite::Row<'_>, path: &Path) -> Result<Option<Row>, Error
 mod tests {
     use std::collections::HashSet;
 
-    use cases_core::{Category, Changes, Store, StoreError, Version};
+    use cases_core::{Case, Category, Changes, Store, StoreError, Version};
 
     use crate::key::RowId;
     use crate::testing::{count, create, event, note, scratch, sql};
@@ -633,5 +630,30 @@ mod tests {
         let changes = db.rows_since(Some(&then)).unwrap();
         assert!(matches!(changes, Changes::All { .. }), "{changes:?}");
         assert_eq!(changes.cases().len(), 2);
+    }
+
+    /// A row's data that is not UTF-8, which only another writer can store,
+    /// reads with U+FFFD for the bytes that are not, and the case folds.
+    #[test]
+    fn data_that_is_not_utf8_reads_with_the_replacement_character() {
+        let (_dir, db) = scratch();
+        let key = create(&db);
+        note(&db, key);
+        // The bytes of `{"body":"<ff>"}`.
+        sql(&db)
+            .execute(
+                "UPDATE events SET data = x'7b22626f6479223a22ff227d' WHERE case_key = ?1 AND seq = 2",
+                [key.sql()],
+            )
+            .unwrap();
+        let rows = db.rows(&key).unwrap().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[1].event.as_str(), rows[1].data.as_str()),
+            ("note", "{\"body\":\"\u{fffd}\"}")
+        );
+        let case = Case::fold(&rows).unwrap();
+        assert!(case.problems().is_empty(), "{:?}", case.problems());
+        assert_eq!(case.revision(), 2);
     }
 }
