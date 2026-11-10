@@ -316,7 +316,9 @@ fn install_without_a_directory_to_install_into_says_why() {
             .contains("neither $CLAUDE_CONFIG_DIR nor $HOME is set"),
         "{out:?}"
     );
+    // Nor in the directory it ran in, as a path made relative would.
     assert!(!env.path("SKILL.md").exists());
+    assert!(!env.path(".claude").exists());
     assert!(!env.path("skills").exists());
 }
 
@@ -325,7 +327,7 @@ fn install_without_a_directory_to_install_into_says_why() {
 /// terminal showed.
 #[cfg(unix)]
 fn install_at_a_terminal(env: &Env, dir: &Path, answer: &[u8]) -> String {
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::process::{Command, Stdio};
     const RUN: &str = r#"exec "$CASES" skill install claude --path "$DIR""#;
     let mut command = Command::new("/usr/bin/script");
@@ -347,12 +349,21 @@ fn install_at_a_terminal(env: &Env, dir: &Path, answer: &[u8]) -> String {
             .stdout(Stdio::piped())
             .stderr(Stdio::null()),
     );
-    // The line waits in the terminal until install reads it.
-    let stdin = script.stdin.as_mut().unwrap();
+    // The line waits in the terminal until install reads it. stdin stays
+    // open until install ends: `script` may end when its input does.
+    let mut stdin = script.stdin.take().unwrap();
     stdin.write_all(&[answer, b"\n"].concat()).unwrap();
     stdin.flush().unwrap();
-    let out = script.wait_with_output().unwrap();
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    let mut shown = Vec::new();
+    script
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut shown)
+        .unwrap();
+    drop(stdin);
+    script.wait().unwrap();
+    String::from_utf8_lossy(&shown).into_owned()
 }
 
 /// At a terminal, install asks before it replaces a different skill, and
@@ -367,13 +378,14 @@ fn install_at_a_terminal_asks_before_it_replaces_a_different_skill() {
     for answer in [&b"n"[..], b""] {
         write_file(&file, "old\n");
         let shown = install_at_a_terminal(&env, &dir, answer);
-        assert!(
-            shown.contains(&format!(
-                "A different skill is installed at {}. Overwrite? [y/N]",
-                dir.display()
-            )),
-            "{answer:?}: {shown}"
+        // The question and its choices are written apart, so the echo of
+        // the answer may come between them.
+        let question = format!(
+            "A different skill is installed at {}. Overwrite?",
+            dir.display()
         );
+        assert!(shown.contains(&question), "{answer:?}: {shown}");
+        assert!(shown.contains("[y/N]"), "{answer:?}: {shown}");
         assert!(shown.contains("Error: cancelled"), "{answer:?}: {shown}");
         assert_eq!(fs::read_to_string(&file).unwrap(), "old\n", "{answer:?}");
     }
