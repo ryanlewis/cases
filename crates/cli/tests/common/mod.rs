@@ -41,8 +41,14 @@ static FDS: Mutex<()> = Mutex::new(());
 
 /// A listener on `addr`, made while no process starts.
 pub(crate) fn listen(addr: &str) -> TcpListener {
+    try_listen(addr).expect("a listener")
+}
+
+/// A listener on `addr`, made while no process starts, or why there is
+/// none, such as the address being taken.
+pub(crate) fn try_listen(addr: &str) -> std::io::Result<TcpListener> {
     let _alone = FDS.lock().unwrap_or_else(PoisonError::into_inner);
-    TcpListener::bind(addr).expect("a listener")
+    TcpListener::bind(addr)
 }
 
 /// A pipe, made while no process starts.
@@ -394,7 +400,16 @@ impl Env {
 
     /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one.
     pub(crate) fn fake_serve_on(&self, store: &Path, addr: &str) -> (TcpListener, String) {
-        let listener = listen(addr);
+        self.fake_serve_with(store, listen(addr))
+    }
+
+    /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one,
+    /// on a listener the test bound.
+    pub(crate) fn fake_serve_with(
+        &self,
+        store: &Path,
+        listener: TcpListener,
+    ) -> (TcpListener, String) {
         let addr = listener.local_addr().expect("an address");
         let url = format!("http://{addr}/");
         let info = serde_json::json!({

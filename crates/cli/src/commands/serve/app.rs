@@ -47,6 +47,10 @@ const FORWARDED_HOST_HEADER: &str = "x-forwarded-host";
 /// reached by over HTTP (`forward = "http://…"`), as over a pipe.
 const STORE_ROUTES: &str = "/v1/stores/";
 
+// A store route's body is read as an inbox write's is, so the most it may
+// hold is the store protocol's.
+const _: () = assert!(api::MAX_BODY == cases_store_remote::REQUEST_LIMIT);
+
 /// What every request is served with.
 #[derive(Debug)]
 pub(crate) struct App {
@@ -139,14 +143,18 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
-/// A store route, `/v1/stores/{id}/store/…`, answered as `cases dial-stdio`
+/// A store route, `/v1/stores/{id}/store/…`, its body read within the
+/// read time and of at most 1 MiB, answered as `cases dial-stdio`
 /// answers it over a pipe (see [`dial::handle_http`]), on a blocking
 /// thread, as every read and write of the store is: a held poll waits
 /// there.
 async fn store(State(app): State<Arc<App>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
-    let Ok(body) = axum::body::to_bytes(body, cases_store_remote::REQUEST_LIMIT).await else {
-        return Refusal::bad("the body is over 1 MiB, or did not arrive").into_response();
+    // The body has the read time, as an inbox write's has; the answer, such
+    // as a held poll's, has as long as it takes.
+    let body = match api::read_body(body, app.timeouts.read).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal.into_response(),
     };
     let header = |name: header::HeaderName| {
         parts
@@ -1114,13 +1122,23 @@ mod tests {
         path: &str,
         body: &str,
     ) -> (u16, serde_json::Value) {
+        sent(app, method, path, axum::body::Body::from(body.to_owned())).await
+    }
+
+    /// As [`through`], with a body that arrives as `body` sends it.
+    async fn sent(
+        app: &Arc<App>,
+        method: &str,
+        path: &str,
+        body: axum::body::Body,
+    ) -> (u16, serde_json::Value) {
         use hyper::service::Service as _;
         let request = Request::builder()
             .method(method)
             .uri(path)
             .header(header::HOST, "127.0.0.1:7337")
             .header(header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(body.to_owned()))
+            .body(body)
             .unwrap();
         let service = hyper_util::service::TowerToHyperService::new(router(Arc::clone(app)));
         let response = service.call(request).await.unwrap();
@@ -1131,6 +1149,138 @@ mod tests {
         let body = serde_json::from_slice(&bytes)
             .unwrap_or_else(|error| panic!("{status}: {error}: {bytes:?}"));
         (status, body)
+    }
+
+    /// A body that sends its chunks one by one, each after `gap`, and then
+    /// ends.
+    struct Trickle {
+        chunks: std::collections::VecDeque<&'static str>,
+        gap: std::time::Duration,
+        sleep: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+    }
+
+    impl Trickle {
+        fn body(chunks: &[&'static str], gap: std::time::Duration) -> axum::body::Body {
+            axum::body::Body::new(Trickle {
+                chunks: chunks.iter().copied().collect(),
+                gap,
+                sleep: None,
+            })
+        }
+    }
+
+    impl http_body::Body for Trickle {
+        type Data = axum::body::Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            use std::task::Poll;
+            if self.chunks.is_empty() {
+                return Poll::Ready(None);
+            }
+            let gap = self.gap;
+            let sleep = self
+                .sleep
+                .get_or_insert_with(|| Box::pin(tokio::time::sleep(gap)));
+            if sleep.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            self.sleep = None;
+            let chunk = self.chunks.pop_front().unwrap();
+            Poll::Ready(Some(Ok(http_body::Frame::data(chunk.into()))))
+        }
+    }
+
+    /// An app whose request body must arrive within `read`.
+    fn reading(dir: &tempfile::TempDir, read: std::time::Duration) -> Arc<App> {
+        let app = app(dir, &[], &[]);
+        Arc::new(App {
+            timeouts: Timeouts {
+                read,
+                ..app.timeouts
+            },
+            ..app
+        })
+    }
+
+    /// A store route whose body stalls is answered 400 once the read time
+    /// is up, as an inbox write is, rather than held until the client goes.
+    #[tokio::test]
+    async fn a_store_route_s_body_that_stalls_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = reading(&dir, std::time::Duration::from_millis(50));
+        let lock = format!("/v1/stores/{}/store/lock", cases_store_remote::DIAL_STORE);
+        let stalled = Trickle::body(&["{}"], std::time::Duration::from_secs(3600));
+        let (status, refused) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sent(&app, "POST", &lock, stalled),
+        )
+        .await
+        .expect("the request was held");
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused,
+            serde_json::json!({"error": {
+                "category": "request",
+                "message": "the body did not arrive in time",
+            }})
+        );
+    }
+
+    /// A body that arrives in pieces within the read time is read whole;
+    /// one over 1 MiB is refused.
+    #[tokio::test]
+    async fn a_store_route_reads_a_slow_body_whole_and_refuses_a_big_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = reading(&dir, std::time::Duration::from_secs(5));
+        let lock = format!("/v1/stores/{}/store/lock", cases_store_remote::DIAL_STORE);
+        let slow = Trickle::body(
+            &[
+                r#"{"locks": [{"on": "label", "text": "deploy"}], "#,
+                r#""lease": true, "#,
+                r#""release": true}"#,
+            ],
+            std::time::Duration::from_millis(20),
+        );
+        let (status, taken) = sent(&app, "POST", &lock, slow).await;
+        assert_eq!(status, 200, "{taken}");
+        assert!(taken["hold"].is_string(), "{taken}");
+        let big = " ".repeat(cases_store_remote::REQUEST_LIMIT + 1);
+        let (status, refused) = through(&app, "POST", &lock, &big).await;
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["category"], "request", "{refused}");
+    }
+
+    /// The read time bounds the body alone: a held poll lasts longer.
+    #[tokio::test]
+    async fn a_held_poll_outlasts_the_read_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = reading(&dir, std::time::Duration::from_millis(50));
+        let changes = format!(
+            "/v1/stores/{}/store/changes",
+            cases_store_remote::DIAL_STORE
+        );
+        let (status, now) = through(&app, "GET", &changes, "").await;
+        assert_eq!(status, 200, "{now}");
+        let version = now["version"].as_str().unwrap();
+        let start = std::time::Instant::now();
+        let (status, held) = through(
+            &app,
+            "GET",
+            &format!("{changes}?after={version}&timeout=1"),
+            "",
+        )
+        .await;
+        assert_eq!(status, 200, "{held}");
+        assert_eq!(held["version"], version, "{held}");
+        assert!(
+            start.elapsed() >= std::time::Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     /// A lock renewal that went well is left out of the log, as a read is;

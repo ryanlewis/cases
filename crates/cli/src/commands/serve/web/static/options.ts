@@ -31,14 +31,22 @@ const STATUS = {
 // Closes `dialog` on a click on its backdrop: a press and release on the
 // dialog itself, whose form fills it, so that a drag that starts inside the
 // form and ends outside does not close it. Escape and the close button
-// (a method=dialog form) close it by themselves.
+// (a method=dialog form) close it by themselves. Whether a press started on
+// the backdrop is kept with the dialog, not the handlers, so that a redraw
+// between the press and the click, which gives new ones, does not lose it.
+const pressed = new WeakSet<EventTarget>();
 function backdrop() {
-  let down = false;
   return {
-    onPointerDown: (e: PointerEvent) => (down = e.target === e.currentTarget),
+    onPointerDown: (e: PointerEvent) => {
+      if (e.target === e.currentTarget) pressed.add(e.currentTarget!);
+      else pressed.delete(e.currentTarget!);
+    },
+    // A press the browser cancels (a touch that turns into a scroll) gives
+    // no click, and is not one.
+    onPointerCancel: (e: PointerEvent) => pressed.delete(e.currentTarget!),
     onClick: (e: MouseEvent) => {
-      if (e.target === e.currentTarget && down) (e.currentTarget as HTMLDialogElement).close();
-      down = false;
+      if (e.target === e.currentTarget && pressed.has(e.currentTarget!)) (e.currentTarget as HTMLDialogElement).close();
+      pressed.delete(e.currentTarget!);
     },
   };
 }
