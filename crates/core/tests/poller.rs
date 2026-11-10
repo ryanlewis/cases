@@ -243,3 +243,49 @@ fn a_poll_says_which_cases_it_folded_again_and_dropped() {
     poller.poll().unwrap();
     assert_eq!(poller.refolded(), &only(&[second], &[]));
 }
+
+thread_local! {
+    /// The answer the next read of a [`scripted`] poller gives, in place
+    /// of the store's.
+    static SCRIPT: RefCell<Option<Changes<Key>>> = const { RefCell::new(None) };
+}
+
+/// A poller over `store` whose next read gives [`SCRIPT`] when it is set,
+/// as a read given to `with_read` may answer, and the store's otherwise.
+fn scripted(store: &Memory) -> Poller<'_, Memory> {
+    SCRIPT.set(None);
+    Poller::with_read(store, |store, since| match SCRIPT.take() {
+        Some(changes) => Ok(changes),
+        None => store.rows_since(since),
+    })
+}
+
+/// The report holds for a read that answers outside what a store does:
+/// what changed, when asked with no version, is still every case folded
+/// again; and a key both taken out and given again is folded again, in
+/// one list only.
+#[test]
+fn a_poll_says_every_case_after_no_version_and_a_key_in_one_list() {
+    let store = Memory::new(start());
+    let first = create(&store);
+    let second = create(&store);
+    let Changes::All { version, cases } = store.rows_since(None).unwrap() else {
+        panic!("not every case");
+    };
+    let mut poller = scripted(&store);
+    SCRIPT.set(Some(Changes::Since {
+        version: version.clone(),
+        cases: cases.clone(),
+        removed: Vec::new(),
+    }));
+    assert_eq!(keys(poller.poll().unwrap()), vec![first, second]);
+    assert_eq!(poller.refolded(), &Refolded::All, "asked with no version");
+
+    SCRIPT.set(Some(Changes::Since {
+        version: Version::new("later"),
+        cases: vec![cases[0].clone()],
+        removed: vec![first, second],
+    }));
+    assert_eq!(keys(poller.poll().unwrap()), vec![first]);
+    assert_eq!(poller.refolded(), &only(&[first], &[second]));
+}

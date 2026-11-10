@@ -456,6 +456,54 @@ mod tests {
         assert_eq!(shared(&last, added).title(), "Heads up");
     }
 
+    /// A read that publishes nothing leaves the next one sharing what did
+    /// not change since the snapshot published last. A store gone missing
+    /// and put back is read anew, sharing nothing with the snapshot from
+    /// before, and the read after it shares again.
+    #[test]
+    fn a_read_shares_across_reads_that_publish_nothing_and_none_after_a_missing_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let (db, watch) = watch(&path);
+        let keys: Vec<Key> = (0..2)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        let shared = |snapshot: &Snapshot, key: Key| {
+            let (_, case) = snapshot.cases.iter().find(|(k, _)| *k == key).unwrap();
+            Arc::clone(case)
+        };
+        let first = watch.read().unwrap();
+        assert!(Arc::ptr_eq(&watch.read().unwrap(), &first));
+        amend(&db, keys[1], "amended");
+        let second = watch.read().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared(&first, keys[0]),
+            &shared(&second, keys[0])
+        ));
+        assert!(!Arc::ptr_eq(
+            &shared(&first, keys[1]),
+            &shared(&second, keys[1])
+        ));
+
+        let aside = dir.path().join("aside.db");
+        std::fs::rename(&path, &aside).unwrap();
+        assert!(watch.read().unwrap().cases.is_empty());
+        std::fs::rename(&aside, &path).unwrap();
+        let back = watch.read().unwrap();
+        assert_eq!(body(&back), body(&second));
+        for key in &keys {
+            assert!(!Arc::ptr_eq(&shared(&second, *key), &shared(&back, *key)));
+        }
+
+        amend(&db, keys[0], "again");
+        let last = watch.read().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared(&back, keys[1]),
+            &shared(&last, keys[1])
+        ));
+        assert_eq!(shared(&last, keys[0]).body(), "again");
+    }
+
     /// A copy of the store put at its path whose case went apart and then
     /// took the very same last row, at the very same time, as the case serve
     /// read: the case has the same counts, open time and last event, and
