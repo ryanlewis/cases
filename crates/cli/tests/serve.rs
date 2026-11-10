@@ -657,6 +657,10 @@ const SERVE: &str = r#""$CASES" --store "$STORE" serve --listen 127.0.0.1:0 --no
 /// What the status screen shows once serve reads keys.
 const KEYS: &str = "\x1b[32mq\x1b[0m quit";
 
+/// The end of the status screen's last line, after [`KEYS`] when it has
+/// them.
+const LAST: &str = "\x1b[32mCtrl-C\x1b[0m quit";
+
 /// How `pid` stands: its `ps` state, such as `S` or `T`, with its CPU time
 /// in seconds, or `None` once it has ended.
 fn standing(pid: i32) -> Option<(String, f64)> {
@@ -776,11 +780,14 @@ fn serve_started_in_the_background_reads_no_keys() {
     terminal.type_keys(&format!("{SERVE} & echo \"pid\"=$!\n"));
     let pid = terminal.pid();
     let _reap = Reap(pid);
-    let shown = terminal.wait_for("cases serve");
+    // The first frame, all of it, however it comes in chunks: the keys
+    // would be on its last line.
+    terminal.wait_for("cases serve");
+    let frame = terminal.wait_for(LAST);
+    assert!(!frame.contains(KEYS), "{frame:?}");
     std::thread::sleep(Duration::from_millis(1000));
     let (state, _) = standing(pid).expect("serve ended");
     assert!(!state.starts_with('T'), "serve stopped: {state}");
-    assert!(!shown.contains(KEYS) && !terminal.seen.contains(KEYS));
     rustix::process::kill_process(rustix::process::Pid::from_raw(pid).unwrap(), Signal::TERM)
         .unwrap();
     assert!(
