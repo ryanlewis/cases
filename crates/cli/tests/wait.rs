@@ -1401,6 +1401,45 @@ fn a_second_pickup_wait_on_the_same_worker_label_or_id_is_refused() {
     assert_eq!(env.case(&id).state().as_str(), "open");
 }
 
+/// A pickup wait on the store by another path to it is refused as one by
+/// the same path is (AG-05): through a symlink to the store file, through a
+/// symlink to a directory and back up past it, and relative to where it
+/// runs.
+#[cfg(unix)]
+#[test]
+fn a_second_pickup_wait_on_the_same_store_by_another_path_is_refused() {
+    let mut env = Env::new();
+    env.open_decision();
+    let marker = marker(&env);
+    let real = env.store.clone();
+    let link = env.path("link.db");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // `deep/../../cases.db` is the store, as `deep` is `a/b`; as text alone
+    // it would be the `cases.db` above the test's directory.
+    fs::create_dir_all(env.path("a").join("b")).unwrap();
+    std::os::unix::fs::symlink(env.path("a").join("b"), env.path("deep")).unwrap();
+    let up = env.path("deep").join("..").join("..").join("cases.db");
+    let relative = PathBuf::from("cases.db");
+    for (first, second) in [
+        (&real, &link),
+        (&link, &real),
+        (&real, &up),
+        (&up, &relative),
+    ] {
+        env.store = first.clone();
+        let mut holder = Waiting::after_first_read(&env, &marker, &["--pickup", "--worker", "w"]);
+        env.store = second.clone();
+        refused(
+            &wait(&env, &["--pickup", "--worker", "w"]),
+            "worker \"w\"",
+            &holder,
+        );
+        assert!(holder.running(), "{first:?}");
+        holder.child.kill().unwrap();
+        holder.child.wait().unwrap();
+    }
+}
+
 /// Pickup waits on different workers, labels and ids run side by side, and
 /// so do two waits of different workers that share a label: the first to
 /// take a message to it has it (AG-16).

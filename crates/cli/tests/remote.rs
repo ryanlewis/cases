@@ -1492,3 +1492,36 @@ fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout
         "{out:?}"
     );
 }
+
+/// The reads of cases that `args` sends, as request lines.
+fn case_reads(r: &Remote, args: &[&str]) -> Vec<String> {
+    let before = r.fake.lines().len();
+    r.ok(args);
+    r.fake.lines()[before..]
+        .iter()
+        .filter(|line| line.starts_with("GET ") && line.contains("/store/cases"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn show_answer_and_inbox_read_the_case_they_name_once() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(None, "Read once");
+    let part = &id[1..id.len() - 1];
+    let store = format!("GET /v1/stores/{}/store/cases", r.ids[0]);
+    // The case by its key, for a whole id; the list, for part of one.
+    let (one, all) = (format!("{store}/1 HTTP/1.1"), format!("{store} HTTP/1.1"));
+    for (args, want) in [
+        (vec!["show", id.as_str()], &one),
+        (vec!["show", part], &all),
+        (vec!["inbox", "--print", id.as_str()], &one),
+        (vec!["answer", id.as_str(), "--ack"], &one),
+    ] {
+        assert_eq!(
+            case_reads(&r, &args),
+            std::slice::from_ref(want),
+            "{args:?}"
+        );
+    }
+}
