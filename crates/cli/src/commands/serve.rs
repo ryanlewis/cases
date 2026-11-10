@@ -942,4 +942,244 @@ mod tests {
             "the stream did not end cleanly: {text}"
         );
     }
+
+    /// An instance file in the state directory, for a store of its own in a
+    /// directory of its own, so that no other store's file is touched. It
+    /// is removed on drop. The state directory is the one of the process,
+    /// since a test cannot set `$XDG_STATE_HOME` without `unsafe`.
+    struct Record {
+        store: PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Record {
+        fn store() -> Record {
+            let dir = tempfile::tempdir().unwrap();
+            Record {
+                store: dir.path().join("cases.db"),
+                _dir: dir,
+            }
+        }
+
+        /// Records a serve with `pid` at `addr`.
+        fn write(&self, pid: i32, addr: &str) {
+            let info = Info {
+                pid,
+                url: format!("http://{addr}/"),
+                link: String::new(),
+                addr: addr.to_owned(),
+                store: self.store.display().to_string(),
+                started_at: "2026-11-10T12:00:00Z".into(),
+                version: "0.0.0".into(),
+            };
+            instance::write(&self.store, &info).unwrap();
+        }
+
+        /// Puts `text` where the instance file goes.
+        fn write_text(&self, text: &str) {
+            let path = instance::path(&self.store).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+    }
+
+    impl Drop for Record {
+        fn drop(&mut self) {
+            if let Ok(path) = instance::path(&self.store) {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_dir(&path);
+            }
+        }
+    }
+
+    fn this_pid() -> i32 {
+        i32::try_from(std::process::id()).unwrap()
+    }
+
+    /// A serve recorded on the store, whose process is there and whose
+    /// address takes a connection, stops a second one, which names the
+    /// store, the address and the process (SV-02).
+    #[test]
+    fn a_serve_running_on_the_store_refuses_another() {
+        let record = Record::store();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        record.write(this_pid(), &addr);
+        let error = refuse_if_running(&record.store).unwrap_err();
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "cases serve is already running for {} at http://{addr}/ (pid {})",
+                record.store.display(),
+                this_pid()
+            )
+        );
+        // Every path to the store finds the one record.
+        let through = record
+            .store
+            .parent()
+            .unwrap()
+            .join("sub")
+            .join("..")
+            .join("cases.db");
+        assert!(refuse_if_running(&through).is_err());
+    }
+
+    /// With no serve recorded on the store, serve starts, and a serve
+    /// running on another store does not stop it.
+    #[test]
+    fn a_store_with_no_serve_recorded_is_free() {
+        let record = Record::store();
+        refuse_if_running(&record.store).unwrap();
+        let other = Record::store();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        other.write(this_pid(), &listener.local_addr().unwrap().to_string());
+        assert!(refuse_if_running(&other.store).is_err());
+        refuse_if_running(&record.store).unwrap();
+    }
+
+    /// A record left by a serve that stopped without removing it does not
+    /// stop serve: its process is gone, or not a process at all, or its
+    /// address takes no connection, as when the process id went to another
+    /// process.
+    #[test]
+    fn a_stale_record_does_not_refuse() {
+        let record = Record::store();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap().to_string();
+        // Above any pid_max, so no process has it.
+        for pid in [0, -1, i32::MAX] {
+            record.write(pid, &live);
+            refuse_if_running(&record.store).unwrap();
+        }
+        // Port 0 takes no connection.
+        record.write(this_pid(), "127.0.0.1:0");
+        refuse_if_running(&record.store).unwrap();
+        record.write(this_pid(), &live);
+        assert!(refuse_if_running(&record.store).is_err(), "the check above");
+    }
+
+    /// A file that does not read as an instance file, or cannot be read at
+    /// all, counts as no serve running, and serve starts.
+    #[test]
+    fn a_record_that_does_not_read_does_not_refuse() {
+        let record = Record::store();
+        for text in ["", "not an instance file", r#"{"pid": 1}"#] {
+            record.write_text(text);
+            assert!(instance::running(&record.store).is_err(), "{text:?}");
+            refuse_if_running(&record.store).unwrap();
+        }
+        let path = instance::path(&record.store).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(instance::running(&record.store).is_err(), "a directory");
+        refuse_if_running(&record.store).unwrap();
+    }
+
+    /// A context whose config file holds `text`.
+    fn ctx_with(dir: &Path, text: &str) -> Ctx {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let config = config::load(Some(path.to_str().unwrap()));
+        assert!(config.error.is_none(), "{:?}", config.error);
+        let store = dir.join("cases.db");
+        Ctx {
+            store: store::AnyStore::Local(Db::new(&store)),
+            target: Target::Local { path: store },
+            config,
+            store_flag: None,
+            out: io::stdout().lock(),
+        }
+    }
+
+    /// A tokens file with `lines`, private to its owner.
+    fn tokens_file(dir: &Path, lines: &str) -> PathBuf {
+        let path = dir.join("store-tokens");
+        std::fs::write(&path, lines).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        path
+    }
+
+    /// With no `store-tokens-file`, or a blank one, serve takes no token.
+    #[test]
+    fn no_store_tokens_file_is_no_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = "a".repeat(32);
+        tokens_file(dir.path(), &token);
+        for text in [
+            "",
+            "store-tokens-file = \"\"\n",
+            "store-tokens-file = \"  \"\n",
+        ] {
+            let tokens = store_tokens(&ctx_with(dir.path(), text)).unwrap();
+            assert!(!tokens.has(token.as_bytes()), "{text:?}");
+            assert_eq!(format!("{tokens:?}"), "Tokens(0 kept)", "{text:?}");
+        }
+    }
+
+    /// serve takes the tokens of the file `store-tokens-file` names, with
+    /// the space around the name trimmed.
+    #[test]
+    fn a_store_tokens_file_gives_its_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = ("a".repeat(32), "b".repeat(40));
+        let path = tokens_file(dir.path(), &format!("# serve's tokens\n{one}\n\n{two}\n"));
+        let text = format!("store-tokens-file = \" {} \"\n", path.display());
+        let tokens = store_tokens(&ctx_with(dir.path(), &text)).unwrap();
+        assert!(tokens.has(one.as_bytes()));
+        assert!(tokens.has(two.as_bytes()));
+        assert!(!tokens.has("c".repeat(32).as_bytes()));
+        assert_eq!(format!("{tokens:?}"), "Tokens(2 kept)");
+    }
+
+    /// A `store-tokens-file` that cannot be read, holds no token or holds a
+    /// line that is not one stops serve, with an error that names the key
+    /// and the file and never the token.
+    #[test]
+    fn a_store_tokens_file_that_does_not_read_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let refusal = |path: &Path| {
+            let text = format!("store-tokens-file = \"{}\"\n", path.display());
+            store_tokens(&ctx_with(dir.path(), &text)).unwrap_err()
+        };
+        let error = refusal(&missing);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert!(
+            error.to_string().starts_with(&format!(
+                "the config file's store-tokens-file: cannot read {}: ",
+                missing.display()
+            )),
+            "{error}"
+        );
+
+        let empty = tokens_file(dir.path(), "# none yet\n\n");
+        let error = refusal(&empty);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the config file's store-tokens-file: {} holds no token; put one on a line of \
+                 its own, such as openssl rand -hex 32 gives",
+                empty.display()
+            )
+        );
+
+        let short = tokens_file(dir.path(), &format!("{}\nshort-secret\n", "a".repeat(32)));
+        let error = refusal(&short);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert!(
+            error.to_string().starts_with(&format!(
+                "the config file's store-tokens-file: line 2 of {}: ",
+                short.display()
+            )),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("short-secret"), "{error}");
+    }
 }
