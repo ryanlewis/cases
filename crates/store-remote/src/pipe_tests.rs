@@ -405,6 +405,34 @@ fn a_child_that_does_not_answer_times_out() {
 }
 
 #[test]
+fn a_child_that_does_not_read_a_large_request_times_out() {
+    // A request larger than the pipe (64 KiB on Linux) fills it, and the
+    // child, which never reads, would leave the write blocked until it
+    // exits, at 3 s.
+    let mut limits = quick();
+    limits.request = Duration::from_millis(300);
+    let (_dir, store) = over("sleep 3", &[], limits);
+    let large = Append {
+        data: format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"T","body":"{}"}}"#,
+            "x".repeat(200 * 1024)
+        ),
+        ..open()
+    };
+    let start = Instant::now();
+    let written = store.create(&large, &Writer::new(None));
+    assert!(
+        matches!(written, Err(StoreError::Store(Error::Transport { .. }))),
+        "{written:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
 fn a_dropped_connection_kills_a_child_that_does_not_exit() {
     let pid_file: PathBuf;
     let start;
