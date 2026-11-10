@@ -1284,8 +1284,28 @@ fn stop_begun(addr: &str) {
                     std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
                 ) => {}
             Err(error) => panic!("{error}"),
-            Ok(_) => assert!(Instant::now() < deadline, "the stop did not begin"),
+            Ok(_) => {}
         }
+        assert!(Instant::now() < deadline, "the stop did not begin");
+    }
+}
+
+/// Waits until a thread of `pid` is held in a write to stdout, as on a
+/// terminal whose output is stopped: `/proc` gives the call a thread is in,
+/// by its number (1 is `write`) and its first argument (the fd).
+#[cfg(target_os = "linux")]
+fn held_writing(pid: i32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tasks = fs::read_dir(format!("/proc/{pid}/task")).unwrap();
+        if tasks.flatten().any(|task| {
+            fs::read_to_string(task.path().join("syscall"))
+                .is_ok_and(|call| call.starts_with("1 0x1 "))
+        }) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "no write of {pid} was held");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -1322,18 +1342,22 @@ fn on_a_terminal_the_last_frame_shows_what_the_stop_closed() {
     let mut terminal = Terminal::start(&env, &run);
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
-    let _reap = Reap(pid);
+    let reap = Reap(pid);
     let stalled = held(&addr, &csrf(&addr));
     terminal.type_keys("q");
     // The grace is 5 s, within wait_for's 10.
     terminal.wait_for("closed 1 connections still open 5 s after the stop");
     terminal.wait_for("exit=0");
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
     drop(stalled);
 }
 
 /// A second Ctrl-C ends serve on a terminal whose output is stopped
 /// (Ctrl-S), where the write that puts the terminal back cannot finish: it
-/// exits a moment later whatever that write does.
+/// exits a moment later whatever that write does. On Linux, where `/proc`
+/// shows that serve's output is held.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     let env = Env::new();
@@ -1341,15 +1365,24 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     let mut terminal = Terminal::start(&env, &run);
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
-    let _reap = Reap(pid);
+    let reap = Reap(pid);
     let token = csrf(&addr);
-    // Ctrl-S, typed before the connection below, which takes round trips
-    // to serve, is in force by the time the signals come.
     terminal.type_keys("\x13");
+    // A load of the page is counted and logged on the screen, so serve draws
+    // a frame, which the stopped terminal holds.
+    let mut page = common::serve::connect(&addr);
+    write!(
+        page,
+        "GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    std::io::Read::read_to_end(&mut page, &mut Vec::new()).unwrap();
+    held_writing(pid);
     let stalled = held(&addr, &token);
     let signal = |pid: i32| {
-        let pid = rustix::process::Pid::from_raw(pid).unwrap();
-        rustix::process::kill_process(pid, Signal::INT).unwrap();
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process(pid, Signal::INT);
+        }
     };
     signal(pid);
     stop_begun(&addr);
@@ -1359,6 +1392,7 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
         ends_within(pid, Duration::from_secs(3)),
         "serve did not end on a stopped terminal"
     );
+    std::mem::forget(reap);
     // Ctrl-Q lets the terminal show what was held.
     terminal.type_keys("\x11");
     terminal.wait_for("exit=130");
