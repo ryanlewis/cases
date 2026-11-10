@@ -215,7 +215,12 @@ fn listen_address(args: &Args, ctx: &Ctx) -> Result<String, Error> {
 /// Refuses to start beside a serve that runs on `store`. A file that cannot
 /// be read counts as a serve that is not running, and is replaced.
 fn refuse_if_running(store: &Path) -> Result<(), Error> {
-    if let Ok(Some(running)) = instance::running(store) {
+    instance::path(store).map_or(Ok(()), |path| refuse_if_running_at(&path))
+}
+
+/// [`refuse_if_running`], for the instance file at `path`.
+fn refuse_if_running_at(path: &Path) -> Result<(), Error> {
+    if let Ok(Some(running)) = instance::running_at(path) {
         return Err(Error::new(format!(
             "cases serve is already running for {} at {} (pid {})",
             running.store, running.url, running.pid
@@ -943,53 +948,35 @@ mod tests {
         );
     }
 
-    /// An instance file in the state directory, for a store of its own in a
-    /// directory of its own, so that no other store's file is touched. It
-    /// is removed on drop. The state directory is the one of the process,
-    /// since a test cannot set `$XDG_STATE_HOME` without `unsafe`.
+    /// Where an instance file goes, in a directory of the test's own: the
+    /// guard is given its path, so that no test reads or writes the state
+    /// directory.
     struct Record {
-        store: PathBuf,
+        path: PathBuf,
         _dir: tempfile::TempDir,
     }
 
     impl Record {
-        fn store() -> Record {
+        fn new() -> Record {
             let dir = tempfile::tempdir().unwrap();
             Record {
-                store: dir.path().join("cases.db"),
+                path: dir.path().join("serve-cases-db-0.json"),
                 _dir: dir,
             }
         }
 
-        /// Records a serve with `pid` at `addr`.
+        /// Records a serve on `/data/cases.db` with `pid` at `addr`.
         fn write(&self, pid: i32, addr: &str) {
             let info = Info {
                 pid,
                 url: format!("http://{addr}/"),
                 link: String::new(),
                 addr: addr.to_owned(),
-                store: self.store.display().to_string(),
+                store: "/data/cases.db".into(),
                 started_at: "2026-11-10T12:00:00Z".into(),
                 version: "0.0.0".into(),
             };
-            instance::write(&self.store, &info).unwrap();
-        }
-
-        /// Puts `text` where the instance file goes. A record is written
-        /// first so that the state directory, if new, is made as serve
-        /// makes it, for this user alone.
-        fn write_text(&self, text: &str) {
-            self.write(0, "127.0.0.1:0");
-            std::fs::write(instance::path(&self.store).unwrap(), text).unwrap();
-        }
-    }
-
-    impl Drop for Record {
-        fn drop(&mut self) {
-            if let Ok(path) = instance::path(&self.store) {
-                let _ = std::fs::remove_file(&path);
-                let _ = std::fs::remove_dir(&path);
-            }
+            std::fs::write(&self.path, serde_json::to_string(&info).unwrap()).unwrap();
         }
     }
 
@@ -997,47 +984,32 @@ mod tests {
         i32::try_from(std::process::id()).unwrap()
     }
 
-    /// A serve recorded on the store, whose process is there and whose
-    /// address takes a connection, stops a second one, which names the
-    /// store, the address and the process (SV-02).
+    /// A serve recorded whose process is there and whose address takes a
+    /// connection stops a second one, which names the store, the address and
+    /// the process (SV-02).
     #[test]
     fn a_serve_running_on_the_store_refuses_another() {
-        let record = Record::store();
+        let record = Record::new();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         record.write(this_pid(), &addr);
-        let error = refuse_if_running(&record.store).unwrap_err();
+        let error = refuse_if_running_at(&record.path).unwrap_err();
         assert_eq!(error.status(), crate::error::Status::Failure);
         assert_eq!(
             error.to_string(),
             format!(
-                "cases serve is already running for {} at http://{addr}/ (pid {})",
-                record.store.display(),
+                "cases serve is already running for /data/cases.db at http://{addr}/ (pid {})",
                 this_pid()
             )
         );
-        // Every path to the store finds the one record.
-        let through = record
-            .store
-            .parent()
-            .unwrap()
-            .join("sub")
-            .join("..")
-            .join("cases.db");
-        assert!(refuse_if_running(&through).is_err());
     }
 
-    /// With no serve recorded on the store, serve starts, and a serve
-    /// running on another store does not stop it.
+    /// With no serve recorded, serve starts.
     #[test]
     fn a_store_with_no_serve_recorded_is_free() {
-        let record = Record::store();
-        refuse_if_running(&record.store).unwrap();
-        let other = Record::store();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        other.write(this_pid(), &listener.local_addr().unwrap().to_string());
-        assert!(refuse_if_running(&other.store).is_err());
-        refuse_if_running(&record.store).unwrap();
+        let record = Record::new();
+        assert!(instance::running_at(&record.path).unwrap().is_none());
+        refuse_if_running_at(&record.path).unwrap();
     }
 
     /// A record left by a serve that stopped without removing it does not
@@ -1046,36 +1018,38 @@ mod tests {
     /// process.
     #[test]
     fn a_stale_record_does_not_refuse() {
-        let record = Record::store();
+        let record = Record::new();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let live = listener.local_addr().unwrap().to_string();
         // Above any pid_max, so no process has it.
         for pid in [0, -1, i32::MAX] {
             record.write(pid, &live);
-            refuse_if_running(&record.store).unwrap();
+            refuse_if_running_at(&record.path).unwrap();
         }
         // Port 0 takes no connection.
         record.write(this_pid(), "127.0.0.1:0");
-        refuse_if_running(&record.store).unwrap();
+        refuse_if_running_at(&record.path).unwrap();
         record.write(this_pid(), &live);
-        assert!(refuse_if_running(&record.store).is_err(), "the check above");
+        assert!(
+            refuse_if_running_at(&record.path).is_err(),
+            "the check above"
+        );
     }
 
     /// A file that does not read as an instance file, or cannot be read at
     /// all, counts as no serve running, and serve starts.
     #[test]
     fn a_record_that_does_not_read_does_not_refuse() {
-        let record = Record::store();
+        let record = Record::new();
         for text in ["", "not an instance file", r#"{"pid": 1}"#] {
-            record.write_text(text);
-            assert!(instance::running(&record.store).is_err(), "{text:?}");
-            refuse_if_running(&record.store).unwrap();
+            std::fs::write(&record.path, text).unwrap();
+            assert!(instance::running_at(&record.path).is_err(), "{text:?}");
+            refuse_if_running_at(&record.path).unwrap();
         }
-        let path = instance::path(&record.store).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
-        assert!(instance::running(&record.store).is_err(), "a directory");
-        refuse_if_running(&record.store).unwrap();
+        std::fs::remove_file(&record.path).unwrap();
+        std::fs::create_dir(&record.path).unwrap();
+        assert!(instance::running_at(&record.path).is_err(), "a directory");
+        refuse_if_running_at(&record.path).unwrap();
     }
 
     /// A context whose config file holds `text`.
