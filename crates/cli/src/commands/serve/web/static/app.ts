@@ -96,6 +96,126 @@ function scrolled(): Scroll {
   return { y: window.scrollY, list: list ? list.scrollTop : 0, work: work ? work.scrollTop : 0 };
 }
 
+// What the page follows the store with (useLive): the store's version it
+// last read at, a read of what it shows, a check of serve's build, who it
+// takes to be listening after a read of them, and its clock and data.
+interface Live {
+  version: { current: string };
+  refresh: () => Promise<void>;
+  checkBuild: () => Promise<void>;
+  heard: (read: Listener[] | null) => Listener[] | null;
+  setNow: (now: number) => void;
+  setData: (update: (was: Data | null) => Data | null) => void;
+}
+
+// The page following the store: the event stream, the minute's tick and
+// the 15 s read of who is listening, each an effect of App's, in App's
+// order. Each runs once, with what App's first draw gave it.
+function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live): void {
+  // The event stream (IN-06). One tab of the browser holds it, shown or
+  // hidden: a browser allows six connections to one address, shared by all
+  // its tabs, and each stream holds one. The holder is the tab that holds
+  // the "cases-stream" lock; it passes each version to the other tabs, which
+  // read the store at once too. When the holder goes, the lock passes to
+  // another tab, which opens its stream from the last version it had, which
+  // serve answers at once if the store has moved since. So a hidden tab
+  // follows the store, and its title with it, as a shown one does. Where
+  // the browser has no locks, only a tab that is shown holds a stream, as
+  // before.
+  useEffect(() => {
+    const channel = "BroadcastChannel" in window ? new BroadcastChannel("cases-store") : null;
+    const locks = channel && "locks" in navigator ? navigator.locks : null;
+    let stream: EventSource | null = null;
+    let dropped = false;
+    let gone = false;
+    let release: (() => void) | null = null;
+    const seen = (v: string) => {
+      if (v === version.current) return;
+      version.current = v;
+      refresh();
+    };
+    const open = () => {
+      if (stream || !window.EventSource || (channel && !locks && document.hidden)) return;
+      const after = version.current ? `?after=${encodeURIComponent(version.current)}` : "";
+      stream = new EventSource(`/v1/changes${after}`);
+      stream.onmessage = (e) => {
+        if (channel) channel.postMessage(e.data);
+        seen(e.data);
+      };
+      stream.onerror = () => (dropped = true);
+      // Whenever the stream opens, serve may be another build: it may have
+      // been upgraded while this tab held no stream, or while the stream was
+      // down (IN-12). A read set off as the stream dropped, as when serve
+      // restarts, may have failed with it: read again.
+      stream.onopen = () => {
+        checkBuild();
+        if (dropped) refresh();
+        // The other tabs hold no stream of their own: they check the build
+        // too, and read again after a drop.
+        if (channel && locks) channel.postMessage({ opened: true, dropped });
+        dropped = false;
+      };
+    };
+    const close = () => {
+      if (stream) stream.close();
+      stream = null;
+    };
+    if (channel) {
+      channel.onmessage = (e) => {
+        if (typeof e.data === "string") return seen(e.data);
+        checkBuild();
+        if (e.data && e.data.dropped) refresh();
+      };
+    }
+    const visibility = () => (document.hidden ? close() : open());
+    if (locks) {
+      // Held until this page goes: the browser lets it go with the page.
+      locks
+        .request("cases-stream", () => {
+          if (gone) return undefined;
+          open();
+          return new Promise<void>((resolve) => (release = resolve));
+        })
+        .catch(() => {});
+    } else {
+      document.addEventListener("visibilitychange", visibility);
+      open();
+    }
+    return () => {
+      gone = true;
+      close();
+      if (release) release();
+      document.removeEventListener("visibilitychange", visibility);
+      if (channel) channel.close();
+    };
+  }, []);
+
+  // Ages stay right, and a lost message is caught up, once a minute. So is
+  // an upgrade, for a browser whose stream did not come back after serve
+  // restarted (IN-12).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      refresh();
+      checkBuild();
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Who is listening changes with no event in the store, as each wait
+  // refreshes its record (ST-16): while the page shows it, on the inbox-zero
+  // panel or in the composer, it is read again every 15 s.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (!document.querySelector(".zero-panel, #compose")) return;
+      const listeners = heard(await api.listeners());
+      setNow(Date.now());
+      setData((was) => (was ? { ...was, listeners } : was));
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
+}
+
 function App({ build }: { build: string }) {
   const [first] = useState(() => arrive(here()));
   const [route, setRoute] = useState<Route>(first.route);
@@ -294,108 +414,7 @@ function App({ build }: { build: string }) {
     entry.opened({ to: composing.to, re: composing.re });
   }, [composing]);
 
-  // The event stream (IN-06). One tab of the browser holds it, shown or
-  // hidden: a browser allows six connections to one address, shared by all
-  // its tabs, and each stream holds one. The holder is the tab that holds
-  // the "cases-stream" lock; it passes each version to the other tabs, which
-  // read the store at once too. When the holder goes, the lock passes to
-  // another tab, which opens its stream from the last version it had, which
-  // serve answers at once if the store has moved since. So a hidden tab
-  // follows the store, and its title with it, as a shown one does. Where
-  // the browser has no locks, only a tab that is shown holds a stream, as
-  // before.
-  useEffect(() => {
-    const channel = "BroadcastChannel" in window ? new BroadcastChannel("cases-store") : null;
-    const locks = channel && "locks" in navigator ? navigator.locks : null;
-    let stream: EventSource | null = null;
-    let dropped = false;
-    let gone = false;
-    let release: (() => void) | null = null;
-    const seen = (v: string) => {
-      if (v === version.current) return;
-      version.current = v;
-      refresh();
-    };
-    const open = () => {
-      if (stream || !window.EventSource || (channel && !locks && document.hidden)) return;
-      const after = version.current ? `?after=${encodeURIComponent(version.current)}` : "";
-      stream = new EventSource(`/v1/changes${after}`);
-      stream.onmessage = (e) => {
-        if (channel) channel.postMessage(e.data);
-        seen(e.data);
-      };
-      stream.onerror = () => (dropped = true);
-      // Whenever the stream opens, serve may be another build: it may have
-      // been upgraded while this tab held no stream, or while the stream was
-      // down (IN-12). A read set off as the stream dropped, as when serve
-      // restarts, may have failed with it: read again.
-      stream.onopen = () => {
-        checkBuild();
-        if (dropped) refresh();
-        // The other tabs hold no stream of their own: they check the build
-        // too, and read again after a drop.
-        if (channel && locks) channel.postMessage({ opened: true, dropped });
-        dropped = false;
-      };
-    };
-    const close = () => {
-      if (stream) stream.close();
-      stream = null;
-    };
-    if (channel) {
-      channel.onmessage = (e) => {
-        if (typeof e.data === "string") return seen(e.data);
-        checkBuild();
-        if (e.data && e.data.dropped) refresh();
-      };
-    }
-    const visibility = () => (document.hidden ? close() : open());
-    if (locks) {
-      // Held until this page goes: the browser lets it go with the page.
-      locks
-        .request("cases-stream", () => {
-          if (gone) return undefined;
-          open();
-          return new Promise<void>((resolve) => (release = resolve));
-        })
-        .catch(() => {});
-    } else {
-      document.addEventListener("visibilitychange", visibility);
-      open();
-    }
-    return () => {
-      gone = true;
-      close();
-      if (release) release();
-      document.removeEventListener("visibilitychange", visibility);
-      if (channel) channel.close();
-    };
-  }, []);
-
-  // Ages stay right, and a lost message is caught up, once a minute. So is
-  // an upgrade, for a browser whose stream did not come back after serve
-  // restarted (IN-12).
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(Date.now());
-      refresh();
-      checkBuild();
-    }, 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Who is listening changes with no event in the store, as each wait
-  // refreshes its record (ST-16): while the page shows it, on the inbox-zero
-  // panel or in the composer, it is read again every 15 s.
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      if (!document.querySelector(".zero-panel, #compose")) return;
-      const listeners = heard(await api.listeners());
-      setNow(Date.now());
-      setData((was) => (was ? { ...was, listeners } : was));
-    }, 15000);
-    return () => clearInterval(timer);
-  }, []);
+  useLive({ version, refresh, checkBuild, heard, setNow, setData });
 
   // Links to the app's pages move within it; the browser's back and
   // forward buttons too, back to where each page was scrolled.
