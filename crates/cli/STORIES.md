@@ -46,6 +46,12 @@ Tally: 434 criteria, 368 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 - The line has `state: "pickedup"`, the answer, and the revision after pickup that `close --revision` takes: `crates/cli/tests/wait.rs::wait_pickup_picks_up_the_answer`, `the_recipe_catches_an_answer_that_lands_before_the_wait_starts`
 - One `agent pickup` event with `by`, as the worker's actor: `crates/cli/tests/wait.rs::wait_pickup_picks_up_the_answer`, `a_pickup_that_makes_its_actor_names_it`
 - A later wait never prints that case again, unless the human withdraws it (AG-04): `crates/cli/tests/wait.rs::the_recipe_catches_an_answer_that_lands_before_the_wait_starts`, `a_human_withdraw_of_a_case_an_agent_has_wakes_wait_once`
+- `open --wait` prints the id first, flushed, then does what `wait --id <id> --since <id> --pickup --by <worker>` does: the same lines, stderr and exit; with no worker, it picks up by no name: `crates/cli/tests/open.rs::open_wait_prints_the_id_then_what_the_chained_wait_prints`, `open_wait_with_no_worker_picks_up_by_no_name`
+- `open --wait --timeout D` gives up after D as `wait` does, exit 2, with the id on stdout and the case left open: `crates/cli/tests/open.rs::open_wait_that_times_out_leaves_the_id_on_stdout_and_exits_2`
+- `--timeout` without `--wait` is refused, exit 1, nothing written: `crates/cli/tests/open.rs::open_refuses_a_timeout_without_wait_and_writes_nothing`
+- `--json` with `--wait` is refused, exit 1, nothing written: `crates/cli/tests/open.rs::open_refuses_json_with_wait_and_writes_nothing`
+- `open --wait` with a config file whose mood the wait refuses is refused before the case is opened, exit 1, nothing written: `crates/cli/tests/open.rs::open_wait_refuses_a_bad_mood_before_it_opens_the_case`
+- On a forwarded store, `open --wait` opens and picks up on the far side, and lets its locks there go: `crates/cli/tests/forward.rs::open_wait_over_ssh_opens_waits_and_picks_up_on_the_far_side`
 
 ## AG-04 Wait for a human event (change)
 
@@ -462,6 +468,7 @@ Tally: 434 criteria, 368 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 - The first open, the agent's or a message the human sends, creates the file and directory; a listener never does; reads see an empty store; wait waits: `crates/store-sqlite/tests/store.rs::only_create_makes_the_store`, `crates/cli/tests/list.rs::list_on_a_store_that_is_not_there_is_empty`, `crates/cli/tests/show.rs::show_on_a_store_that_is_not_there`, `crates/cli/tests/prune.rs::prune_on_a_store_that_is_not_there_does_nothing`, `crates/cli/tests/sweep.rs::sweep_on_a_store_that_is_not_there_does_nothing`, `crates/cli/tests/api.rs::a_store_not_made_yet_lists_no_cases`, `crates/cli/tests/wait.rs::wait_waits_for_a_store_that_is_not_there_yet`, `crates/cli/tests/api.rs::a_refused_message_makes_no_case`, `crates/cli/tests/message.rs::a_message_needs_who_it_goes_to_and_the_human_s_name`, `crates/store-sqlite/src/listen.rs::tests::a_listener_never_makes_the_store`
 - An empty file reads as no store: `crates/store-sqlite/tests/store.rs::an_empty_file_reads_as_no_store`
 - Leftover -wal and -shm files without the store: creating is refused: `crates/store-sqlite/tests/store.rs::create_refuses_the_files_of_a_removed_store`
+- A new store is for its owner alone, the file and its -wal and -shm 0600 and each directory made for it 0700; an existing store, an empty file made into one and a directory that was there keep their modes: `crates/store-sqlite/tests/store.rs::a_new_store_is_private`, `a_new_store_leaves_a_directory_that_was_there_as_it_was`, `an_empty_file_made_into_a_store_keeps_its_mode`, `an_existing_store_and_its_directory_keep_their_modes`
 - Two writers creating at once end with one store: `crates/store-sqlite/tests/store.rs::creators_racing_to_make_the_store_make_one`, `create_waits_for_another_writer_making_the_store`
 
 ## ST-09 Let several writers share a store (keep)
