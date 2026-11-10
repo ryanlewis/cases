@@ -1413,25 +1413,7 @@ fn print(
 ) -> Result<(), Error> {
     turns.sort_by_key(|turn| turn.at);
     let next_since = turns.iter().filter_map(|turn| turn.at).chain(since).max();
-    // Only a whole case names its actors, so a short line needs none. Read
-    // before any pickup, so that a store that cannot give them fails wait
-    // before it writes. A message wait took is picked up already, so it is
-    // printed with its actors named by id alone rather than lost.
-    let read = if args.full {
-        actors_of(ctx)
-    } else {
-        Ok(Known::default())
-    };
-    let mut actors = match read {
-        Ok(actors) => actors,
-        Err(error) if turns.iter().any(|turn| turn.taken) => {
-            ctx::warn(format_args!(
-                "the actors cannot be read, so they are named by id: {error}"
-            ));
-            Known::default()
-        }
-        Err(error) => return Err(error),
-    };
+    let mut actors = actors_to_name(args, ctx, &turns)?;
     // The messages wait took whose lines are not printed yet.
     let mut unprinted: Vec<Key> = turns
         .iter()
@@ -1440,58 +1422,115 @@ fn print(
         .collect();
     let by = args.by.as_deref().unwrap_or_default();
     for mut turn in turns {
-        // A pickup wait whose locks on the far side may have been let go
-        // picks up nothing more: the case is printed as read, as one whose
-        // pickup failed is.
         let picked = args.pickup
             && turn.case.state() == State::Answered
-            && match far.map(FarLocks::write).transpose() {
-                Err(error) => {
-                    ctx::warn(format_args!("{}: not picked up: {error}", turn.key));
-                    false
-                }
-                Ok(writing) => {
-                    let picked = pick_up(ctx, by, &mut turn);
-                    if picked && let Some(writing) = writing {
-                        writing.owe(turn.key);
-                    }
-                    picked
-                }
-            };
-        // A pickup makes its actor when the table does not have it, such as
-        // for a case opened by hand, so the table is read again then, and
-        // only then: the pickup's actor is the case's agent, its worker or a
-        // message's taker, whom the table has after the first pickup by it.
-        // A read that fails keeps
-        // the table read before, so that the case is still printed.
-        if args.full
-            && picked
-            && !actors.has(turn.case.events().last().and_then(Event::actor))
-            && let Ok(now) = actors_of(ctx)
-        {
-            actors = now;
+            && pick_up_under(ctx, by, &mut turn, far);
+        if args.full && picked {
+            learn_actor(ctx, &turn, &mut actors);
         }
-        let printed = match line(&turn, &actors.actors, next_since, args.full) {
-            Ok(text) => {
-                writeln!(ctx.out, "{text}").map_err(|error| (error.to_string(), Error::from(error)))
-            }
-            Err(error) => Err((error.to_string(), error)),
-        };
-        if let Err((why, error)) = printed {
-            let lost = picked.then_some(turn.key).into_iter().chain(unprinted);
-            for key in lost {
-                ctx::warn(format_args!("{key}: picked up, but not printed: {why}"));
-            }
+        if let Err((why, error)) = write_line(ctx, &turn, &actors, next_since, args.full) {
+            warn_lost(picked.then_some(turn.key), unprinted, &why);
             return Err(error);
         }
         unprinted.retain(|key| *key != turn.key);
         // Only once the line is out: a signal while it is printed names
         // the case too, rather than wait on a stdout that may be full.
-        if let Some(mut owed) = far.map(FarLocks::owed) {
-            owed.retain(|key| *key != turn.key);
-        }
+        settle(far, turn.key);
     }
     Ok(())
+}
+
+/// Names on stderr each case picked up whose line will not be printed now:
+/// `picked`, the case whose line failed, then the messages wait took that
+/// are still `unprinted`, so that no later wait is expected to take them.
+fn warn_lost(picked: Option<Key>, unprinted: Vec<Key>, why: &str) {
+    for key in picked.into_iter().chain(unprinted) {
+        ctx::warn(format_args!("{key}: picked up, but not printed: {why}"));
+    }
+}
+
+/// Marks the case `key` as no longer owed to the far side, `far`, once its
+/// line is out.
+fn settle(far: Option<&FarLocks>, key: Key) {
+    if let Some(mut owed) = far.map(FarLocks::owed) {
+        owed.retain(|owed| *owed != key);
+    }
+}
+
+/// The actors a wait's lines are named from. Only a whole case names its
+/// actors, so a short line needs none. Read before any pickup, so that a
+/// store that cannot give them fails wait before it writes. A message wait
+/// took is picked up already, so it is printed with its actors named by id
+/// alone rather than lost: such a wait warns and goes on, while one that
+/// took nothing fails.
+fn actors_to_name(args: &Args, ctx: &Ctx, turns: &[Turn]) -> Result<Known, Error> {
+    let read = if args.full {
+        actors_of(ctx)
+    } else {
+        Ok(Known::default())
+    };
+    match read {
+        Ok(actors) => Ok(actors),
+        Err(error) if turns.iter().any(|turn| turn.taken) => {
+            ctx::warn(format_args!(
+                "the actors cannot be read, so they are named by id: {error}"
+            ));
+            Ok(Known::default())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Picks up the answered case of `turn`, as [`pick_up`] does, unless the
+/// wait's locks on the far side, `far`, may have been let go: then it picks
+/// up nothing, and the case is printed as read, as one whose pickup failed
+/// is. A case picked up is owed to the far side until its line is out. Says
+/// whether it picked the case up.
+fn pick_up_under(ctx: &Ctx, by: &str, turn: &mut Turn, far: Option<&FarLocks>) -> bool {
+    match far.map(FarLocks::write).transpose() {
+        Err(error) => {
+            ctx::warn(format_args!("{}: not picked up: {error}", turn.key));
+            false
+        }
+        Ok(writing) => {
+            let picked = pick_up(ctx, by, turn);
+            if picked && let Some(writing) = writing {
+                writing.owe(turn.key);
+            }
+            picked
+        }
+    }
+}
+
+/// Reads the table of actors again after a pickup whose actor it does not
+/// have. A pickup makes its actor when the table does not have it, such as
+/// for a case opened by hand, so the table is read again then, and only
+/// then: the pickup's actor is the case's agent, its worker or a message's
+/// taker, whom the table has after the first pickup by it. A read that fails
+/// keeps the table read before, so that the case is still printed.
+fn learn_actor(ctx: &Ctx, turn: &Turn, actors: &mut Known) {
+    if !actors.has(turn.case.events().last().and_then(Event::actor))
+        && let Ok(now) = actors_of(ctx)
+    {
+        *actors = now;
+    }
+}
+
+/// Writes the line of `turn` to stdout. On failure, gives why, as the
+/// warnings about cases picked up but not printed say it, with the error.
+fn write_line(
+    ctx: &mut Ctx,
+    turn: &Turn,
+    actors: &Known,
+    next_since: Option<Time>,
+    full: bool,
+) -> Result<(), (String, Error)> {
+    match line(turn, &actors.actors, next_since, full) {
+        Ok(text) => {
+            writeln!(ctx.out, "{text}").map_err(|error| (error.to_string(), Error::from(error)))
+        }
+        Err(error) => Err((error.to_string(), error)),
+    }
 }
 
 /// The store's table of actors, as a `--full` wait names them from, with

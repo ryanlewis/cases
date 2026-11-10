@@ -66,10 +66,15 @@ fn status_without_serve_is_not_running() {
 #[test]
 fn a_stale_instance_file_is_not_running() {
     // Nothing accepts on the address: serve stopped without removing its
-    // file, and the system may have given its pid to another process.
+    // file, and the system may have given its pid to another process, here
+    // this test's. Port 0 takes no connection, ever: a port freed for the
+    // test could be taken by another before status dials it.
     let env = Env::new();
-    let (listener, _) = env.fake_serve("127.0.0.1:0");
-    drop(listener);
+    let info = serde_json::json!({
+        "pid": std::process::id(), "url": "http://127.0.0.1:0/", "addr": "127.0.0.1:0",
+        "store": std::path::absolute(&env.store).unwrap(), "started_at": "2026-09-25T12:00:00Z", "version": "0.0.0",
+    });
+    write_file(&env.instance_file(), &info.to_string());
     assert_not_running(&env);
 
     // A process that is gone, with something else on the address.
