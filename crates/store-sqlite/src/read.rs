@@ -90,7 +90,7 @@ impl At {
     fn read(tx: &Transaction<'_>) -> Result<At, Error> {
         // A store not upgraded yet, as one that could not be written when
         // it was opened, has no id and no logs: no id, no tag.
-        let store = crate::schema::upgraded(tx)?;
+        let store = crate::schema::upgraded_store_id(tx)?;
         // The highest change and key, each 0 before its first, and the
         // number of cases, in one statement.
         let (change, key, count) = tx.query_row(
