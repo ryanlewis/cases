@@ -218,7 +218,10 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     let append = Append::new(Author::Agent, &Record::Open(open));
     let (key, case) = ctx.store.create(&append, &writer)?;
     warn_options(&args.options, 1);
-    ctx::warn_unwoken(ctx, &case, true);
+    // A command that goes on to wait on the case hears its answer itself.
+    if !args.wait {
+        ctx::warn_unwoken(ctx, &case, true);
+    }
     if args.json {
         output::json(&mut ctx.out, &Written::new(key, &case))?;
     } else {
