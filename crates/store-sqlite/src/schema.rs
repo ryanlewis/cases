@@ -737,8 +737,10 @@ CREATE TABLE archive_events (
             format!("{column}{id}"),
             logs.to_owned(),
             format!("{logs}{column}"),
-            format!("{logs}{column}{id}DROP TRIGGER gone_log;"),
             format!("{logs}{column}{id}DROP TABLE removed;"),
+            format!("{logs}{column}{id}DROP TRIGGER removed_log;"),
+            format!("{logs}{column}{id}DROP TRIGGER gone_log;"),
+            format!("{logs}{column}{id}DROP TRIGGER gone_log; DROP TABLE gone;"),
         ] {
             assert_eq!(read(&parts), older, "{parts}");
         }
