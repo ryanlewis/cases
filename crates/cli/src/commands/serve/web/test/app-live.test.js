@@ -9,7 +9,7 @@
 // it.
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { INDEX, LISTENERS, OTHERS, WAITING, element, form, link, nodes, openApp } from "./app-page.js";
+import { INDEX, LISTENERS, NOW, OTHERS, WAITING, element, form, link, nodes, openApp } from "./app-page.js";
 import { decision, steps } from "./case.js";
 
 const kase = (id, title, fields = {}) => ({ ...decision("open", steps.open), id, title, ...fields });
@@ -108,26 +108,194 @@ test("with no EventSource, no stream is opened, and the minute tick still follow
   p.app.unmount();
 });
 
-test("the minute tick moves the clock, reads the lists and the listeners and checks the build, once each", async () => {
+test("the minute tick, while this tab holds a stream, moves the clock, checks the build and opens the stream again: it reads no case", async () => {
   const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
   p.taken();
   await p.tick(59999);
   assert.deepEqual(p.taken(), []);
+  assert.equal(p.streams.length, 1);
   await p.tick(1);
-  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX]);
   assert.equal(p.page.props.now, Date.parse("2026-09-25T13:46:00Z"));
+  // The stream is opened again from the version the page has.
+  assert.deepEqual(p.streams.map((s) => [s.url, s.closed]), [["/v1/changes", true], ["/v1/changes?after=v1", false]]);
+  // Its open checks nothing more: the tick did.
+  p.stream.onopen();
+  await p.settle();
+  assert.deepEqual(p.taken(), []);
   await p.tick(120000);
-  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX, WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX, LISTENERS, INDEX]);
+  assert.equal(p.streams.length, 4);
   p.app.unmount();
   await p.tick(60000);
   assert.deepEqual(p.taken(), []);
+  assert.equal(p.streams.length, 4);
+  assert.ok(p.streams.every((s) => s.closed));
 });
 
-test("the minute tick on a case's page reads the case too", async () => {
-  const p = await openApp({ url: "/cases/cD5zS", server: { done: [shut] } });
+test("a stream the tick opened again that drops before it opens reads again as any drop does; later opens check the build", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  await p.tick(60000);
+  p.taken();
+  p.stream.onerror();
+  p.stream.onopen();
+  await p.settle();
+  assert.deepEqual(p.taken(), [INDEX, WAITING, OTHERS, LISTENERS]);
+  // Hidden and shown, the stream opened then checks the build as before.
+  for (const tick of [false, true]) {
+    if (tick) {
+      await p.tick(60000);
+      p.stream.onopen();
+      await p.settle();
+    }
+    p.taken();
+    p.document.hidden = true;
+    p.document.dispatch("visibilitychange");
+    p.document.hidden = false;
+    p.document.dispatch("visibilitychange");
+    p.stream.onopen();
+    await p.settle();
+    assert.deepEqual(p.taken(), [INDEX], `after a tick: ${tick}`);
+  }
+  p.app.unmount();
+});
+
+test("the tick, with the stream up, still reads who is listening, which moves no version", async () => {
+  const p = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a], listeners: [] } });
+  await event(p, "v1");
+  p.server.listeners = [listener];
+  await p.tick(60000);
+  assert.deepEqual(p.page.props.data.listeners.map((l) => l.worker), ["w1"]);
+  // Two failed reads in a row and who listens is not known (afterRead).
+  p.server.routes[LISTENERS] = () => ({ status: 500, body: null });
+  await p.tick(60000);
+  assert.deepEqual(p.page.props.data.listeners.map((l) => l.worker), ["w1"]);
+  await p.tick(60000);
+  assert.equal(p.page.props.data.listeners, null);
+  p.app.unmount();
+});
+
+test("the tick reads the store again after a read that failed, though the stream is up", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  p.server.routes[OTHERS] = () => ({ status: 500, body: { error: { category: "store", message: "the store is busy" } } });
+  p.server.waiting = [a, b];
+  await event(p, "v2");
+  assert.ok(p.html.includes('role="alert">the store is busy</p>'), p.html);
+  delete p.server.routes[OTHERS];
   p.taken();
   await p.tick(60000);
-  assert.deepEqual(p.taken(), [WAITING, OTHERS, "GET /v1/cases/cD5zS", LISTENERS, INDEX]);
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.ok(!p.html.includes('role="alert">'), p.html);
+  assert.deepEqual(p.page.props.data.inbox.map((c) => c.id), ["aB3xQ", "bC4yR"]);
+  // Read once it worked, the next tick opens the stream again.
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX]);
+  p.app.unmount();
+});
+
+test("a stream the tick opened again, closed before it opened, checks the build when it opens later", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  await p.tick(60000);
+  p.document.hidden = true;
+  p.document.dispatch("visibilitychange");
+  p.taken();
+  p.document.hidden = false;
+  p.document.dispatch("visibilitychange");
+  p.stream.onopen();
+  await p.settle();
+  assert.deepEqual(p.taken(), [INDEX]);
+  p.app.unmount();
+});
+
+test("the minute tick on a case's page reads no case either", async () => {
+  const p = await openApp({ url: "/cases/cD5zS", server: { done: [shut] } });
+  await event(p, "v1");
+  p.taken();
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX]);
+  p.app.unmount();
+});
+
+test("a change the stream lost is caught up when the tick opens it again", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  // The store moves, and the stream says nothing, as one that died without
+  // a word would.
+  p.server.waiting = [a, b];
+  await p.tick(60000);
+  p.taken();
+  // serve answers the stream opened after v1 at once, as the store moved.
+  p.stream.onopen();
+  await event(p, "v2");
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS]);
+  assert.deepEqual(p.page.props.data.inbox.map((c) => c.id), ["aB3xQ", "bC4yR"]);
+  p.app.unmount();
+});
+
+test("the minute tick reads the store, as before, while this tab's stream is down or it holds none", async () => {
+  // Dropped and not back: the store is read, and the build checked.
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  p.stream.onerror();
+  p.taken();
+  p.server.waiting = [a, b];
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.equal(p.streams.length, 1);
+  assert.deepEqual(p.page.props.data.inbox.map((c) => c.id), ["aB3xQ", "bC4yR"]);
+  // Once back, the tick opens it again instead.
+  p.stream.onopen();
+  await p.settle();
+  p.taken();
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX]);
+  p.app.unmount();
+  // A hidden tab, with no locks, holds no stream: it reads the store, and
+  // reads it again as it is shown.
+  const q = await openApp({ server: { waiting: [a] } });
+  await event(q, "v1");
+  q.document.hidden = true;
+  q.document.dispatch("visibilitychange");
+  q.taken();
+  q.server.waiting = [a, b];
+  await q.tick(60000);
+  assert.deepEqual(q.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.deepEqual(q.page.props.data.inbox.map((c) => c.id), ["aB3xQ", "bC4yR"]);
+  q.document.hidden = false;
+  q.document.dispatch("visibilitychange");
+  assert.equal(q.stream.url, "/v1/changes?after=v1");
+  q.app.unmount();
+});
+
+test("an hour of ticks keeps ages and the zero panel's day right, and reads no case while the stream holds", async () => {
+  // Ten minutes before the local midnight after NOW, with an answer given
+  // five minutes before that.
+  const midnight = new Date(NOW);
+  midnight.setHours(24, 0, 0, 0);
+  const now = midnight.getTime() - 10 * 60000;
+  const at = new Date(now - 5 * 60000).toISOString();
+  const answered = { ...decision("answered", { ...steps.open, at }, { ...steps.answer, at }), id: "gH8cW", title: "Answered late", answer: { answered_at: at } };
+  const p = await openApp({ now, server: { done: [answered] } });
+  await event(p, "v1");
+  assert.ok(p.html.includes("you answered <strong>1</strong> today"), p.html);
+  assert.ok(p.html.includes("answered 5m ago"), p.html);
+  p.taken();
+  for (let i = 0; i < 60; i++) await p.tick(60000);
+  // The panel's 15 s poll still reads the listeners; nothing reads a case.
+  const taken = p.taken();
+  assert.equal(taken.filter((r) => r === INDEX).length, 60);
+  assert.equal(taken.filter((r) => r === LISTENERS).length, 300);
+  assert.equal(taken.length, 360);
+  assert.equal(p.page.props.now, now + 3600000);
+  // Past midnight the answer is this week's, not today's, and an hour older.
+  assert.ok(!p.html.includes("today"), p.html);
+  assert.ok(p.html.includes("you answered <strong>1</strong> this week"), p.html);
+  assert.ok(p.html.includes('<p class="age">last answer 1h ago</p>'), p.html);
+  assert.ok(p.html.includes('<span class="unpicked">not picked up · 1h</span>'), p.html);
   p.app.unmount();
 });
 
@@ -849,6 +1017,14 @@ test("with locks, the tab that holds the lock holds the stream and passes each v
   assert.deepEqual(channel.posted.slice(1), [{ opened: true, dropped: true }]);
   p.stream.onopen();
   assert.deepEqual(channel.posted.slice(2), [{ opened: true, dropped: false }]);
+  // The tick opens the holder's stream again; that open tells the others
+  // nothing, and its tick read no case.
+  p.taken();
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [LISTENERS, INDEX]);
+  assert.equal(p.streams.length, 2);
+  p.stream.onopen();
+  assert.equal(channel.posted.length, 3);
   // A hidden tab keeps its stream.
   p.document.hidden = true;
   p.document.dispatch("visibilitychange");
@@ -881,6 +1057,10 @@ test("with locks, a tab without the stream reads on the holder's versions and it
   channel.onmessage({ data: null });
   await p.settle();
   assert.deepEqual(p.taken(), [INDEX]);
+  // With no stream of its own, its tick reads the store.
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.equal(p.streams.length, 0);
   // The lock comes to it after the page went: it opens nothing.
   p.app.unmount();
   await t.lock.grant();
