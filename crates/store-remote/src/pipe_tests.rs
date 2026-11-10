@@ -433,6 +433,147 @@ fn a_child_that_does_not_read_a_large_request_times_out() {
 }
 
 #[test]
+fn a_request_read_slowly_fails_at_its_timeout_not_each_part_s() {
+    // The child reads 64 KiB each 0.25 s. The request, of about 600 KiB, is
+    // written in parts of the 128 KiB buffer, each in about 0.5 s: within a
+    // timeout of 1 s each, but the request as a whole is not.
+    let mut limits = quick();
+    limits.request = Duration::from_secs(1);
+    let slow = "while dd bs=65536 count=1 of=/dev/null 2>/dev/null; do sleep 0.25; done";
+    let (_dir, store) = over(slow, &[], limits);
+    let large = Append {
+        data: format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"T","body":"{}"}}"#,
+            "x".repeat(600 * 1024)
+        ),
+        ..open()
+    };
+    let start = Instant::now();
+    let written = store.create(&large, &Writer::new(None));
+    assert!(
+        matches!(written, Err(StoreError::Store(Error::Transport { .. }))),
+        "{written:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(1800),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// The start of a script that tells, in `$LOG.pid` and `$LOG.stdin`, its
+/// pid and the pipe that is its stdin.
+#[cfg(target_os = "linux")]
+const TELLS: &str = "echo $$ > \"$LOG.pid\"; readlink /proc/$$/fd/0 > \"$LOG.stdin\"\n";
+
+/// What the script told in the file `name` in `dir`, waited for up to 5 s.
+#[cfg(target_os = "linux")]
+fn told(dir: &Path, name: &str) -> String {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let said = fs::read_to_string(dir.join(name)).unwrap_or_default();
+        if said.ends_with('\n') {
+            return said.trim().to_owned();
+        }
+        assert!(Instant::now() < until, "the script did not tell {name}");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Waits up to 5 s for the child that told in `dir` to be reaped, and for
+/// no file of this process to be its stdin: the thread that wrote to it
+/// has ended, as it alone holds it.
+#[cfg(target_os = "linux")]
+fn let_go(dir: &Path) {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let stdin = told(dir, "log.stdin");
+    let pid = Pid::from_raw(told(dir, "log.pid").parse().unwrap()).unwrap();
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let held = fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .flatten()
+            .any(|fd| fs::read_link(fd.path()).is_ok_and(|link| link.as_os_str() == &*stdin));
+        let reaped = matches!(
+            waitid(WaitId::Pid(pid), options),
+            Err(rustix::io::Errno::CHILD)
+        );
+        if !held && reaped {
+            return;
+        }
+        assert!(
+            Instant::now() < until,
+            "the child's stdin, {stdin}, held: {held}; the child {pid:?} reaped: {reaped}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A store over `TELLS` and then `script`, with requests of `request`
+/// each, and a create of a 200 KiB body over it.
+#[cfg(target_os = "linux")]
+fn large_create(script: &str, request: Duration) -> (TempDir, Result<(), StoreError<Error>>) {
+    let mut limits = quick();
+    limits.request = request;
+    let (dir, store) = over(&format!("{TELLS}{script}"), &[], limits);
+    let large = Append {
+        data: format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"T","body":"{}"}}"#,
+            "x".repeat(200 * 1024)
+        ),
+        ..open()
+    };
+    let created = store.create(&large, &Writer::new(None)).map(|_| ());
+    (dir, created)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_connection_dropped_mid_write_lets_go_of_its_thread_and_child() {
+    let (dir, created) = large_create("sleep 3", Duration::from_millis(300));
+    assert!(
+        matches!(created, Err(StoreError::Store(Error::Transport { .. }))),
+        "{created:?}"
+    );
+    let_go(dir.path());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_child_that_ends_mid_write_says_why_and_is_let_go() {
+    for (script, why) in [
+        (
+            "sleep 0.3; echo 'gave up' >&2; exit 3",
+            "the connection closed (exit 3): gave up",
+        ),
+        ("sleep 0.3; kill -9 $$", "the connection closed"),
+    ] {
+        let (dir, created) = large_create(script, Duration::from_secs(5));
+        match created {
+            Err(StoreError::Store(Error::Transport { reason, .. })) => {
+                assert_eq!(reason, why, "{script}");
+            }
+            other => panic!("{script}: {other:?}"),
+        }
+        let_go(dir.path());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_idle_connection_dropped_lets_go_of_its_thread_and_child() {
+    let (dir, store) = over(
+        &format!("{TELLS}{SERVE}"),
+        &[("ANSWER", r#"{"version":"7"}"#)],
+        quick(),
+    );
+    store.version().unwrap();
+    drop(store);
+    let_go(dir.path());
+}
+
+#[test]
 fn a_dropped_connection_kills_a_child_that_does_not_exit() {
     let pid_file: PathBuf;
     let start;

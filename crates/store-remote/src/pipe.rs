@@ -931,6 +931,78 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_write_not_done_in_time_leaves_the_pipe_stuck() {
+        // The child reads nothing for 1 s, and then all it is sent.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 1; cat > /dev/null"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let large = vec![b'x'; 200 * 1024];
+        let start = Instant::now();
+        let written = pipe.write(
+            large,
+            Some(Duration::from_millis(100)),
+            ureq::Timeout::SendBody,
+        );
+        assert!(
+            matches!(written, Err(ureq::Error::Timeout(ureq::Timeout::SendBody))),
+            "{written:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            start.elapsed()
+        );
+        // Part of the request is in the pipe, so the child cannot take
+        // another.
+        assert!(!Transport::is_open(&mut pipe));
+        // A later write fails at once: it does not wait, nor take the
+        // timed-out write's result, which comes once the child reads, as
+        // its own.
+        let start = Instant::now();
+        let again = pipe.write(
+            b"GET".to_vec(),
+            Some(Duration::from_secs(5)),
+            ureq::Timeout::Global,
+        );
+        assert!(
+            matches!(again, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{again:?}"
+        );
+        let exchanged = pipe.exchange(b"GET / HTTP/1.1\r\n\r\n", Duration::from_secs(5), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(_))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(!Transport::is_open(&mut pipe));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exchange_with_a_child_that_does_not_read_times_out() {
+        // A hold's request, renewal and release: a request larger than
+        // the pipe, to a child that never reads, fails at its timeout and
+        // not when the child exits, at 3 s.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 3"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let start = Instant::now();
+        let exchanged = pipe.exchange(&vec![b'x'; 200 * 1024], Duration::from_millis(300), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
     #[test]
     fn a_pipe_shows_its_dial_and_its_child() {
         let dial = Arc::new(Dial::new("cat", "ssh://far"));
