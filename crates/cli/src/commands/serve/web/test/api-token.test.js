@@ -1,6 +1,6 @@
 // api.ts before it holds a token: node runs each test file in a process of
 // its own, so the module here starts as a page does, with no token read.
-// The tests run in order, and none of them reads a token until the last.
+// The tests run in order, and no token is read until the last.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as api from "../static/api.ts";
