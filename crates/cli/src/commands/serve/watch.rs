@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
-use cases_core::Case;
+use cases_core::{Case, Refolded};
 use cases_store_sqlite::{Cases, Db, Key, Poller};
 use tokio::sync::watch;
 
@@ -86,6 +86,10 @@ struct Reader<'a> {
     /// The warnings logged, each once: a case that does not fold is read
     /// again on every change.
     warned: HashSet<String>,
+    /// The keys of the cases folded again since the snapshot published
+    /// last, by every poll since, which the next snapshot holds anew; the
+    /// rest it shares with that snapshot. `None` when every case was.
+    refolded: Option<HashSet<Key>>,
 }
 
 impl Watch {
@@ -117,6 +121,7 @@ impl Watch {
                 read: false,
                 engine: Engine::default(),
                 warned: HashSet::new(),
+                refolded: None,
             };
             for answer in received {
                 // A reader that asked and went away needs no answer.
@@ -193,8 +198,18 @@ impl Shared {
 impl Reader<'_> {
     /// Reads the store, and publishes what moved.
     fn read(&mut self) -> Read {
-        let missing = match self.poller.poll() {
-            Ok(_) => false,
+        let polled = self.poller.poll().map(|_| ());
+        // Taken from a failed poll too, which folds every case again next.
+        match self.poller.refolded() {
+            Refolded::Some { folded, .. } => {
+                if let Some(refolded) = &mut self.refolded {
+                    refolded.extend(folded);
+                }
+            }
+            _ => self.refolded = None,
+        }
+        let missing = match polled {
+            Ok(()) => false,
             Err(cases_store_sqlite::Error::Missing { .. }) => true,
             Err(error) => return Err(error),
         };
@@ -228,20 +243,26 @@ impl Reader<'_> {
             }
         }
         self.read = true;
-        // Each case the poller did not fold again is the one the last
-        // snapshot holds: shared, rather than copied with all its events.
-        let before: HashMap<Key, &Arc<Case>> = current
-            .cases
-            .iter()
-            .map(|(key, case)| (*key, case))
-            .collect();
+        // Each case the poller did not fold again since the last snapshot
+        // is the one that snapshot holds: shared, rather than copied with
+        // all its events, and not looked at.
+        let refolded = self.refolded.replace(HashSet::new());
+        let before: HashMap<Key, &Arc<Case>> = match &refolded {
+            Some(_) => current
+                .cases
+                .iter()
+                .map(|(key, case)| (*key, case))
+                .collect(),
+            None => HashMap::new(),
+        };
         let snapshot = Arc::new(Snapshot {
             cases: cases
                 .iter()
                 .filter_map(|(key, case)| {
                     let case = case.as_ref().ok()?;
+                    let kept = refolded.as_ref().is_some_and(|r| !r.contains(key));
                     let shared = match before.get(key) {
-                        Some(was) if same(was, case) => Arc::clone(was),
+                        Some(was) if kept => Arc::clone(was),
                         _ => Arc::new(case.clone()),
                     };
                     Some((*key, shared))
@@ -252,18 +273,6 @@ impl Reader<'_> {
         self.shared.snapshots.send_replace(Arc::clone(&snapshot));
         Ok(snapshot)
     }
-}
-
-/// Whether `was`, a case of the last snapshot, is `case` as the poller has
-/// it now. The counts and the last event tell most changed cases at once;
-/// the rest are compared whole, since another store put at the path can
-/// hold a case with the same counts and last row and another history.
-/// Comparing reads each event once and copies nothing.
-fn same(was: &Case, case: &Case) -> bool {
-    was.revision() == case.revision()
-        && was.last_seq() == case.last_seq()
-        && was.events().last() == case.events().last()
-        && was == case
 }
 
 /// Queues a notification for each case in `landed`, with the case as
