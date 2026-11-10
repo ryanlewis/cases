@@ -587,13 +587,18 @@ fn the_poller_follows_a_remote_store() {
     assert_eq!(cases.keys().copied().collect::<Vec<_>>(), [a]);
     assert_eq!(cases[&a].as_ref().unwrap().revision(), 2);
     // The far side says what changed, and the poller what it folded again.
-    let only = |folded: &[Key], removed: &[Key]| Refolded::Some {
-        folded: folded.to_vec(),
-        removed: removed.to_vec(),
+    let only = |refolded: &Refolded| {
+        let Refolded::Changed {
+            folded, removed, ..
+        } = refolded
+        else {
+            panic!("not only some cases: {refolded:?}");
+        };
+        (folded.clone(), removed.clone())
     };
-    assert_eq!(poller.refolded(), &only(&[a], &[b]));
+    assert_eq!(only(poller.refolded()), (vec![a], vec![b]));
     assert_eq!(poller.poll().unwrap().len(), 1);
-    assert_eq!(poller.refolded(), &only(&[], &[]));
+    assert_eq!(only(poller.refolded()), (vec![], vec![]));
     let lines = fake.lines();
     // Every case at first, and then only what changed.
     assert_eq!(lines.len(), 7);

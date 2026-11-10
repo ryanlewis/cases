@@ -185,13 +185,16 @@ fn a_poll_after_a_failed_one_reads_every_case() {
     assert_eq!(folds(), 3);
 }
 
-/// What the cases folded again and dropped were, poll by poll, as the poll
-/// before left them.
-fn only(folded: &[Key], removed: &[Key]) -> Refolded {
-    Refolded::Some {
-        folded: folded.to_vec(),
-        removed: removed.to_vec(),
-    }
+/// The cases a poll says it folded again and dropped, for a poll that says
+/// which.
+fn only(refolded: &Refolded) -> (Vec<Key>, Vec<Key>) {
+    let Refolded::Changed {
+        folded, removed, ..
+    } = refolded
+    else {
+        panic!("not only some cases: {refolded:?}");
+    };
+    (folded.clone(), removed.clone())
 }
 
 /// Each poll says what it folded again and what it dropped: every case on
@@ -209,12 +212,12 @@ fn a_poll_says_which_cases_it_folded_again_and_dropped() {
     poller.poll().unwrap();
     assert_eq!(poller.refolded(), &Refolded::All);
     poller.poll().unwrap();
-    assert_eq!(poller.refolded(), &only(&[], &[]));
+    assert_eq!(only(poller.refolded()), (vec![], vec![]));
 
     note(&store, second);
     let third = create(&store);
     poller.poll().unwrap();
-    assert_eq!(poller.refolded(), &only(&[second, third], &[]));
+    assert_eq!(only(poller.refolded()), (vec![second, third], vec![]));
     assert_eq!(folds(), 4);
 
     store.delete(&first, None).unwrap();
@@ -222,7 +225,7 @@ fn a_poll_says_which_cases_it_folded_again_and_dropped() {
     let passing = create(&store);
     store.delete(&passing, None).unwrap();
     poller.poll().unwrap();
-    assert_eq!(poller.refolded(), &only(&[], &[first, third]));
+    assert_eq!(only(poller.refolded()), (vec![], vec![first, third]));
 
     // Given every case, though nothing changed: every case is folded
     // again, and so said.
@@ -231,7 +234,7 @@ fn a_poll_says_which_cases_it_folded_again_and_dropped() {
     assert_eq!(poller.refolded(), &Refolded::All);
     ALL.set(false);
     poller.poll().unwrap();
-    assert_eq!(poller.refolded(), &only(&[], &[]));
+    assert_eq!(only(poller.refolded()), (vec![], vec![]));
 
     FAIL.set(true);
     assert!(poller.poll().is_err());
@@ -241,7 +244,7 @@ fn a_poll_says_which_cases_it_folded_again_and_dropped() {
     assert_eq!(poller.refolded(), &Refolded::All, "the poll after it");
     note(&store, second);
     poller.poll().unwrap();
-    assert_eq!(poller.refolded(), &only(&[second], &[]));
+    assert_eq!(only(poller.refolded()), (vec![second], vec![]));
 }
 
 thread_local! {
@@ -287,5 +290,5 @@ fn a_poll_says_every_case_after_no_version_and_a_key_in_one_list() {
         removed: vec![first, second],
     }));
     assert_eq!(keys(poller.poll().unwrap()), vec![first]);
-    assert_eq!(poller.refolded(), &only(&[first], &[second]));
+    assert_eq!(only(poller.refolded()), (vec![first], vec![second]));
 }

@@ -202,7 +202,7 @@ impl Reader<'_> {
         let polled = self.poller.poll().map(|_| ());
         // Taken from a failed poll too, which folds every case again next.
         match self.poller.refolded() {
-            Refolded::Some { folded, .. } => {
+            Refolded::Changed { folded, .. } => {
                 if let Some(refolded) = &mut self.refolded {
                     refolded.extend(folded);
                 }

@@ -59,7 +59,8 @@ pub enum Refolded {
     /// gave them, and only the cases in `removed`, which the poll before
     /// gave, were dropped. Every other case is as the poll before gave it.
     /// A key is in one list at most.
-    Some {
+    #[non_exhaustive]
+    Changed {
         /// The key of each case whose rows the poll read and folded: a case
         /// written to since, or opened since.
         folded: Vec<Key>,
@@ -172,7 +173,7 @@ impl<'a, S: Store<Key = Key>> Poller<'a, S> {
         self.refolded = if all {
             Refolded::All
         } else {
-            Refolded::Some {
+            Refolded::Changed {
                 folded,
                 removed: gone,
             }
