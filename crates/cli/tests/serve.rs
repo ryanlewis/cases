@@ -321,9 +321,9 @@ fn a_second_serve_on_the_same_store_is_refused() {
 /// counts as no serve, and a new serve replaces it.
 #[test]
 fn a_stale_record_is_replaced() {
-    let closed = common::listen("127.0.0.1:0");
-    let closed_addr = closed.local_addr().unwrap().to_string();
-    drop(closed);
+    // Port 0 takes no connection, ever: a port freed for the test could be
+    // taken by another before serve dials it.
+    let closed_addr = "127.0.0.1:0";
     let mut gone = common::spawn(&mut std::process::Command::new("true"));
     gone.wait().unwrap();
     for pid in [gone.id(), std::process::id()] {
@@ -1244,4 +1244,182 @@ fn on_a_terminal_with_stderr_redirected_the_log_goes_to_stderr() {
         log.contains("also serving https://inbox.example/ through a proxy"),
         "{log}"
     );
+}
+
+/// Opens a message on serve at `addr` whose body serve is reading, which it
+/// says with `100 Continue`, and never gets: it holds a stop for its 5 s
+/// grace. Gives the connection once serve has taken it up.
+fn held(addr: &str, token: &str) -> std::net::TcpStream {
+    let mut stream = common::serve::connect(addr);
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /v1/cases HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n"
+    )
+    .unwrap();
+    let mut continued = [0; 25];
+    std::io::Read::read_exact(&mut stream, &mut continued).unwrap();
+    assert!(
+        continued.starts_with(b"HTTP/1.1 100 Continue"),
+        "{:?}",
+        String::from_utf8_lossy(&continued)
+    );
+    stream
+}
+
+/// Waits until serve at `addr` takes no new connection: its stop has
+/// begun.
+fn stop_begun(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::net::TcpStream::connect(addr) {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => return,
+            // One that came as the listener closed.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            Err(error) => panic!("{error}"),
+            Ok(_) => {}
+        }
+        assert!(Instant::now() < deadline, "the stop did not begin");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The number of the `write` system call, as `/proc` gives it.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const WRITE: u32 = 1;
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const WRITE: u32 = 64;
+
+/// Whether a thread of `pid` is held in a write to stdout within `within`,
+/// as on a terminal whose output is stopped: `/proc` gives the call a
+/// thread is in, by its number and its first argument (the fd).
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn held_writing(pid: i32, within: Duration) -> bool {
+    let call = format!("{WRITE} 0x1 ");
+    let deadline = Instant::now() + within;
+    loop {
+        let tasks = fs::read_dir(format!("/proc/{pid}/task")).unwrap();
+        if tasks.flatten().any(|task| {
+            fs::read_to_string(task.path().join("syscall"))
+                .is_ok_and(|text| text.starts_with(&call))
+        }) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A second SIGTERM during a slow stop ends serve at once, with the status
+/// a shell gives a process SIGTERM ended, 143, as a service manager sends
+/// it: not Ctrl-C's 130.
+#[test]
+fn a_second_sigterm_ends_a_slow_stop_with_143() {
+    let env = Env::new();
+    let serve = env.serve(&[]);
+    let token = serve.csrf();
+    let stalled = held(&serve.addr, &token);
+    serve.raise(Signal::TERM);
+    stop_begun(&serve.addr);
+    let second = Instant::now();
+    serve.raise(Signal::TERM);
+    let out = serve.exit_within(Duration::from_secs(4));
+    assert_eq!(out.code, 143, "{out:?}");
+    assert!(
+        second.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        second.elapsed()
+    );
+    drop(stalled);
+}
+
+/// On a terminal, the status screen's last frame comes after the stop, so
+/// that it shows what the stop logged: the connections it closed, which
+/// the screen alone shows when stderr is the terminal too.
+#[test]
+fn on_a_terminal_the_last_frame_shows_what_the_stop_closed() {
+    let env = Env::new();
+    let run = format!(r#"{SERVE}; echo "exit=$?""#);
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (addr, pid) = running(&env);
+    let reap = Reap(pid);
+    let stalled = held(&addr, &csrf(&addr));
+    terminal.type_keys("q");
+    // The grace is 5 s, within wait_for's 10.
+    terminal.wait_for("closed 1 connections still open 5 s after the stop");
+    terminal.wait_for("exit=0");
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
+    drop(stalled);
+}
+
+/// A second Ctrl-C ends serve on a terminal whose output is stopped
+/// (Ctrl-S), where the write that puts the terminal back cannot finish: it
+/// exits a moment later whatever that write does. On Linux, where `/proc`
+/// shows that serve's output is held.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
+    let env = Env::new();
+    let run = format!(r#"{SERVE}; echo "exit=$?""#);
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (addr, pid) = running(&env);
+    let reap = Reap(pid);
+    let token = csrf(&addr);
+    terminal.type_keys("\x13");
+    // A load of the page is counted and logged on the screen, so serve draws
+    // a frame within a tick, which the stopped terminal holds. Loaded again
+    // if a frame went out before the Ctrl-S was in force.
+    let mut loads = 0;
+    loop {
+        let mut page = common::serve::connect(&addr);
+        write!(
+            page,
+            "GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        std::io::Read::read_to_end(&mut page, &mut Vec::new()).unwrap();
+        loads += 1;
+        if held_writing(pid, Duration::from_secs(2)) {
+            break;
+        }
+        assert!(loads < 3, "no write of {pid} was held");
+    }
+    let stalled = held(&addr, &token);
+    let signal = |pid: i32| {
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process(pid, Signal::INT);
+        }
+    };
+    signal(pid);
+    stop_begun(&addr);
+    signal(pid);
+    // Before the 5 s grace is out: the exit is the forced one.
+    assert!(
+        ends_within(pid, Duration::from_secs(3)),
+        "serve did not end on a stopped terminal"
+    );
+    // Ctrl-Q lets the terminal show what was held.
+    terminal.type_keys("\x11");
+    terminal.wait_for("exit=130");
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
+    drop(stalled);
 }

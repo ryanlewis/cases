@@ -861,6 +861,20 @@ mod tests {
     }
 
     #[test]
+    fn a_case_with_no_seq_left_takes_no_more_rows() {
+        let open = Row {
+            seq: u64::MAX,
+            ..opened_row()
+        };
+        let mut case = Case::fold(&[open]).unwrap();
+        let before = case.clone();
+        let note = append("agent", "note", r#"{"body": "More."}"#);
+        let error = case.append(&note, now(), None, None).unwrap_err();
+        assert_eq!(error.category(), Category::Transition);
+        assert_eq!(case, before);
+    }
+
+    #[test]
     fn a_row_stores_the_record_as_read() {
         // A field the event does not define is left out, and so is a field
         // at its zero value. The time is stamped, in UTC.

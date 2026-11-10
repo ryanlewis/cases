@@ -278,6 +278,28 @@ fn appending_to_a_missing_case() {
     }
 }
 
+/// A case whose last row has the highest seq SQLite holds has no seq left
+/// for another: the append is refused as damage, and stores nothing.
+#[test]
+fn a_case_with_no_seq_left_for_another_row_is_damaged() {
+    let (_dir, db) = scratch();
+    let (key, _) = create(&db, "fyi");
+    sql(&db)
+        .execute(
+            "UPDATE events SET seq = 9223372036854775807 WHERE case_key = ?1",
+            [common::key_sql(key)],
+        )
+        .unwrap();
+    let before = stored(&db, key);
+    let note = agent_event("note", r#"{"body": "More."}"#);
+    let outcome = db.append(&key, &note, &unnamed(), None);
+    assert!(
+        matches!(outcome, Err(StoreError::Store(Error::Damaged { .. }))),
+        "{outcome:?}"
+    );
+    assert_eq!(stored(&db, key), before);
+}
+
 /// Checks that the case's rows are numbered 1 to `n` with no gap and none
 /// twice, and that they all fold.
 fn check_sequence(db: &Db, key: Key, n: usize) {

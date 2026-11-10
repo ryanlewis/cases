@@ -15,10 +15,9 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
-from transcript import Transcript, cases_segments  # noqa: E402
+from transcript import Transcript, cases_segments, strip_heredocs  # noqa: E402
 
 NOTE = re.compile(r"<task-notification>\s*<task-id>(\w+)</task-id>.*?<status>(\w+)</status>", re.S)
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2(?=\s|$)", re.S)
 QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"|\'[^\']*\'')
 TURN_TEXT = ("<task-notification>", "<local-command", "<command-name>", "[SYSTEM NOTIFICATION")
 # A quoted string that only names a shell variable ("$id") is a different value
@@ -88,7 +87,7 @@ class Session:
                 continue
             if "<<" in tool.cmd:
                 tool.raw_cmd = tool.cmd
-                tool.cmd = HEREDOC.sub("<<HEREDOC", tool.cmd)
+                tool.cmd = strip_heredocs(tool.cmd)
             # Each quoted string becomes a token of its content, so two values stay two.
             unquoted = QUOTED.sub(_token, tool.cmd)
             tool.segments = cases_segments(unquoted)
