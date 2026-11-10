@@ -1472,10 +1472,11 @@ fn actors_to_name(args: &Args, ctx: &Ctx, turns: &[Turn]) -> Result<Known, Error
     match read {
         Ok(actors) => Ok(actors),
         Err(error) if turns.iter().any(|turn| turn.taken) => {
-            ctx::warn(format_args!(
-                "the actors cannot be read, so they are named by id: {error}"
-            ));
-            Ok(Known::default())
+            warn_unnamed(&error);
+            Ok(Known {
+                unreadable: true,
+                ..Known::default()
+            })
         }
         Err(error) => Err(error),
     }
@@ -1507,13 +1508,27 @@ fn pick_up_under(ctx: &Ctx, by: &str, turn: &mut Turn, far: Option<&FarLocks>) -
 /// for a case opened by hand, so the table is read again then, and only
 /// then: the pickup's actor is the case's agent, its worker or a message's
 /// taker, whom the table has after the first pickup by it. A read that fails
-/// keeps the table read before, so that the case is still printed.
+/// keeps the table read before, so that the case is still printed, says so
+/// once, and is not tried again.
 fn learn_actor(ctx: &Ctx, turn: &Turn, actors: &mut Known) {
-    if !actors.has(turn.case.events().last().and_then(Event::actor))
-        && let Ok(now) = actors_of(ctx)
-    {
-        *actors = now;
+    if actors.unreadable || actors.has(turn.case.events().last().and_then(Event::actor)) {
+        return;
     }
+    match actors_of(ctx) {
+        Ok(now) => *actors = now,
+        Err(error) => {
+            warn_unnamed(&error);
+            actors.unreadable = true;
+        }
+    }
+}
+
+/// Says on stderr that the actors could not be read, for a wait that prints
+/// its cases all the same.
+fn warn_unnamed(error: &Error) {
+    ctx::warn(format_args!(
+        "the actors cannot be read, so they are named by id: {error}"
+    ));
 }
 
 /// Writes the line of `turn` to stdout. On failure, gives why, as the
@@ -1539,6 +1554,8 @@ fn write_line(
 struct Known {
     actors: Actors,
     ids: HashSet<String>,
+    /// Whether a read of the table failed and has been said.
+    unreadable: bool,
 }
 
 impl Known {
@@ -1560,6 +1577,7 @@ fn actors_of(ctx: &Ctx) -> Result<Known, Error> {
     Ok(Known {
         actors: Actors::new(rows),
         ids,
+        unreadable: false,
     })
 }
 
