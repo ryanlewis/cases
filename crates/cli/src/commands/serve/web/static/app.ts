@@ -416,7 +416,10 @@ function App({ build }: { build: string }) {
     const back = () => {
       const took = entry.popped();
       const state = history.state;
-      const { route: r, composing: opens } = arrive(here());
+      const { route: at, composing: opens } = arrive(here());
+      // A case's page a refusal pinned keeps its filter in its entry, as its
+      // address cannot name the inbox's (refused).
+      const r: Route = state && state.show ? { ...at, show: state.show } : at;
       if (took) {
         // Back took the composer's entry off: the composer answers it, as
         // it does Escape. While it asks about a note, the entry is back
@@ -517,7 +520,18 @@ function App({ build }: { build: string }) {
     // list would show the first case again (IN-04, IN-06).
     if (routeRef.current.page === "list" && home.current && home.current.id === current.id) {
       const show = routeRef.current.show!;
-      history.replaceState(null, "", page(current) + query(show));
+      const path = page(current) + query(show);
+      // With the composer open, the entry is the composer's: the case's page
+      // takes its place and the composer's goes on again over it, as on a
+      // move under the composer (navigate), so that closing the composer,
+      // which takes its entry off, lands on the case and not on the list.
+      // The entries keep the filter, which back and forward read (back).
+      const moved = entry.moved(path);
+      history.replaceState({ ...history.state, show }, "", path);
+      if (moved) {
+        entry.kept();
+        history.replaceState({ ...history.state, show }, "");
+      }
       // The inbox's query is none, which on a case's page would list the
       // case under its own filter: a stale refusal's case has moved on from
       // the inbox, and the list would move with it. The route keeps the filter.
