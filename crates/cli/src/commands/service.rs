@@ -399,14 +399,9 @@ fn report(ctx: &Ctx, manager: &Manager) -> Result<Report, Error> {
         Ok(None) => {}
         Err(error) => report.problems.push(error.to_string()),
     }
-    report.problems.extend(problem(
-        report.installed,
-        report.loaded,
-        report.running,
-        manager.system,
-        &manager.check(),
-        report.pid,
-    ));
+    report
+        .problems
+        .extend(problem(&report, manager.system, &manager.check()));
     Ok(report)
 }
 
@@ -454,19 +449,12 @@ fn read_installed(report: &mut Report, args: Vec<String>, store: &str) {
     report.args = args;
 }
 
-/// The problem with a service `installed` (its file is there), `loaded` in
-/// `system` and `running` (its inbox answers, as `pid`), if there is one.
-/// `check` is the command that shows the service manager's view.
-fn problem(
-    installed: bool,
-    loaded: bool,
-    running: bool,
-    system: System,
-    check: &str,
-    pid: Option<i32>,
-) -> Option<String> {
+/// The problem with the service `report` describes, loaded or not in
+/// `system`, if there is one. `check` is the command that shows the service
+/// manager's view.
+fn problem(report: &Report, system: System, check: &str) -> Option<String> {
     let system = system.name();
-    match (installed, loaded, running) {
+    match (report.installed, report.loaded, report.running) {
         (true, false, _) => Some(format!(
             "installed but not loaded in {system}; cases service install loads it again"
         )),
@@ -477,7 +465,7 @@ fn problem(
         (false, false, true) => Some(format!(
             "not installed, but a cases serve started by hand is running (pid {}); stop it \
              before cases service install",
-            pid.unwrap_or_default()
+            report.pid.unwrap_or_default()
         )),
         _ => None,
     }
@@ -519,19 +507,31 @@ mod tests {
             (true, true, false, Some(&not_answering)),
             (true, true, true, None),
         ];
+        let report = |installed, loaded, running, pid| Report {
+            installed,
+            loaded,
+            running,
+            pid,
+            ..Report::default()
+        };
         for (installed, loaded, running, want) in rows {
             assert_eq!(
-                problem(installed, loaded, running, System::Systemd, check, Some(42)).as_deref(),
+                problem(
+                    &report(installed, loaded, running, Some(42)),
+                    System::Systemd,
+                    check
+                )
+                .as_deref(),
                 want,
                 "{installed} {loaded} {running}"
             );
         }
         assert_eq!(
-            problem(true, false, false, System::Launchd, check, None).as_deref(),
+            problem(&report(true, false, false, None), System::Launchd, check).as_deref(),
             Some("installed but not loaded in launchd; cases service install loads it again")
         );
         assert_eq!(
-            problem(false, true, false, System::Launchd, check, None).as_deref(),
+            problem(&report(false, true, false, None), System::Launchd, check).as_deref(),
             Some("loaded in launchd but its file is missing; cases service uninstall stops it")
         );
     }
