@@ -1357,6 +1357,191 @@ mod tests {
         assert_eq!(request(&lines[2]), "GET /v1/stores/other/store/cases 404");
     }
 
+    /// What the inbox gives across store changes, as the watch reads them:
+    /// the list and each case by the API, the screen's counts, and the
+    /// version the stream sends. One case changed among several, a case
+    /// added, one archived, one deleted, and one that does not fold until
+    /// a row makes it fold: each read gives the store as it is, and a case
+    /// that did not change is given as it was.
+    #[tokio::test]
+    async fn the_inbox_follows_each_change_to_the_store() {
+        use cases_core::{Append, Store};
+        use cases_store_sqlite::Writer;
+        use serde_json::Value;
+
+        let dir = tempfile::tempdir().unwrap();
+        let app = Arc::new(app(&dir, &[], &[]));
+        let db = Arc::clone(&app.db);
+        let since: cases_core::Time = "2000-01-01T00:00:00Z".parse().unwrap();
+        let mut counts = super::super::screen::Counts::new(since);
+        let mut snapshots = app.watch.subscribe();
+        let append = |author: &str, event: &str, data: &str| Append {
+            author: author.into(),
+            event: event.into(),
+            data: data.into(),
+        };
+        let open = |kind: &str, urgency: &str, title: &str| {
+            let options = if kind == "decision" {
+                r#","options":["Pin","Float"]"#
+            } else {
+                ""
+            };
+            let data = format!(
+                r#"{{"kind":"{kind}","urgency":"{urgency}","title":"{title}","body":"First."{options}}}"#
+            );
+            db.create(&append("agent", "open", &data), &Writer::new(None))
+                .unwrap()
+                .0
+        };
+        // Every case the list gives in any state, by id.
+        let all = "/v1/cases?state=open,parked,sent,answered,pickedup,closed,withdrawn";
+        let listed = |app: Arc<App>| async move {
+            let (status, body) = through(&app, "GET", all, "").await;
+            assert_eq!(status, 200, "{body}");
+            body["list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| (case["id"].as_str().unwrap().to_owned(), case.clone()))
+                .collect::<std::collections::BTreeMap<String, Value>>()
+        };
+        let shown = |app: Arc<App>, key: cases_core::Key| async move {
+            through(&app, "GET", &format!("/v1/cases/{key}"), "").await
+        };
+        // The stream's version, and whether the watch published a new one.
+        let mut moved = || {
+            let changed = snapshots.has_changed().unwrap();
+            snapshots.borrow_and_update();
+            changed
+        };
+        let stats = |counts: &mut super::super::screen::Counts| {
+            let stats = counts.of(&app.watch.read().unwrap());
+            (stats.open, stats.answered, stats.picked_up, stats.closed)
+        };
+
+        let kept = open("fyi", "today", "A");
+        let amended = open("question", "blocking", "B");
+        let answered = open("decision", "whenever", "C");
+        let first = listed(Arc::clone(&app)).await;
+        assert_eq!(first.len(), 3);
+        assert_eq!(stats(&mut counts), ([1, 1, 1], 0, 0, 0));
+        assert!(moved());
+        assert_eq!(
+            app.watch.read().unwrap().version,
+            db.version().unwrap().to_string()
+        );
+
+        // One case changes among several: it alone is given anew.
+        db.append(
+            &amended,
+            &append("agent", "amend", r#"{"body":"Second."}"#),
+            &Writer::new(None),
+            None,
+        )
+        .unwrap();
+        let second = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(second[&kept.to_string()], first[&kept.to_string()]);
+        assert_eq!(second[&answered.to_string()], first[&answered.to_string()]);
+        assert_ne!(second[&amended.to_string()], first[&amended.to_string()]);
+        assert_eq!(second[&amended.to_string()]["revision"], 2);
+        let (status, case) = shown(Arc::clone(&app), amended).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "Second.");
+        assert_eq!(case["revision"], 2);
+        let (status, case) = shown(Arc::clone(&app), kept).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "First.");
+        assert_eq!(stats(&mut counts), ([1, 1, 1], 0, 0, 0));
+
+        // A case answered moves between the counts.
+        db.append(
+            &answered,
+            &append("human", "answer", r#"{"choice":1}"#),
+            &Writer::new(None),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stats(&mut counts), ([1, 1, 0], 1, 0, 0));
+        assert!(moved());
+
+        // A case added.
+        let added = open("fyi", "blocking", "D");
+        let third = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(third.len(), 4);
+        assert_eq!(third[&kept.to_string()], first[&kept.to_string()]);
+        assert_eq!(third[&added.to_string()]["title"], "D");
+        assert_eq!(stats(&mut counts), ([2, 1, 0], 1, 0, 0));
+
+        // One archived and one deleted: gone from the list and the API.
+        db.archive(&kept, None).unwrap();
+        db.delete(&added, None).unwrap();
+        let fourth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        let mut left = vec![amended.to_string(), answered.to_string()];
+        left.sort();
+        assert_eq!(fourth.keys().cloned().collect::<Vec<_>>(), left);
+        assert_eq!(fourth[&amended.to_string()], second[&amended.to_string()]);
+        for gone in [kept, added] {
+            assert_eq!(shown(Arc::clone(&app), gone).await.0, 404, "{gone}");
+        }
+        assert_eq!(stats(&mut counts), ([1, 0, 0], 1, 0, 0));
+
+        // A case whose rows do not fold is left out, until a row makes it
+        // fold.
+        let conn = rusqlite::Connection::open(dir.path().join("cases.db")).unwrap();
+        conn.execute(
+            "INSERT INTO cases (opened_at) VALUES ('2026-11-10T09:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let unfolded =
+            cases_core::Key::new(u64::try_from(conn.last_insert_rowid()).unwrap()).unwrap();
+        let row = |seq: i64, event: &str, data: &str| {
+            conn.execute(
+                "INSERT INTO events (case_key, seq, author, event, at, data) \
+                 VALUES (?1, ?2, 'agent', ?3, '2026-11-10T09:00:00Z', ?4)",
+                rusqlite::params![
+                    i64::try_from(unfolded.get()).unwrap(),
+                    seq,
+                    event,
+                    data.as_bytes()
+                ],
+            )
+            .unwrap();
+        };
+        row(1, "note", r#"{"body":"No open."}"#);
+        let fifth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(fifth, fourth);
+        assert_eq!(shown(Arc::clone(&app), unfolded).await.0, 404);
+        assert_eq!(stats(&mut counts), ([1, 0, 0], 1, 0, 0));
+        row(
+            2,
+            "open",
+            r#"{"kind":"fyi","urgency":"today","title":"E","body":"Late."}"#,
+        );
+        let sixth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(sixth.len(), 3);
+        assert_eq!(sixth[&unfolded.to_string()]["title"], "E");
+        assert_eq!(sixth[&unfolded.to_string()]["revision"], 2);
+        assert_eq!(sixth[&amended.to_string()], second[&amended.to_string()]);
+        let (status, case) = shown(Arc::clone(&app), unfolded).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "Late.");
+        assert_eq!(stats(&mut counts), ([1, 1, 0], 1, 0, 0));
+
+        // Nothing moved: nothing is published, and the same is given.
+        assert_eq!(listed(Arc::clone(&app)).await, sixth);
+        assert!(!moved());
+        assert_eq!(
+            app.watch.read().unwrap().version,
+            db.version().unwrap().to_string()
+        );
+    }
+
     /// A renewal is a store route's lock renewal, as `Client::hold` sends
     /// it over HTTP, and nothing that has only some of its parts.
     #[test]
