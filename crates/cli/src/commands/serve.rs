@@ -509,19 +509,10 @@ type Restore = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 /// else.
 #[cfg(unix)]
 fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Output = ()>, Error> {
-    use tokio::signal::unix::{SignalKind, signal};
     let (first, stop) = tokio::sync::oneshot::channel();
     let (ready, caught) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-        let handlers = runtime.as_ref().map_err(|_| ()).and_then(|runtime| {
-            let _entered = runtime.enter();
-            let interrupt = signal(SignalKind::interrupt()).map_err(|_| ())?;
-            Ok((interrupt, signal(SignalKind::terminate()).map_err(|_| ())?))
-        });
-        let (Ok(runtime), Ok((mut interrupt, mut terminate))) = (runtime, handlers) else {
+        let Some((runtime, mut interrupt, mut terminate)) = handlers() else {
             return;
         };
         let _ = ready.send(());
@@ -534,28 +525,10 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
                     _ = interrupt.recv() => 130,
                     _ = terminate.recv() => 143,
                 };
-                // The first signal begins the stop, unless something else
-                // has, and any after it forces the exit.
-                if !begun.swap(true, Ordering::SeqCst)
-                    && first.take().is_some_and(|first| first.send(()).is_ok())
-                {
+                if begins_stop(&begun, &mut first) {
                     continue;
                 }
-                // A terminal whose output is stopped (Ctrl-S) holds the
-                // write that puts it back: serve exits after a moment
-                // whatever it does.
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(200));
-                    std::process::exit(code);
-                });
-                let restore = restore
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
-                if let Some(restore) = restore {
-                    restore();
-                }
-                std::process::exit(code);
+                force_exit(code, &restore);
             }
         });
     });
@@ -567,6 +540,54 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
             std::future::pending::<()>().await;
         }
     })
+}
+
+/// A runtime of its own, with the handlers of Ctrl-C and SIGTERM in place
+/// on it, or none when either cannot be had.
+#[cfg(unix)]
+fn handlers() -> Option<(
+    tokio::runtime::Runtime,
+    tokio::signal::unix::Signal,
+    tokio::signal::unix::Signal,
+)> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    let (interrupt, terminate) = {
+        let _entered = runtime.enter();
+        let interrupt = signal(SignalKind::interrupt()).ok()?;
+        (interrupt, signal(SignalKind::terminate()).ok()?)
+    };
+    Some((runtime, interrupt, terminate))
+}
+
+/// Whether a signal begins the stop: the first signal does, unless
+/// something else has begun it, and says so on `first`. Any after it, or
+/// one whose stop nothing waits for any more, forces the exit.
+#[cfg(unix)]
+fn begins_stop(begun: &AtomicBool, first: &mut Option<tokio::sync::oneshot::Sender<()>>) -> bool {
+    !begun.swap(true, Ordering::SeqCst) && first.take().is_some_and(|first| first.send(()).is_ok())
+}
+
+/// Ends serve at once with `code`, after `restore` puts the terminal back.
+/// A terminal whose output is stopped (Ctrl-S) holds the write that puts
+/// it back: serve exits after a moment whatever it does.
+#[cfg(unix)]
+fn force_exit(code: i32, restore: &Restore) -> ! {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        std::process::exit(code);
+    });
+    let restore = restore
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if let Some(restore) = restore {
+        restore();
+    }
+    std::process::exit(code);
 }
 
 #[cfg(not(unix))]
@@ -941,5 +962,47 @@ mod tests {
             text.ends_with("0\r\n\r\n"),
             "the stream did not end cleanly: {text}"
         );
+    }
+    /// The first signal begins the stop, and says so; any after it forces
+    /// the exit.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_signal_begins_the_stop_and_the_next_forces_it() {
+        let begun = AtomicBool::new(false);
+        let (sender, mut stop) = oneshot::channel();
+        let mut first = Some(sender);
+        assert!(begins_stop(&begun, &mut first));
+        assert!(begun.load(Ordering::SeqCst));
+        assert!(first.is_none());
+        assert_eq!(stop.try_recv(), Ok(()));
+        assert!(!begins_stop(&begun, &mut first), "a second signal");
+        assert!(begun.load(Ordering::SeqCst));
+    }
+
+    /// A signal that comes once something else, `q` or a replaced binary,
+    /// has begun the stop forces the exit, and leaves `first` alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_after_another_stop_forces_the_exit() {
+        let begun = AtomicBool::new(true);
+        let (sender, mut stop) = oneshot::channel::<()>();
+        let mut first = Some(sender);
+        assert!(!begins_stop(&begun, &mut first));
+        assert!(first.is_some(), "the signal took the first stop");
+        assert_eq!(stop.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    }
+
+    /// A first signal whose stop nothing waits for any more forces the
+    /// exit, since nothing else would end serve.
+    #[cfg(unix)]
+    #[test]
+    fn a_first_signal_no_one_waits_for_forces_the_exit() {
+        let begun = AtomicBool::new(false);
+        let (sender, stop) = oneshot::channel::<()>();
+        drop(stop);
+        let mut first = Some(sender);
+        assert!(!begins_stop(&begun, &mut first));
+        assert!(begun.load(Ordering::SeqCst));
+        assert!(first.is_none());
     }
 }
