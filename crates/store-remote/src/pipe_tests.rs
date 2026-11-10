@@ -433,18 +433,21 @@ fn a_child_that_does_not_read_a_large_request_times_out() {
 }
 
 #[test]
-fn a_request_read_slowly_fails_at_its_timeout_not_each_part_s() {
-    // The child reads 64 KiB each 0.25 s. The request, of about 600 KiB, is
-    // written in parts of the 128 KiB buffer, each in about 0.5 s: within a
-    // timeout of 1 s each, but the request as a whole is not.
+fn a_request_written_in_parts_fails_at_its_timeout_not_its_last_part_s() {
+    // The request, of about 300 KiB, is written in parts of the 128 KiB
+    // buffer. The child reads 128 KiB at 1 s and no more, so the second
+    // part is on its way at 1 s and never done: it fails with the 1 s the
+    // request has left, at 2 s, and not with a timeout of its own, at 3 s.
+    // Its connection is dropped within the 200 ms the child is given to
+    // exit.
     let mut limits = quick();
-    limits.request = Duration::from_secs(1);
-    let slow = "while dd bs=65536 count=1 of=/dev/null 2>/dev/null; do sleep 0.25; done";
-    let (_dir, store) = over(slow, &[], limits);
+    limits.request = Duration::from_secs(2);
+    let stalls = "sleep 1; dd bs=65536 count=2 of=/dev/null 2>/dev/null; sleep 5";
+    let (_dir, store) = over(stalls, &[], limits);
     let large = Append {
         data: format!(
             r#"{{"kind":"fyi","urgency":"today","title":"T","body":"{}"}}"#,
-            "x".repeat(600 * 1024)
+            "x".repeat(300 * 1024)
         ),
         ..open()
     };
@@ -454,10 +457,10 @@ fn a_request_read_slowly_fails_at_its_timeout_not_each_part_s() {
         matches!(written, Err(StoreError::Store(Error::Transport { .. }))),
         "{written:?}"
     );
+    let elapsed = start.elapsed();
     assert!(
-        start.elapsed() < Duration::from_millis(1800),
-        "{:?}",
-        start.elapsed()
+        elapsed >= Duration::from_secs(2) && elapsed < Duration::from_millis(2700),
+        "{elapsed:?}"
     );
 }
 
