@@ -31,14 +31,22 @@ const STATUS = {
 // Closes `dialog` on a click on its backdrop: a press and release on the
 // dialog itself, whose form fills it, so that a drag that starts inside the
 // form and ends outside does not close it. Escape and the close button
-// (a method=dialog form) close it by themselves.
+// (a method=dialog form) close it by themselves. Whether a press started on
+// the backdrop is kept with the dialog, not the handlers, so that a redraw
+// between the press and the click, which gives new ones, does not lose it.
+const pressed = new WeakSet<EventTarget>();
 function backdrop() {
-  let down = false;
   return {
-    onPointerDown: (e: PointerEvent) => (down = e.target === e.currentTarget),
+    onPointerDown: (e: PointerEvent) => {
+      if (e.target === e.currentTarget) pressed.add(e.currentTarget!);
+      else pressed.delete(e.currentTarget!);
+    },
+    // A press the browser cancels (a touch that turns into a scroll) gives
+    // no click, and is not one.
+    onPointerCancel: (e: PointerEvent) => pressed.delete(e.currentTarget!),
     onClick: (e: MouseEvent) => {
-      if (e.target === e.currentTarget && down) (e.currentTarget as HTMLDialogElement).close();
-      down = false;
+      if (e.target === e.currentTarget && pressed.has(e.currentTarget!)) (e.currentTarget as HTMLDialogElement).close();
+      pressed.delete(e.currentTarget!);
     },
   };
 }
@@ -174,17 +182,33 @@ function writeCursor(c: Cursor | null): void {
   try {
     if (c) localStorage.setItem(CURSOR, JSON.stringify(c));
     else localStorage.removeItem(CURSOR);
-  } catch (e) {
-    // localStorage cannot be written: this tab's copy stands in.
+  } catch {
+    // localStorage cannot be written: this tab's copy stands in. A cursor
+    // it still holds is older than this tab's copy. Read back, it would show
+    // again what this tab has shown, so it is removed. A full quota still
+    // allows that.
+    try {
+      localStorage.removeItem(CURSOR);
+    } catch {
+      // Nor can it be removed.
+    }
   }
 }
 
 // Shows `item`, unless notifications are on for blocking cases only and it
 // is not one. Its tag is the same in every tab, so the desktop shows it
-// once; a click opens the case with `open`.
+// once; a click opens the case with `open`. One the browser will not make
+// (Chrome on Android makes them only from a service worker) is passed over,
+// and the cursor moves past it all the same: each item is tried once,
+// shown or not.
 function show(item: Item, open: (path: string) => void): void {
   if (prefs.read("notify") === "blocking" && !(item.case && item.case.urgency === "blocking")) return;
-  const notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  let notification: Notification;
+  try {
+    notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  } catch {
+    return;
+  }
   notification.onclick = () => {
     window.focus();
     open(item.url);

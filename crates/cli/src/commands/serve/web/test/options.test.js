@@ -51,8 +51,9 @@ globalThis.casesPrefs = prefs;
 let focused = 0;
 globalThis.focus = () => focused++;
 
-// localStorage, which can be made to throw on reads, writes, or both. The
-// writes made are in `writes`.
+// localStorage, which can be made to throw on reads, or on writes, as a
+// full quota does: setItem throws and removeItem still works. Out of use
+// for reads, it throws on removeItem too. The writes made are in `writes`.
 const stored = new Map();
 const writes = [];
 const storage = { readFails: false, writeFails: false };
@@ -69,7 +70,7 @@ Object.defineProperty(globalThis, "localStorage", {
       stored.set(k, String(v));
     },
     removeItem(k) {
-      if (storage.writeFails) throw new Error("SecurityError");
+      if (storage.readFails) throw new Error("SecurityError");
       stored.delete(k);
     },
   },
@@ -330,6 +331,62 @@ for (const [name, draw] of [
     d.click(d.inside);
     d.click(d.el);
     assert.equal(d.el.closed, 1);
+  });
+}
+
+// Each dialog, drawn, and a function that draws it again and gives its new
+// tree: the options dialog redrawn as a choice redraws it, the keys dialog
+// called again, as its parent does when it redraws.
+for (const [name, mountDialog] of [
+  [
+    "options",
+    () => {
+      const o = open({ theme: "system" });
+      let n = 0;
+      return [o.tree, async () => (await o.act(() => o.radio("theme", ++n % 2 ? "dark" : "light").props.onChange()), o.tree)];
+    },
+  ],
+  [
+    "keys",
+    () => {
+      const props = { dialog: { current: null } };
+      return [Keys(props), async () => Keys(props)];
+    },
+  ],
+]) {
+  test(`the ${name} dialog keeps a press on its backdrop across a redraw`, async () => {
+    browser("granted");
+    const [tree, redraw] = mountDialog();
+    const d = backdropOf(tree);
+    const release = async () => (await redraw()).props.onClick({ target: d.el, currentTarget: d.el });
+    // Pressed on the backdrop, drawn again, released on it: closes.
+    d.press(d.el);
+    const before = tree;
+    await release();
+    assert.notEqual((await redraw()).props.onClick, before.props.onClick);
+    assert.equal(d.el.closed, 1);
+    // Pressed inside the form, drawn again, released on the backdrop: stays.
+    d.press(d.inside);
+    await release();
+    assert.equal(d.el.closed, 1);
+    // Pressed on the backdrop, then pressed inside with no click between,
+    // drawn again, released on the backdrop: stays.
+    d.press(d.el);
+    d.press(d.inside);
+    await release();
+    assert.equal(d.el.closed, 1);
+    // Pressed on the backdrop and cancelled (a touch that turns into a
+    // scroll gives no click), then a click with no press: stays.
+    d.press(d.el);
+    tree.props.onPointerCancel({ target: d.el, currentTarget: d.el });
+    await release();
+    assert.equal(d.el.closed, 1);
+    // A press on another dialog is not one on this.
+    const other = backdropOf(tree);
+    other.press(other.el);
+    await release();
+    assert.equal(d.el.closed, 1);
+    other.click(other.inside);
   });
 }
 
@@ -640,6 +697,20 @@ test("with localStorage out of use, the tab's own copy of the cursor stands in",
   storage.readFails = storage.writeFails = false;
 });
 
+test("with localStorage out of use, a serve restart still starts the tab's copy again and asks at once", async (t) => {
+  await forget(t);
+  const N = browser("granted");
+  prefs.values = { notify: "all" };
+  storage.readFails = storage.writeFails = true;
+  t.after(() => (storage.readFails = storage.writeFails = false));
+  const asked = feed([page("b1", 3), page("b2", 1, [item(1)]), page("b2", 1, [item(1)])]);
+  const n = await start(t);
+  await n.tick(5000);
+  await n.tick(0);
+  assert.deepEqual(asked, ["/v1/notifications", "/v1/notifications?after=3", "/v1/notifications?after=0"]);
+  assert.deepEqual(N.shown.map((s) => s.title), ["title 1"]);
+});
+
 test("with localStorage readable but not writable, the tab's copy is used once storage has none", async (t) => {
   await forget(t);
   browser("granted");
@@ -653,50 +724,97 @@ test("with localStorage readable but not writable, the tab's copy is used once s
   storage.writeFails = false;
 });
 
-// Pinned as it is: a cursor kept in localStorage wins over this tab's copy,
-// so when storage still reads but stops taking writes (its quota full), the
-// tab asks after the stale number at every check and shows the same
-// notifications again, every five seconds. Turning notifications off cannot
-// drop it either, so turning them on again replays what came in meanwhile,
-// which the comment on notify says must not happen. Reported as a
-// follow-up; not changed here.
-test("with an old cursor kept and localStorage no longer taking writes, the same notifications are shown again", async (t) => {
+// When localStorage refuses this tab's writes (its quota full), the older
+// cursor it holds is removed, so this tab goes by its own copy: a
+// notification it has shown, it does not show again. A tab opened or
+// reloaded then finds no cursor kept, and starts at the latest. (Another
+// tab already open goes by its own copy too, so it may show what this one
+// has: with storage full, tabs cannot share the cursor.) Turned off and on
+// again, the tab starts at the latest and replays nothing.
+test("with an old cursor kept and localStorage no longer taking writes, the tab shows nothing twice", async (t) => {
   await forget(t);
   const N = browser("granted");
   prefs.values = { notify: "all" };
   keep({ boot: "b1", id: 3 });
   storage.writeFails = true;
   t.after(() => (storage.writeFails = false));
-  const asked = feed([page("b1", 5, [item(4), item(5)])]);
+  const asked = feed([page("b1", 5, [item(4), item(5)]), page("b1", 5, [item(4), item(5)]), page("b1", 7, [item(4), item(5), item(6), item(7)])]);
   const n = await start(t);
+  assert.deepEqual(N.shown.map((s) => s.title), ["title 4", "title 5"]);
+  assert.equal(stored.has(CURSOR), false);
   await n.tick(5000);
-  assert.deepEqual(asked, ["/v1/notifications?after=3", "/v1/notifications?after=3"]);
-  assert.deepEqual(N.shown.map((s) => s.title), ["title 4", "title 5", "title 4", "title 5"]);
-  // Off and on again: the stale cursor is still there.
+  assert.deepEqual(asked, ["/v1/notifications?after=3", "/v1/notifications?after=5"]);
+  assert.equal(N.shown.length, 2);
+  // Off and on again: nothing kept, so it starts at the latest.
   prefs.values = { notify: "off" };
   await n.tick(5000);
-  assert.deepEqual(kept(), { boot: "b1", id: 3 });
   prefs.values = { notify: "all" };
   await n.tick(5000);
-  assert.equal(asked.at(-1), "/v1/notifications?after=3");
-  assert.equal(N.shown.length, 6);
+  assert.equal(asked.at(-1), "/v1/notifications");
+  assert.equal(N.shown.length, 2);
+  assert.equal(stored.has(CURSOR), false);
 });
 
-// Pinned as it is: a Notification that cannot be made (Chrome on Android
-// throws "Illegal constructor" from `new Notification`) is caught as if
-// serve were out of reach, so the cursor does not move, and the items
-// before it are shown again at every check. The catch's comment speaks only
-// of serve. Reported as a follow-up; not changed here.
-test("a notification the browser will not make leaves the cursor where it was, and is tried again", async (t) => {
+test("once localStorage takes writes again, it holds the cursor, and another tab moving it on is followed", async (t) => {
+  await forget(t);
+  const N = browser("granted");
+  prefs.values = { notify: "all" };
+  keep({ boot: "b1", id: 3 });
+  storage.writeFails = true;
+  t.after(() => (storage.writeFails = false));
+  const asked = feed([
+    page("b1", 5, [item(4), item(5)]),
+    () => {
+      storage.writeFails = false;
+      return page("b1", 6, [item(6)]);
+    },
+    () => {
+      keep({ boot: "b1", id: 8 });
+      return page("b1", 9, [item(7), item(8), item(9)]);
+    },
+  ]);
+  const n = await start(t);
+  await n.tick(5000);
+  assert.deepEqual(kept(), { boot: "b1", id: 6 });
+  await n.tick(5000);
+  assert.deepEqual(asked, ["/v1/notifications?after=3", "/v1/notifications?after=5", "/v1/notifications?after=6"]);
+  assert.deepEqual(N.shown.map((s) => s.title), ["title 4", "title 5", "title 6", "title 9"]);
+  assert.deepEqual(kept(), { boot: "b1", id: 9 });
+});
+
+// A Notification the browser will not make (Chrome on Android throws
+// "Illegal constructor" from `new Notification`) is passed over, and the
+// cursor moves past it all the same: each item is tried once, shown or not,
+// so the items before it are not shown again, and the items after it are
+// tried.
+test("a notification the browser will not make is passed over, and the others are shown once", async (t) => {
   await forget(t);
   const N = browser("granted", { fails: (title) => title === "title 2" });
   prefs.values = { notify: "all" };
   keep({ boot: "b1", id: 0 });
-  const asked = feed([page("b1", 2, [item(1), item(2)])]);
+  const asked = feed([page("b1", 3, [item(1), item(2), item(3)]), page("b1", 3)]);
   const n = await start(t);
-  assert.deepEqual(N.shown.map((s) => s.title), ["title 1"]);
-  assert.deepEqual(kept(), { boot: "b1", id: 0 });
+  assert.deepEqual(N.shown.map((s) => s.title), ["title 1", "title 3"]);
+  assert.deepEqual(kept(), { boot: "b1", id: 3 });
+  await n.tick(4999);
+  assert.equal(asked.length, 1);
+  await n.tick(1);
+  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=3"]);
+  assert.equal(N.shown.length, 2);
+});
+
+test("in a browser that will make none, the cursor still moves on, and the tab asks at its usual pace", async (t) => {
+  await forget(t);
+  const N = browser("granted", { fails: () => true });
+  prefs.values = { notify: "all" };
+  keep({ boot: "b1", id: 0 });
+  const asked = feed([page("b1", 2, [item(1), item(2)]), page("b1", 4, [item(1), item(2), item(3), item(4)])]);
+  const n = await start(t);
+  assert.deepEqual(kept(), { boot: "b1", id: 2 });
+  await n.tick(0);
+  assert.equal(asked.length, 1);
   await n.tick(5000);
-  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=0"]);
-  assert.deepEqual(N.shown.map((s) => s.title), ["title 1", "title 1"]);
+  assert.deepEqual(asked, ["/v1/notifications?after=0", "/v1/notifications?after=2"]);
+  assert.deepEqual(kept(), { boot: "b1", id: 4 });
+  assert.deepEqual(N.shown, []);
 });
