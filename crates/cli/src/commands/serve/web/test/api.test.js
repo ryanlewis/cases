@@ -118,19 +118,6 @@ test("a message refused for an old token, whose token cannot be read again, says
   assert.match(sent.refusal, /not sent/);
 });
 
-test("a send whose first token read cannot reach serve says it was not recorded, and is not sent", async (t) => {
-  const fresh = await import("../static/api.ts?no-token");
-  const calls = serve(t, () => { throw new Error("unexpected"); });
-  globalThis.fetch = async (url, init) => {
-    calls.push(`${init && init.method ? init.method : "GET"} ${url}`);
-    throw new TypeError("Failed to fetch");
-  };
-  const sent = await fresh.send("abc", "answer", { revision: 2 });
-  assert.doesNotMatch(sent.refusal, /may or may not/);
-  assert.match(sent.refusal, /not recorded/);
-  assert.deepEqual(calls, ["GET /v1"]);
-});
-
 test("a send whose token is read again, but whose second send cannot reach serve, says the outcome is unknown", async (t) => {
   const refused = new Response(JSON.stringify({ error: { category: "csrf", message: "bad token" } }), { status: 403 });
   const calls = restarted(
@@ -168,4 +155,137 @@ test("a case read, written or refused comes out with empty data on each event se
   assert.equal((await api.send("c1Ab2", "park", { revision: 2 })).current, undefined);
   reply = () => new Response(JSON.stringify({ ...served(), events: undefined }), { status: 200 });
   assert.equal((await api.one("c1Ab2")).body.events, undefined);
+});
+
+// A fetch that records each request, as [url, init], and answers it by
+// `route`; the index gives the token `csrf`.
+function recorded(t, route, csrf = "tok") {
+  const was = globalThis.fetch;
+  t.after(() => { globalThis.fetch = was; });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push([url, init]);
+    if (url === "/v1") return new Response(JSON.stringify({ csrf, build: "b" }), { status: 200 });
+    return route(url, init);
+  };
+  return requests;
+}
+
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+
+test("each read asks for its route under /v1, and never from the cache", async (t) => {
+  const requests = recorded(t, (url) => (url.startsWith("/v1/cases?") ? json({ list: [] }) : json({ list: [], id: "a/b" })));
+  assert.deepEqual(await api.index(), { csrf: "tok", build: "b" });
+  await api.list(["open", "parked"]);
+  await api.one("a/b");
+  await api.notifications(null);
+  await api.notifications(0);
+  await api.notifications(7);
+  assert.deepEqual(requests.map(([url]) => url), [
+    "/v1",
+    "/v1/cases?state=open%2Cparked",
+    "/v1/cases/a%2Fb",
+    "/v1/notifications",
+    "/v1/notifications?after=0",
+    "/v1/notifications?after=7",
+  ]);
+  for (const [url, init] of requests) {
+    assert.equal(init.cache, "no-store", url);
+    assert.equal(init.method, undefined, url);
+  }
+});
+
+test("a list serve refuses throws Refused, with the refusal's status and message, or the status when the body is not JSON", async (t) => {
+  let reply;
+  recorded(t, () => reply());
+  reply = () => json({ error: { category: "store", message: "cannot read the store" } }, 500);
+  await assert.rejects(api.list(["open"]), (e) => e instanceof api.Refused && e.status === 500 && e.message === "cannot read the store");
+  reply = () => new Response("<html>bad gateway</html>", { status: 502 });
+  await assert.rejects(api.list(["open"]), (e) => e instanceof api.Refused && e.status === 502 && e.message === "serve answered 502");
+});
+
+test("a reply whose body is not JSON has a null body, and keeps its status", async (t) => {
+  let reply;
+  recorded(t, () => reply());
+  reply = () => new Response("not json", { status: 200 });
+  assert.deepEqual(await api.notifications(null), { ok: true, status: 200, body: null });
+  reply = () => new Response("", { status: 404 });
+  assert.deepEqual(await api.one("gone"), { ok: false, status: 404, body: null });
+  reply = () => json({ error: { category: "missing", message: "no case gone" } }, 404);
+  assert.deepEqual(await api.one("gone"), { ok: false, status: 404, body: { error: { category: "missing", message: "no case gone" } } });
+});
+
+test("a write POSTs its body as JSON to the case's route, with the token the index gave", async (t) => {
+  const requests = recorded(t, () => json(mine), "write-token");
+  await api.index();
+  const reply = await api.write("a b", "amend", { revision: 1, note: "n" });
+  assert.deepEqual(reply, { ok: true, status: 200, body: mine });
+  const [url, init] = requests[1];
+  assert.equal(url, "/v1/cases/a%20b/amend");
+  assert.deepEqual(init, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Cases-CSRF": "write-token" },
+    body: JSON.stringify({ revision: 1, note: "n" }),
+    cache: "no-store",
+  });
+});
+
+test("a write refused for an old token is sent again with the token read again, and only then", async (t) => {
+  let token = "old";
+  const sentWith = [];
+  let reply;
+  const was = globalThis.fetch;
+  t.after(() => { globalThis.fetch = was; });
+  globalThis.fetch = async (url, init) => {
+    if (url === "/v1") return json({ csrf: token, build: "b" });
+    sentWith.push(init.headers["X-Cases-CSRF"]);
+    return reply(sentWith.length);
+  };
+  await api.index();
+  token = "new";
+  reply = (n) => (n === 1 ? json({ error: { category: "csrf", message: "bad token" } }, 403) : json(mine));
+  assert.deepEqual((await api.send("abc", "answer", { revision: 2 })).after, mine);
+  assert.deepEqual(sentWith, ["old", "new"]);
+  // A 403 for any other reason, or a csrf refusal of another status, is
+  // not sent again.
+  sentWith.length = 0;
+  reply = () => json({ error: { category: "forbidden", message: "not yours" } }, 403);
+  assert.equal((await api.send("abc", "answer", { revision: 2 })).refusal, "not yours");
+  reply = () => json({ error: { category: "csrf", message: "odd" } }, 400);
+  assert.equal((await api.send("abc", "answer", { revision: 2 })).refusal, "odd");
+  assert.deepEqual(sentWith, ["new", "new"]);
+});
+
+test("a send refused as stale says so plainly; any other refusal says what serve said, or its status", async (t) => {
+  let reply;
+  recorded(t, () => reply());
+  await api.index();
+  reply = () => json({ error: { category: "stale", message: "revision 2 is not 3" } }, 409);
+  const stale = await send("abc", "answer", { revision: 2 });
+  assert.equal(stale.refusal, "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  assert.equal(stale.current, undefined);
+  reply = () => json({ error: { category: "invalid", message: "choice 9 is not an option" } }, 400);
+  assert.deepEqual(await send("abc", "answer", { revision: 2 }), { refusal: "choice 9 is not an option" });
+  reply = () => new Response("oops", { status: 500 });
+  assert.deepEqual(await send("abc", "answer", { revision: 2 }), { refusal: "serve answered 500" });
+});
+
+test("a message is POSTed to /v1/cases, and comes back as the case, as serve's refusal, or as maybe sent when serve cannot be reached", async (t) => {
+  let reply;
+  const requests = recorded(t, () => reply());
+  await api.index();
+  reply = () => json(served());
+  const sent = await api.sendMessage({ body: "hi" });
+  assert.deepEqual(datas(sent.after), [{}, { choice: 1 }]);
+  assert.equal(sent.refusal, undefined);
+  const [url, init] = requests.at(-1);
+  assert.equal(url, "/v1/cases");
+  assert.equal(init.method, "POST");
+  assert.equal(init.body, JSON.stringify({ body: "hi" }));
+  reply = () => json({ error: { category: "invalid", message: "a message needs a body" } }, 400);
+  assert.deepEqual(await api.sendMessage({ body: "" }), { refusal: "a message needs a body" });
+  reply = () => { throw new TypeError("Failed to fetch"); };
+  const lost = await api.sendMessage({ body: "hi" });
+  assert.equal(lost.after, undefined);
+  assert.equal(lost.refusal, "serve could not be reached, so the message may or may not have been sent. look for it in flight before sending it again.");
 });
