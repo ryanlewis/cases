@@ -975,11 +975,12 @@ mod tests {
             instance::write(&self.store, &info).unwrap();
         }
 
-        /// Puts `text` where the instance file goes.
+        /// Puts `text` where the instance file goes. A record is written
+        /// first so that the state directory, if new, is made as serve
+        /// makes it, for this user alone.
         fn write_text(&self, text: &str) {
-            let path = instance::path(&self.store).unwrap();
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text).unwrap();
+            self.write(0, "127.0.0.1:0");
+            std::fs::write(instance::path(&self.store).unwrap(), text).unwrap();
         }
     }
 
