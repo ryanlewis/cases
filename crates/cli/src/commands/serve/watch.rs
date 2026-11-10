@@ -90,7 +90,8 @@ struct Reader<'a> {
     warned: HashSet<String>,
     /// The keys of the cases folded again since the snapshot published
     /// last, by every poll since, which the next snapshot holds anew; the
-    /// rest it shares with that snapshot. `None` when every case was.
+    /// rest it shares with that snapshot. `None` when every case was, so
+    /// that the next snapshot shares only the cases that came out equal.
     refolded: Option<HashSet<Key>>,
 }
 
@@ -248,8 +249,8 @@ impl Reader<'_> {
         // Each case the poller did not fold again since the last snapshot
         // is the one that snapshot holds: shared, rather than copied with
         // all its events, and not looked at. When every case was folded
-        // again, one that came out equal is shared too: comparing costs
-        // less than the fold just paid for it, and the copy is saved.
+        // again since that snapshot, one that came out equal is shared too:
+        // comparing it allocates nothing, where a copy clones its events.
         let refolded = self.refolded.replace(HashSet::new());
         // Both the snapshot and the poller's cases are in key order.
         let mut before = current.cases.iter().peekable();
