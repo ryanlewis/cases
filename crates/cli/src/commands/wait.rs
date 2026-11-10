@@ -63,7 +63,8 @@ pub(crate) struct Args {
     since: Option<String>,
 
     /// Give up after this long, such as 30s or 10m: nothing on stdout, one
-    /// line on stderr, exit 2. 0 waits for ever.
+    /// line on stderr, exit 2. If the store could not be read at the last
+    /// try before then, exit 1 with why instead. 0 waits for ever.
     #[arg(long, value_name = "DURATION", value_parser = duration::parse, default_value = "0")]
     timeout: Duration,
 
@@ -526,7 +527,9 @@ impl First {
 /// first read, a server that cannot be reached, or answers 429, 502, 503 or
 /// 504, is waited out until the timeout, or the end of a lingering wait's
 /// collecting, and said once on stderr; a first read that fails fails the
-/// wait at once, so a wrong store is not waited on.
+/// wait at once, so a wrong store is not waited on. A wait with nothing
+/// collected whose last try before its timeout failed ends with that
+/// failure, not as a timeout, which says only that nothing came.
 ///
 /// A pickup wait on a forwarded store checks its locks there, `far`, before
 /// each read and each message it takes, and holds no poll and pauses no
@@ -656,7 +659,8 @@ impl Asked<'_> {
     /// # Errors
     ///
     /// When the read fails for good, or the timeout, or the linger of a
-    /// wait collecting, passes while a failing store is ridden out.
+    /// wait collecting, passes while a failing store is ridden out: see
+    /// [`Offline::ended`].
     fn read<'p>(
         &self,
         poller: &'p mut Poller,
@@ -966,9 +970,12 @@ fn timed_out(args: &Args) -> Error {
 ///
 /// # Errors
 ///
-/// When the deadline passes first, or a poll fails for good. Once the
-/// locks may have been let go, it ends at once, as if the version had
-/// changed, so that the wait's next turn finds it.
+/// When the deadline passes first, or a poll fails for good. A wait with
+/// nothing collected whose last try failed tries once more at the deadline,
+/// so that a store back since is not reported as failing, and ends as
+/// [`Offline::ended`] says. Once the locks may have been let go, it ends at
+/// once, as if the version had changed, so that the wait's next turn finds
+/// it.
 fn follow(
     db: &AnyStore,
     version: &Version,
@@ -984,7 +991,7 @@ fn follow(
         }
         let held = held_for(far);
         let left = left(deadline);
-        if left.is_some_and(|left| left.is_zero()) {
+        if left.is_some_and(|left| left.is_zero()) && (collecting || offline.failing.is_none()) {
             return Err(timed_out(args));
         }
         let hold = left.map_or(HOLD_MAX, |left| left.min(HOLD_MAX));
@@ -1015,12 +1022,27 @@ fn follow(
 struct Offline {
     said: bool,
     pause: Duration,
+    /// What the last try that says anything of the store failed with, while
+    /// the store has not answered since.
+    failing: Option<String>,
 }
 
 impl Offline {
     /// The server answered: the next pause is the first again.
     fn reached(&mut self) {
         self.pause = Duration::ZERO;
+        self.failing = None;
+    }
+
+    /// The error that ends a wait whose time has run out. One `collecting`
+    /// times out, and gives what it has. One that is not gives the failure
+    /// of its last try, if that failed: the store could not say whether
+    /// anything came, so it is not the timeout that says nothing did.
+    fn ended(&self, collecting: bool, args: &Args) -> Error {
+        match &self.failing {
+            Some(failure) if !collecting => Error::new(failure.clone()),
+            _ => timed_out(args),
+        }
     }
 
     /// Says `error` once in the wait, and what ends the wait if the store
@@ -1030,9 +1052,9 @@ impl Offline {
     ///
     /// # Errors
     ///
-    /// When the deadline has passed: the wait times out, and the failure
-    /// is not said. Once the locks may have been let go, it does not pause,
-    /// so that the wait's next turn finds it.
+    /// When the deadline has passed, as [`Offline::ended`] says. Once the
+    /// locks may have been let go, it does not pause, so that the wait's
+    /// next turn finds it.
     fn pause(
         &mut self,
         error: &Failure,
@@ -1046,8 +1068,15 @@ impl Offline {
         }
         let held = held_for(far);
         let left = left(deadline);
-        if left.is_some_and(|left| left.is_zero()) {
-            return Err(timed_out(args));
+        let out_of_time = left.is_some_and(|left| left.is_zero());
+        // No answer by the deadline may be the deadline cutting the request
+        // off, which says nothing of the store. Taken for nothing having
+        // come, the next wait's first read finds out at once.
+        if !(out_of_time && error.no_answer()) {
+            self.failing = Some(error.to_string());
+        }
+        if out_of_time {
+            return Err(self.ended(collecting, args));
         }
         if !self.said {
             self.said = true;
@@ -1617,6 +1646,73 @@ mod tests {
         let late = start + cap.saturating_sub(Duration::from_secs(1));
         collecting.saw([((Key::new(3).unwrap(), None), 1)], late);
         assert_eq!(collecting.until(linger), start + cap);
+    }
+
+    /// A wait with nothing given, as `cases wait --timeout 1s` parses.
+    fn timed_args() -> Args {
+        #[derive(clap::Parser)]
+        struct Wait {
+            #[command(flatten)]
+            args: Args,
+        }
+        <Wait as clap::Parser>::parse_from(["wait", "--timeout", "1s"]).args
+    }
+
+    /// A failure of a forwarded store.
+    fn forwarded(error: cases_store_remote::Error) -> Failure {
+        Failure::Forward {
+            error,
+            forward: "ssh://devbox".into(),
+        }
+    }
+
+    /// A forwarded store that gave no answer.
+    fn no_answer() -> Failure {
+        forwarded(cases_store_remote::Error::Transport {
+            server: "ssh://devbox".into(),
+            reason: "ssh failed (exit 255)".into(),
+        })
+    }
+
+    /// A forwarded store that answered, to say it is limiting requests.
+    fn limited() -> Failure {
+        forwarded(cases_store_remote::Error::Rate { retry_after: None })
+    }
+
+    #[test]
+    fn a_deadline_after_a_failed_try_is_that_failure_unless_it_collected() {
+        let args = timed_args();
+        let past = Some(Instant::now());
+        let mut offline = Offline::default();
+        let failure = limited();
+        let error = offline.pause(&failure, past, false, &args, None);
+        let error = error.unwrap_err();
+        assert_eq!(error.status(), Status::Failure);
+        assert_eq!(error.to_string(), failure.to_string());
+        // With something collected, the timeout gives it.
+        let error = offline.pause(&failure, past, true, &args, None);
+        assert_eq!(error.unwrap_err().status(), Status::Timeout);
+        // A store that answered since is back: nothing came.
+        offline.reached();
+        assert_eq!(offline.ended(false, &args).status(), Status::Timeout);
+    }
+
+    #[test]
+    fn no_answer_at_the_deadline_is_a_failure_only_if_a_try_before_it_failed() {
+        let args = timed_args();
+        let past = Some(Instant::now());
+        let failure = no_answer();
+        // Alone it may be the deadline cutting the request off.
+        let mut offline = Offline::default();
+        let error = offline.pause(&failure, past, false, &args, None);
+        assert_eq!(error.unwrap_err().status(), Status::Timeout);
+        // After a try that failed in good time, it is that failure.
+        let soon = Some(Instant::now() + Duration::from_millis(5));
+        offline.pause(&failure, soon, false, &args, None).unwrap();
+        let error = offline.pause(&failure, past, false, &args, None);
+        let error = error.unwrap_err();
+        assert_eq!(error.status(), Status::Failure);
+        assert_eq!(error.to_string(), failure.to_string());
     }
 
     #[test]

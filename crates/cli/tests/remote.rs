@@ -1170,12 +1170,14 @@ fn a_remote_wait_whose_first_read_fails_fails_at_once() {
 }
 
 /// A 429 whose `Retry-After` runs past the timeout is not waited out: the
-/// wait ends at its timeout, having said why once.
+/// wait tries once more at its timeout and, limited again, ends with that
+/// failure, exit 1, not as one that nothing came to.
 #[test]
 fn a_remote_wait_does_not_overshoot_on_a_429() {
     let r = Remote::new(&["me"]);
     let id = r.open(Some(&r.ids[0]), "Limited");
     r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
     r.fake.fault(Fault::Rate(Some(10)));
     let start = Instant::now();
     let out = Output::from(
@@ -1184,13 +1186,18 @@ fn a_remote_wait_does_not_overshoot_on_a_429() {
             .unwrap(),
     );
     let took = start.elapsed();
-    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
     assert!(took < Duration::from_secs(5), "{took:?}");
     assert_eq!(
         out.stderr
-            .matches("the server is limiting requests; try again in 10 s")
+            .matches("warning: the server is limiting requests; try again in 10 s")
             .count(),
         1,
+        "{out:?}"
+    );
+    assert!(
+        out.stderr
+            .ends_with("Error: the server is limiting requests; try again in 10 s\n"),
         "{out:?}"
     );
 }
@@ -1463,8 +1470,50 @@ fn a_steady_remote_wait_that_cannot_read_while_it_collects_prints_at_the_end_of_
     }
 }
 
+/// A wait whose pause after a failure runs to its timeout tries once more
+/// there: a store that answers has nothing for it, exit 2, whatever it said
+/// before.
+#[test]
+fn a_remote_wait_tries_once_more_at_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Limited once");
+    r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(!out.stderr.contains("Error:"), "{out:?}");
+}
+
+/// A wait whose server fails for a while and is back before its timeout has
+/// heard from the store since: nothing came, exit 2.
+#[test]
+fn a_remote_wait_whose_server_is_back_before_its_timeout_exits_2() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Back in time");
+    // The first read, then the first held poll and both its retries.
+    r.fake.fault(PASS);
+    for _ in 0..3 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "8s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(out.stderr.contains("the wait goes on"), "{out:?}");
+    assert!(!out.stderr.contains("Error:"), "{out:?}");
+}
+
 /// A steady wait that holds nothing rides a failing server out until its
-/// timeout, as an eager one does, and ends there with nothing, exit 2.
+/// timeout, as an eager one does, and ends there with the failure, exit 1:
+/// exit 2 is for a wait that nothing came to.
 #[test]
 fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout() {
     let r = Remote::new(&["me"]);
@@ -1480,8 +1529,13 @@ fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout
             .unwrap(),
     );
     let took = start.elapsed();
-    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
     assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr
+            .ends_with("Error: the server failed (503): the fake failed\n"),
+        "{out:?}"
+    );
     assert!(
         took >= Duration::from_secs(3) && took < Duration::from_secs(6),
         "{took:?}"
