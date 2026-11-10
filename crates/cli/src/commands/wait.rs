@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use cases_core::Store as _;
 use cases_core::{
-    Answer, Author, Case, Event, EventType, Kind, Park, Pickup, Record, State, Time, Urgency,
-    Version, Withdraw,
+    Actor, Answer, Author, Case, Event, EventType, Kind, Park, Pickup, Record, State, Time,
+    Urgency, Version, Withdraw,
 };
 use cases_store_sqlite::{Cases, HEARTBEAT, Key, Writer};
 use serde::Serialize;
@@ -109,6 +109,31 @@ pub(crate) struct Args {
     mood: Option<Mood>,
 }
 
+impl Args {
+    /// The wait of `cases open --wait` on the case `id` it opened: as `cases
+    /// wait --id ID --since ID --pickup --by BY --timeout TIMEOUT` waits,
+    /// with `by` the case's worker, or none for a case opened with none, as
+    /// the skill chains the two commands.
+    pub(crate) fn opened(id: String, by: Option<String>, timeout: Duration) -> Args {
+        Args {
+            for_: Side::Agent,
+            since: Some(id.clone()),
+            timeout,
+            ids: vec![id],
+            filter: Filter {
+                kinds: Vec::new(),
+                labels: Vec::new(),
+                workers: Vec::new(),
+            },
+            pickup: true,
+            by,
+            full: false,
+            doing: None,
+            mood: None,
+        }
+    }
+}
+
 /// How long a wait keeps collecting after the first event that would wake it
 /// (AG-18). The numbers may change; the order will not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -130,6 +155,19 @@ impl Mood {
             Mood::Steady => Some((Duration::from_secs(10), Duration::from_secs(60))),
             Mood::Patient => Some((Duration::from_secs(30), Duration::from_secs(300))),
         }
+    }
+}
+
+/// A wait's mood: `given` with `--mood`, else the config file's, else eager.
+///
+/// # Errors
+///
+/// When the config file's mood is not a mood.
+pub(crate) fn chosen(given: Option<Mood>, ctx: &Ctx) -> Result<Mood, Error> {
+    match (given, ctx.config.get("mood")) {
+        (Some(mood), _) => Ok(mood),
+        (None, Some(text)) => mood(text),
+        (None, None) => Ok(Mood::Eager),
     }
 }
 
@@ -375,11 +413,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         Some(text) => since(ctx, text)?,
         None => None,
     };
-    let mood = match (args.mood, ctx.config.get("mood")) {
-        (Some(mood), _) => mood,
-        (None, Some(text)) => mood(text)?,
-        (None, None) => Mood::Eager,
-    };
+    let mood = chosen(args.mood, ctx)?;
     // Held until wait has printed what it picked up. A store not there yet
     // gets no directory of locks either, as a wait makes nothing (ST-08), so
     // a pickup wait started before the store's first open takes none.
@@ -1379,25 +1413,7 @@ fn print(
 ) -> Result<(), Error> {
     turns.sort_by_key(|turn| turn.at);
     let next_since = turns.iter().filter_map(|turn| turn.at).chain(since).max();
-    // Only a whole case names its actors, so a short line needs none. Read
-    // before any pickup, so that a store that cannot give them fails wait
-    // before it writes. A message wait took is picked up already, so it is
-    // printed with its actors named by id alone rather than lost.
-    let read = if args.full {
-        ctx.actors()
-    } else {
-        Ok(Actors::default())
-    };
-    let mut actors = match read {
-        Ok(actors) => actors,
-        Err(error) if turns.iter().any(|turn| turn.taken) => {
-            ctx::warn(format_args!(
-                "the actors cannot be read, so they are named by id: {error}"
-            ));
-            Actors::default()
-        }
-        Err(error) => return Err(error),
-    };
+    let mut actors = actors_to_name(args, ctx, &turns)?;
     // The messages wait took whose lines are not printed yet.
     let mut unprinted: Vec<Key> = turns
         .iter()
@@ -1406,54 +1422,145 @@ fn print(
         .collect();
     let by = args.by.as_deref().unwrap_or_default();
     for mut turn in turns {
-        // A pickup wait whose locks on the far side may have been let go
-        // picks up nothing more: the case is printed as read, as one whose
-        // pickup failed is.
         let picked = args.pickup
             && turn.case.state() == State::Answered
-            && match far.map(FarLocks::write).transpose() {
-                Err(error) => {
-                    ctx::warn(format_args!("{}: not picked up: {error}", turn.key));
-                    false
-                }
-                Ok(writing) => {
-                    let picked = pick_up(ctx, by, &mut turn);
-                    if picked && let Some(writing) = writing {
-                        writing.owe(turn.key);
-                    }
-                    picked
-                }
-            };
-        // A pickup makes its actor when the table does not have it, such as
-        // for a case opened by hand. A read that fails keeps the table read
-        // before, so that the case is still printed.
-        if args.full
-            && picked
-            && let Ok(now) = ctx.actors()
-        {
-            actors = now;
+            && pick_up_under(ctx, by, &mut turn, far);
+        if args.full && picked {
+            learn_actor(ctx, &turn, &mut actors);
         }
-        let printed = match line(&turn, &actors, next_since, args.full) {
-            Ok(text) => {
-                writeln!(ctx.out, "{text}").map_err(|error| (error.to_string(), Error::from(error)))
-            }
-            Err(error) => Err((error.to_string(), error)),
-        };
-        if let Err((why, error)) = printed {
-            let lost = picked.then_some(turn.key).into_iter().chain(unprinted);
-            for key in lost {
-                ctx::warn(format_args!("{key}: picked up, but not printed: {why}"));
-            }
+        if let Err((why, error)) = write_line(ctx, &turn, &actors, next_since, args.full) {
+            warn_lost(picked.then_some(turn.key), unprinted, &why);
             return Err(error);
         }
         unprinted.retain(|key| *key != turn.key);
         // Only once the line is out: a signal while it is printed names
         // the case too, rather than wait on a stdout that may be full.
-        if let Some(mut owed) = far.map(FarLocks::owed) {
-            owed.retain(|key| *key != turn.key);
-        }
+        settle(far, turn.key);
     }
     Ok(())
+}
+
+/// Names on stderr each case picked up whose line will not be printed now:
+/// `picked`, the case whose line failed, then the messages wait took that
+/// are still `unprinted`, so that no later wait is expected to take them.
+fn warn_lost(picked: Option<Key>, unprinted: Vec<Key>, why: &str) {
+    for key in picked.into_iter().chain(unprinted) {
+        ctx::warn(format_args!("{key}: picked up, but not printed: {why}"));
+    }
+}
+
+/// Marks the case `key` as no longer owed to the far side, `far`, once its
+/// line is out.
+fn settle(far: Option<&FarLocks>, key: Key) {
+    if let Some(mut owed) = far.map(FarLocks::owed) {
+        owed.retain(|owed| *owed != key);
+    }
+}
+
+/// The actors a wait's lines are named from. Only a whole case names its
+/// actors, so a short line needs none. Read before any pickup, so that a
+/// store that cannot give them fails wait before it writes. A message wait
+/// took is picked up already, so it is printed with its actors named by id
+/// alone rather than lost: such a wait warns and goes on, while one that
+/// took nothing fails.
+fn actors_to_name(args: &Args, ctx: &Ctx, turns: &[Turn]) -> Result<Known, Error> {
+    let read = if args.full {
+        actors_of(ctx)
+    } else {
+        Ok(Known::default())
+    };
+    match read {
+        Ok(actors) => Ok(actors),
+        Err(error) if turns.iter().any(|turn| turn.taken) => {
+            ctx::warn(format_args!(
+                "the actors cannot be read, so they are named by id: {error}"
+            ));
+            Ok(Known::default())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Picks up the answered case of `turn`, as [`pick_up`] does, unless the
+/// wait's locks on the far side, `far`, may have been let go: then it picks
+/// up nothing, and the case is printed as read, as one whose pickup failed
+/// is. A case picked up is owed to the far side until its line is out. Says
+/// whether it picked the case up.
+fn pick_up_under(ctx: &Ctx, by: &str, turn: &mut Turn, far: Option<&FarLocks>) -> bool {
+    match far.map(FarLocks::write).transpose() {
+        Err(error) => {
+            ctx::warn(format_args!("{}: not picked up: {error}", turn.key));
+            false
+        }
+        Ok(writing) => {
+            let picked = pick_up(ctx, by, turn);
+            if picked && let Some(writing) = writing {
+                writing.owe(turn.key);
+            }
+            picked
+        }
+    }
+}
+
+/// Reads the table of actors again after a pickup whose actor it does not
+/// have. A pickup makes its actor when the table does not have it, such as
+/// for a case opened by hand, so the table is read again then, and only
+/// then: the pickup's actor is the case's agent, its worker or a message's
+/// taker, whom the table has after the first pickup by it. A read that fails
+/// keeps the table read before, so that the case is still printed.
+fn learn_actor(ctx: &Ctx, turn: &Turn, actors: &mut Known) {
+    if !actors.has(turn.case.events().last().and_then(Event::actor))
+        && let Ok(now) = actors_of(ctx)
+    {
+        *actors = now;
+    }
+}
+
+/// Writes the line of `turn` to stdout. On failure, gives why, as the
+/// warnings about cases picked up but not printed say it, with the error.
+fn write_line(
+    ctx: &mut Ctx,
+    turn: &Turn,
+    actors: &Known,
+    next_since: Option<Time>,
+    full: bool,
+) -> Result<(), (String, Error)> {
+    match line(turn, &actors.actors, next_since, full) {
+        Ok(text) => {
+            writeln!(ctx.out, "{text}").map_err(|error| (error.to_string(), Error::from(error)))
+        }
+        Err(error) => Err((error.to_string(), error)),
+    }
+}
+
+/// The store's table of actors, as a `--full` wait names them from, with
+/// the ids it has.
+#[derive(Debug, Default)]
+struct Known {
+    actors: Actors,
+    ids: HashSet<String>,
+}
+
+impl Known {
+    /// Whether the table has `actor`; an event with none needs nothing.
+    fn has(&self, actor: Option<&Actor>) -> bool {
+        actor.is_none_or(|actor| self.ids.contains(&actor.id))
+    }
+}
+
+/// The store's actors, as [`Ctx::actors`] gives them: none from a store
+/// that is not there yet.
+fn actors_of(ctx: &Ctx) -> Result<Known, Error> {
+    let rows = match ctx.store.actors() {
+        Ok(rows) => rows,
+        Err(error) if error.is_missing() => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let ids = rows.iter().map(|row| row.id.clone()).collect();
+    Ok(Known {
+        actors: Actors::new(rows),
+        ids,
+    })
 }
 
 /// The line `turn` prints as: its case short, or when `full` as `show
@@ -1873,5 +1980,39 @@ mod tests {
         listening.due = Some(Instant::now());
         listening.beat(&db, &mut warned);
         assert_eq!(doing_of(&db, "ada"), None);
+    }
+
+    /// A `--full` wait names actors from the store's table: none from a
+    /// store not there, as one removed while the wait runs is, and every
+    /// actor the table has, by id, from one that is.
+    #[test]
+    fn the_actors_of_a_store_not_there_are_none_and_of_one_there_are_its_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let ctx = |db| Ctx {
+            store: db,
+            target: crate::store::Target::Local { path: path.clone() },
+            config: crate::config::Config::default(),
+            store_flag: None,
+            out: std::io::stdout().lock(),
+        };
+        let clock = Arc::new(AtomicI64::new(100));
+        let none = actors_of(&ctx(clocked(&path, &clock))).unwrap();
+        assert!(none.ids.is_empty());
+        assert!(!path.exists());
+
+        let db = clocked(&path, &clock);
+        make(&db);
+        let known = actors_of(&ctx(db)).unwrap();
+        let actor = |id: &str| {
+            let mut actor = Actor::default();
+            id.clone_into(&mut actor.id);
+            actor
+        };
+        assert_eq!(known.ids.len(), 1);
+        let agent = actor(known.ids.iter().next().unwrap());
+        assert!(known.has(Some(&agent)));
+        assert!(known.has(None));
+        assert!(!known.has(Some(&actor("gone"))));
     }
 }

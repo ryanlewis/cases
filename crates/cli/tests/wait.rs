@@ -2760,3 +2760,573 @@ fn a_message_taken_while_a_steady_wait_collects_is_in_the_same_print() {
         assert_eq!(line["state"], "pickedup", "{line}");
     }
 }
+
+// Pins of how a wait prints what it found (`print` in `commands/wait.rs`):
+// each line exactly, its order, and how a wait ends when a write or a read
+// fails part-way.
+
+/// The time of the event `seq` of the case `id`, as a line gives it.
+fn event_at(env: &Env, id: &str, seq: usize) -> String {
+    env.case(id).events()[seq - 1].at().unwrap().to_string()
+}
+
+/// The id of the actor of the event `seq` of the case `id`.
+fn actor_of(env: &Env, id: &str, seq: usize) -> String {
+    env.case(id).events()[seq - 1].actor().unwrap().id.clone()
+}
+
+/// The short line of a decision answered with option `choice` at event 2.
+fn answered_line(env: &Env, id: &str, state: &str, revision: u64, choice: u64) -> String {
+    format!(
+        r#"{{"id":"{id}","state":"{state}","kind":"decision","title":"Pin bun?","answer":{{"choice":{choice},"actor":{{"id":"{}"}},"answered_at":"{}"}},"revision":{revision},"amend_seq":0"#,
+        actor_of(env, id, 2),
+        event_at(env, id, 2),
+    )
+}
+
+/// The end of every line of a wait: `fresh`, then `next_since`.
+fn tail(fresh: bool, next_since: &str) -> String {
+    format!(r#","fresh":{fresh},"next_since":"{next_since}"}}"#)
+}
+
+/// A wait without `--pickup` prints each case it found as one short line,
+/// in the order the events that made them the agent's turn came, not the
+/// order the cases were opened: a park, an answer, a resume, then the
+/// answer that woke it. Only the one that landed while it waited is fresh,
+/// and every line gives the time of that last event as `next_since`. A
+/// withdraw from before the wait started is not printed, even with other
+/// cases.
+#[test]
+fn a_wait_prints_one_exact_short_line_for_each_case_in_the_order_of_its_turn() {
+    let env = Env::new();
+    let answered = env.open_decision();
+    let parked = env.open_stuck();
+    let resumed = env.open_stuck();
+    let withdrawn = env.open_decision();
+    let woke_it = env.open_fyi("Seen?");
+    run(&env, "park", &parked, &["--note", "Monday."]);
+    run(
+        &env,
+        "answer",
+        &answered,
+        &["--option", "1", "--as", "Ryan"],
+    );
+    run(&env, "park", &resumed, &[]);
+    run(&env, "resume", &resumed, &[]);
+    run(&env, "answer", &withdrawn, &["--option", "2"]);
+    run(
+        &env,
+        "withdraw",
+        &withdrawn,
+        &["--as", "Ryan", "--reason", "Gone."],
+    );
+    let marker = marker(&env);
+
+    let waiting = Waiting::after_first_read(&env, &marker, &[]);
+    run(&env, "answer", &woke_it, &["--ack"]);
+    let out = waiting.finish();
+
+    let next = event_at(&env, &woke_it, 2);
+    let expected = [
+        format!(
+            r#"{{"id":"{parked}","state":"parked","kind":"stuck","title":"Blocked on mirror","park":{{"note":"Monday.","actor":{{"id":"{}"}},"parked_at":"{}"}},"revision":2,"amend_seq":0{}"#,
+            actor_of(&env, &parked, 2),
+            event_at(&env, &parked, 2),
+            tail(false, &next),
+        ),
+        answered_line(&env, &answered, "answered", 2, 1) + &tail(false, &next),
+        format!(
+            r#"{{"id":"{resumed}","state":"open","kind":"stuck","title":"Blocked on mirror","revision":3,"amend_seq":0{}"#,
+            tail(false, &next),
+        ),
+        format!(
+            r#"{{"id":"{woke_it}","state":"answered","kind":"fyi","title":"Seen?","answer":{{"ack":true,"actor":{{"id":"{}"}},"answered_at":"{next}"}},"revision":2,"amend_seq":0{}"#,
+            actor_of(&env, &woke_it, 2),
+            tail(true, &next),
+        ),
+    ];
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().collect::<Vec<_>>(), expected);
+    assert_eq!(without(&out.stderr, &marker), "");
+}
+
+/// A `--pickup` wait picks up each answered case it prints, and only those:
+/// the line of one it picked up is the case after the pickup, `pickedup` at
+/// the next revision, with nothing more in it. A parked or withdrawn case
+/// is printed as it is and left alone. With `--since` an event already in
+/// the store is fresh, and `next_since` is the latest event printed, here
+/// the withdraw, not the pickups the wait wrote.
+#[test]
+fn a_pickup_wait_prints_one_exact_short_line_for_each_case_and_picks_up_the_answers() {
+    let env = Env::new();
+    let first = env.open_decision();
+    let parked = env.open_stuck();
+    let withdrawn = env.open_decision();
+    let second = env.open_decision();
+    run(&env, "answer", &first, &["--option", "1", "--as", "Ryan"]);
+    run(&env, "park", &parked, &["--note", "Monday."]);
+    run(&env, "answer", &second, &["--option", "2"]);
+    run(&env, "answer", &withdrawn, &["--option", "2"]);
+    run(
+        &env,
+        "withdraw",
+        &withdrawn,
+        &["--as", "Ryan", "--reason", "Gone."],
+    );
+
+    let ids = [&first, &parked, &withdrawn, &second];
+    let mut args = vec!["--since", first.as_str(), "--pickup", "--by", "me"];
+    for id in ids {
+        args.extend(["--id", id.as_str()]);
+    }
+    let out = wait(&env, &args);
+
+    let next = event_at(&env, &withdrawn, 3);
+    let expected = [
+        answered_line(&env, &first, "pickedup", 3, 1) + &tail(true, &next),
+        format!(
+            r#"{{"id":"{parked}","state":"parked","kind":"stuck","title":"Blocked on mirror","park":{{"note":"Monday.","actor":{{"id":"{}"}},"parked_at":"{}"}},"revision":2,"amend_seq":0{}"#,
+            actor_of(&env, &parked, 2),
+            event_at(&env, &parked, 2),
+            tail(true, &next),
+        ),
+        answered_line(&env, &second, "pickedup", 3, 2) + &tail(true, &next),
+        answered_line(&env, &withdrawn, "withdrawn", 3, 2).replace(
+            r#","revision":3"#,
+            &format!(
+                r#","withdraw":{{"reason":"Gone.","actor":{{"id":"{}"}},"withdrawn_at":"{next}"}},"revision":3"#,
+                actor_of(&env, &withdrawn, 3),
+            ),
+        ) + &tail(true, &next),
+    ];
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().collect::<Vec<_>>(), expected);
+    assert_eq!(out.stderr, "");
+    for id in [&first, &second] {
+        assert_eq!(files(&env, id).last().unwrap(), "0003-agent-pickup.json");
+    }
+    assert_eq!(env.revision(&parked), 2);
+    assert_eq!(env.revision(&withdrawn), 3);
+}
+
+/// `--full` gives each case as `show --json` does, with `fresh` and
+/// `next_since` after it, and names each event's actor from the store's
+/// table: by kind and name, by kind alone for an unnamed actor, and by id
+/// alone for one the table does not have, such as a deleted one. The short
+/// line names no actor but by id.
+#[test]
+fn a_full_line_names_actors_by_name_and_an_unknown_one_by_id() {
+    let env = Env::new();
+    let named = env.open_decision();
+    let deleted = env.open_decision();
+    run(&env, "answer", &named, &["--option", "1", "--as", "Ryan"]);
+    run(&env, "answer", &deleted, &["--option", "2", "--as", "Gone"]);
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute("DELETE FROM actors WHERE name = 'Gone'", [])
+        .unwrap();
+
+    let args = [
+        "--full", "--id", &named, "--id", &deleted, "--since", &named,
+    ];
+    let out = wait(&env, &args);
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [named.as_str(), deleted.as_str()]);
+    assert_eq!(out.stderr, "");
+    let agent = actor_of(&env, &named, 1);
+    assert_eq!(
+        lines[0]["events"][0]["actor"],
+        serde_json::json!({"id": agent, "kind": "agent"})
+    );
+    assert_eq!(
+        lines[0]["events"][1]["actor"],
+        serde_json::json!({"id": actor_of(&env, &named, 2), "kind": "human", "name": "Ryan"})
+    );
+    assert_eq!(
+        lines[1]["events"][1]["actor"],
+        serde_json::json!({"id": actor_of(&env, &deleted, 2)})
+    );
+    // What --full adds to the short line: everything show --json gives
+    // but its url, then fresh and next_since last.
+    let next = event_at(&env, &deleted, 2);
+    for text in out.stdout.lines() {
+        assert!(text.ends_with(&tail(true, &next)), "{text}");
+    }
+    let mut line = lines[1].clone();
+    let fields = line.as_object_mut().unwrap();
+    fields.remove("fresh");
+    fields.remove("next_since");
+    let mut shown = json(&env.ok(&["show", &deleted, "--json"]));
+    shown.as_object_mut().unwrap().remove("url");
+    assert_eq!(line, shown);
+}
+
+/// A pickup the store refuses leaves the case as it was read: the line is
+/// the answered case, at the revision read, and one warning says why. The
+/// wait ends as it would have, with exit 0.
+#[test]
+fn a_pickup_the_store_refuses_prints_the_case_as_read_and_says_why() {
+    let env = Env::new();
+    let id = env.open_decision();
+    run(&env, "answer", &id, &["--option", "1"]);
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER refuse BEFORE INSERT ON events
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;",
+    )
+    .unwrap();
+
+    let out = wait(
+        &env,
+        &["--id", &id, "--since", &id, "--pickup", "--by", "me"],
+    );
+    assert_eq!(out.code, 0, "{out:?}");
+    let next = event_at(&env, &id, 2);
+    assert_eq!(
+        out.stdout,
+        answered_line(&env, &id, "answered", 2, 1) + &tail(true, &next) + "\n"
+    );
+    assert_eq!(
+        out.stderr,
+        format!("warning: {id}: not picked up: refused by the test\n")
+    );
+    assert_eq!(files(&env, &id).len(), 2);
+}
+
+/// Swaps the store's table of actors for a view of it, which a write still
+/// finds and adds actors through, but which reading the whole table, by
+/// rowid, fails on: as a store that cannot give the actors when a wait
+/// prints.
+fn spoil_actors(env: &Env) {
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE actors RENAME TO actors_kept;
+         CREATE VIEW actors AS SELECT id, kind, name, created FROM actors_kept;
+         CREATE TRIGGER actors_insert INSTEAD OF INSERT ON actors BEGIN
+             INSERT INTO actors_kept VALUES (NEW.id, NEW.kind, NEW.name, NEW.created);
+         END;",
+    )
+    .unwrap();
+}
+
+/// A `--full` wait reads the actors before it picks anything up, so one
+/// whose read fails ends there: exit 1, nothing on stdout, the error on
+/// stderr, and nothing picked up.
+///
+/// Open follow-up from #82: a steady `--full` wait whose store goes out of
+/// reach when it gives what it collected ends this way too, with nothing
+/// printed. This pins it as it is today.
+#[test]
+fn a_full_wait_whose_actors_cannot_be_read_prints_nothing_and_picks_up_nothing() {
+    let env = Env::new();
+    let id = env.open_decision();
+    run(&env, "answer", &id, &["--option", "1"]);
+    spoil_actors(&env);
+
+    let args = [
+        "--full", "--id", &id, "--since", &id, "--pickup", "--by", "me",
+    ];
+    let out = wait(&env, &args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.starts_with("Error: no such column: rowid"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.stderr.lines().count(), 1, "{}", out.stderr);
+    let case = env.case(&id);
+    assert_eq!((case.state().as_str(), case.revision()), ("answered", 2));
+
+    // The short line needs no actors, so the same wait without --full
+    // prints and picks up.
+    let out = wait(&env, &args[1..]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(
+        out.stdout,
+        answered_line(&env, &id, "pickedup", 3, 1) + &tail(true, &event_at(&env, &id, 2)) + "\n"
+    );
+}
+
+/// A message a listening `--full` wait took is picked up already, so a
+/// read of the actors that fails does not lose it: it is printed with each
+/// actor named by id alone, after one warning, and the wait ends with exit
+/// 0. Its `next_since` is the message's open, not the pickup the wait wrote.
+#[test]
+fn a_full_wait_that_took_a_message_prints_it_by_actor_id_when_the_actors_cannot_be_read() {
+    let env = Env::new();
+    let id = message(&env, &["--to", "w"]);
+    spoil_actors(&env);
+
+    let out = wait(&env, &["--pickup", "--worker", "w", "--full"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let warning =
+        "warning: the actors cannot be read, so they are named by id: no such column: rowid";
+    assert!(out.stderr.starts_with(warning), "{}", out.stderr);
+    assert_eq!(out.stderr.lines().count(), 1, "{}", out.stderr);
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [id.as_str()]);
+    let line = &lines[0];
+    assert_eq!(line["state"], "pickedup");
+    assert_eq!(
+        line["actor"],
+        serde_json::json!({"id": actor_of(&env, &id, 1)})
+    );
+    for (i, event) in line["events"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(
+            event["actor"],
+            serde_json::json!({"id": actor_of(&env, &id, i + 1)}),
+            "{event}"
+        );
+    }
+    assert_eq!(line["fresh"], true);
+    assert_eq!(line["next_since"], event_at(&env, &id, 1).as_str());
+    assert_eq!(env.case(&id).state().as_str(), "pickedup");
+}
+
+/// Runs a `--full` pickup wait of `cases`, answered after `since`, on a
+/// forwarded store, whose every call is a request on the pipe, checks that
+/// it picked up each, and gives the lines it printed and how many times it
+/// read the actors.
+#[cfg(unix)]
+fn full_pickup_actors_reads(env: &mut Env, since: &str, cases: &[String]) -> (Vec<Value>, usize) {
+    let log = env.path("requests.log");
+    // The far side writes its profile, under `cargo llvm-cov`, in the
+    // test's own directory: the near side kills it 200 ms after closing
+    // its pipe, which can cut a profile short, and one cut short in the
+    // run's own directory fails the whole report.
+    let forward = format!(
+        "exec:tee -a '{}' | LLVM_PROFILE_FILE='{}' CASES_STORE='{}' exec '{}' dial-stdio",
+        log.display(),
+        env.path("far-%p.profraw").display(),
+        env.store.display(),
+        env!("CARGO_BIN_EXE_cases"),
+    );
+    env.set("PATH", "/usr/bin:/bin");
+    env.set("CASES_FORWARD", &forward);
+
+    let mut args = vec![
+        "wait",
+        "--timeout",
+        "10s",
+        "--full",
+        "--since",
+        since,
+        "--pickup",
+        "--by",
+        "me",
+    ];
+    for id in cases {
+        args.extend(["--id", id.as_str()]);
+    }
+    let out: Output = common::output(
+        env.command(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .into();
+    let lines = woke(&out);
+    assert_eq!(
+        ids(&lines),
+        cases.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    assert!(
+        lines.iter().all(|line| line["state"] == "pickedup"),
+        "{out:?}"
+    );
+    let requests = fs::read_to_string(&log).unwrap();
+    // A request's body ends with no line break, so the next request's
+    // line can follow it on the same line of the log.
+    let actors = requests
+        .matches("GET /v1/stores/st_dialstdio0000000/store/actors HTTP/1.1")
+        .count();
+    (lines, actors)
+}
+
+/// A `--full` pickup wait reads the store's actors once, before any
+/// pickup. A pickup's actor is the case's worker, which the table has
+/// already when the agent opened the case, so no pickup makes one and the
+/// table is not read again. The count is pinned so that reading them more
+/// changes it on purpose.
+#[cfg(unix)]
+#[test]
+fn a_full_pickup_wait_of_three_cases_reads_the_actors_once() {
+    let mut env = Env::new();
+    let cases = [
+        env.open_decision(),
+        env.open_decision(),
+        env.open_decision(),
+    ];
+    for id in &cases {
+        run(&env, "answer", id, &["--option", "1"]);
+    }
+    let since = cases[0].clone();
+    let (_, reads) = full_pickup_actors_reads(&mut env, &since, &cases);
+    assert_eq!(reads, 1);
+}
+
+/// A pickup whose worker the table does not have, as for cases opened by
+/// hand, makes its actor, so the wait reads the actors again after it, to
+/// name it: once up front and once after the first pickup, and not after
+/// the others, whose actor is the one the first made.
+#[cfg(unix)]
+#[test]
+fn a_full_pickup_wait_reads_the_actors_again_only_after_a_pickup_that_made_one() {
+    let mut env = Env::new();
+    let first = env.open_fyi("Makes the store");
+    let since = event_at(&env, &first, 1);
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w9"}"#;
+    let cases: Vec<String> = (0..3)
+        .map(|_| env.insert(None, 1, "agent", "open", open))
+        .collect();
+    for id in &cases {
+        run(&env, "answer", id, &["--ack"]);
+    }
+    let (lines, reads) = full_pickup_actors_reads(&mut env, &since, &cases);
+    assert_eq!(reads, 2);
+    // Each line names the actor the first pickup made.
+    for line in &lines {
+        let pickup = &line["events"][2]["actor"];
+        assert_eq!(pickup["kind"], "agent", "{line}");
+        assert_eq!(pickup["name"], "w9", "{line}");
+        assert_eq!(pickup, &lines[0]["events"][2]["actor"]);
+    }
+}
+
+/// A listening wait whose stdout fails after its first line names, as it
+/// fails, only the message it took and has not printed: not the one it
+/// printed. Its reader takes one line and goes, and the second line is too
+/// long for the pipe to hold, so that its write fails.
+#[cfg(unix)]
+#[test]
+fn a_listening_wait_whose_stdout_fails_after_a_line_names_only_the_messages_not_printed() {
+    let env = Env::new();
+    let first = message(&env, &["--to", "w1", "--body", "First."]);
+    let second = message(&env, &["--to", "w1", "--body", &"Second. ".repeat(15_000)]);
+
+    let (reader, writer) = common::pipe();
+    let read = thread::spawn(move || {
+        let mut line = String::new();
+        BufReader::new(reader).read_line(&mut line).unwrap();
+        line
+    });
+    let out: Output = common::output(
+        wait_command(&env, &listening("w1", &[]))
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::piped()),
+    )
+    .into();
+    let printed = read.join().unwrap();
+    assert_eq!(json(&printed)["id"], first.as_str());
+    assert_eq!(out.code, 1, "{out:?}");
+    for id in [&first, &second] {
+        assert_eq!(env.case(id).state().as_str(), "pickedup", "{id}");
+    }
+    assert_eq!(
+        out.stderr,
+        format!("warning: {second}: picked up, but not printed: Broken pipe (os error 32)\n"),
+    );
+}
+
+/// A forwarded pickup wait stopped by a signal while it prints names only
+/// the cases it picked up and has not printed: here the second, whose long
+/// line waits on a stdout that nobody reads, and not the first, printed
+/// before it.
+#[cfg(unix)]
+#[test]
+fn a_forwarded_pickup_wait_stopped_while_it_prints_names_only_the_cases_not_printed() {
+    let mut env = Env::new();
+    let body = "A long body. ".repeat(3500);
+    let open = |title: &str| {
+        env.open(&[
+            "--kind",
+            "decision",
+            "--urgency",
+            "today",
+            "--title",
+            title,
+            "--option",
+            "Pin",
+            "--option",
+            "Float",
+            "--body",
+            &body,
+        ])
+    };
+    let first = open("First");
+    let second = open("Second");
+    run(&env, "answer", &first, &["--option", "1"]);
+    run(&env, "answer", &second, &["--option", "1"]);
+    let forward = format!(
+        "exec:LLVM_PROFILE_FILE='{}' CASES_STORE='{}' exec '{}' dial-stdio",
+        env.path("far-%p.profraw").display(),
+        env.store.display(),
+        env!("CARGO_BIN_EXE_cases"),
+    );
+    env.set("PATH", "/usr/bin:/bin");
+    env.set("CASES_FORWARD", &forward);
+
+    let args = [
+        "wait",
+        "--timeout",
+        "10s",
+        "--full",
+        "--since",
+        &first,
+        "--id",
+        &first,
+        "--id",
+        &second,
+        "--pickup",
+        "--by",
+        "me",
+    ];
+    let child = common::spawn(
+        env.command(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // The first line, about 45 KB, fits in the pipe; the second does not,
+    // and it is picked up before it is printed.
+    let until = Instant::now() + PATIENCE;
+    while env.case(&second).state().as_str() != "pickedup" {
+        assert!(Instant::now() < until, "the wait picked up nothing");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    // Nothing reads stdout until the wait has ended, so that the second
+    // line is not printed while the signal is handled.
+    let mut child = child;
+    let status = child.wait().unwrap();
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2),
+        "{status:?}"
+    );
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert_eq!(json(stdout.lines().next().unwrap())["id"], first.as_str());
+    assert_eq!(
+        stderr,
+        format!("warning: {second}: picked up, but not printed: a signal ended the wait\n"),
+    );
+    assert_eq!(env.case(&first).state().as_str(), "pickedup");
+}

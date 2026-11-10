@@ -103,15 +103,14 @@ cases withdraw ID --revision N --reason TEXT
 
 ## Workflow
 
-**Each decision costs one background command.** Put the bookkeeping for a decision in the same command as the work: close the last case, open the next and start its `wait`, chained with `&&`, in the background. Do not run `wait`, `close` or `open` in a call of their own when you can chain them.
+**Each decision costs one background command.** Put the bookkeeping for a decision in the same command as the work: close the last case, then open the next with `--wait`, which opens it and waits on it in one command, chained with `&&`, in the background. Do not run `wait`, `close` or `open` in a call of their own when you can chain them.
 
 The first case:
 
 ```sh
-id=$(cases open --kind decision --urgency today --worker bun-pins \
+cases open --kind decision --urgency today --worker bun-pins \
   --title "Pin bun or float?" --body-file question.md \
-  --option "Pin to 1.2.3" --option "Float and fix the lockfile") &&
-  cases wait --id "$id" --since "$id" --pickup --by bun-pins
+  --option "Pin to 1.2.3" --option "Float and fix the lockfile" --wait
 ```
 
 Run `cases status` as a second tool call in the same message as the first `open`, not as a call of its own: if it exits 1, no inbox is running, so tell the human they can answer from `cases serve` or the terminal. To put one case in front of them in a terminal pane you open, see `cases skill show --reference status`.
@@ -122,13 +121,12 @@ When the command finishes, read its output with `cat FILE` on the output file (r
 git commit -qam "Pin bun to 1.2.3" &&
   cases close UkLWZ --revision 3 --outcome "Pinned bun to 1.2.3 in abc123." \
     --link https://github.com/o/r/pull/12 &&
-  id=$(cases open --kind approval --urgency today --worker bun-pins \
+  cases open --kind approval --urgency today --worker bun-pins \
     --title "Run the migration?" --body-file migrate.md \
-    --row '{"id":"mig","label":"Migrate","script":"make migrate","link":"https://github.com/o/r/blob/main/Makefile"}') &&
-  cases wait --id "$id" --since "$id" --pickup --by bun-pins
+    --row '{"id":"mig","label":"Migrate","script":"make migrate","link":"https://github.com/o/r/blob/main/Makefile"}' --wait
 ```
 
-`id=$(…)` keeps the new id out of the output, so while it waits `cases list --worker NAME` shows it, to amend or withdraw the case. If the command stops with no answer, run only its `cases wait` part again, with that id: all of it would open a second case. If a write in the chain fails, such as a close that exits 3 or 4, the commands after its `&&` did not run: read the case with `cases show ID --answer`, settle it, then run the rest of the chain. If its output is gone, find the case with `cases list --state pickedup,withdrawn --worker NAME` and read it with `cases show ID --answer`.
+`open --wait` prints the new id first, then waits as `cases wait --id ID --since ID --pickup --by WORKER` does, and prints the case's line once it is your turn. While it waits, `cases list --worker NAME` shows the case, to amend or withdraw it. If the command stops with no answer, run that `cases wait` with the id it printed: running the command again would open a second case. If a write in the chain fails, such as a close that exits 3 or 4, the commands after its `&&` did not run: read the case with `cases show ID --answer`, settle it, then run the rest of the chain. If its output is gone, find the case with `cases list --state pickedup,withdrawn --worker NAME` and read it with `cases show ID --answer`.
 
 Act on each line by its `state`:
 

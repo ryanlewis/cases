@@ -602,3 +602,28 @@ fn a_store_replaced_again_and_again_is_followed_each_time() {
         assert_eq!(names(&stored(&db, key)), ["0001-agent-open.json"]);
     }
 }
+
+/// A store made again at the path is another store: the version and the
+/// poll of a store that had the old one open give the new one's id, as an
+/// open of the new one alone does, each time it is replaced.
+#[test]
+fn a_store_made_again_at_the_path_is_read_with_its_own_id() {
+    let (_dir, db) = scratch();
+    create(&db, "fyi");
+    let mut poller = db.poller();
+    poller.poll().unwrap();
+    let mut ids = vec![db.version().unwrap()];
+    for _ in 0..3 {
+        replace_store(db.path());
+        let version = Db::new(db.path()).version().unwrap();
+        assert_eq!(db.version().unwrap(), version);
+        poller.poll().unwrap();
+        assert_eq!(poller.version(), Some(&version));
+        ids.push(version);
+    }
+    let ids: std::collections::BTreeSet<_> = ids
+        .iter()
+        .map(|version| version.as_str().split('.').next().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids.len(), 4, "{ids:?}");
+}

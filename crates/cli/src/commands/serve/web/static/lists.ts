@@ -650,9 +650,16 @@ export function lineFollows(was: Line, c: Case): { line: Line; said?: string } {
 function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   const [open, setOpen] = useState(false);
   const line = useRef<Line>(lineFrom(c));
+  // What the line last said of a case the stream brought, to say again
+  // when a stale refusal shows the case as it was before that.
+  const told = useRef("");
   const [reason, setReason] = useState("");
   const [refusal, setRefusal] = useState("");
-  const sending = useRef(false);
+  // The send that is out, which only that send lets go (IN-09).
+  const sending = useRef<object | null>(null);
+  // The send that went last on the line as it is open now: only its answer
+  // speaks for the line.
+  const newest = useRef<object | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const shut = useRef(false);
@@ -664,14 +671,20 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     if (!open) return;
     const { line: next, said } = lineFollows(line.current, c);
     line.current = next;
-    if (said) setRefusal(said);
+    if (said) {
+      told.current = said;
+      setRefusal(said);
+    }
   }, [c.revision, c.state]);
   function start(): void {
+    told.current = "";
     line.current = lineFrom(c);
     setRefusal("");
     setOpen(true);
   }
+  // A line kept is done with: no send from it speaks for the next.
   function keep(): void {
+    newest.current = null;
     shut.current = true;
     setOpen(false);
     setReason("");
@@ -680,10 +693,16 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   async function submit(e: Event): Promise<void> {
     e.preventDefault();
     if (sending.current) return;
-    sending.current = true;
-    // As the case view's: a send while one is out does nothing, until it is
-    // answered or 10 s have passed (IN-09).
-    const release = setTimeout(() => (sending.current = false), 10000);
+    const self = {};
+    sending.current = self;
+    newest.current = self;
+    // As the case view's (sendOnce, case.ts): a send while one is out does
+    // nothing, until it is answered or 10 s have passed (IN-09). One slower
+    // than 10 s does not, when it comes back, let go of the send after it.
+    const done = () => {
+      if (sending.current === self) sending.current = null;
+    };
+    const release = setTimeout(done, 10000);
     const why = reason.trim();
     try {
       const { revision } = line.current.drawn;
@@ -692,17 +711,25 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
         if (sent) sent("withdraw", after);
         return;
       }
+      // A send another went after, as this one was out for over 10 s, says
+      // nothing: the newer send's answer does.
+      if (newest.current !== self) return;
       setRefusal(problem);
-      // The case as the refusal shows it, unless the stream has already
-      // brought a later one: that the line follows as it would have.
-      if (current) {
+      // The case as the refusal shows it, unless the line already holds
+      // it or a later one the stream brought, even while this send was out:
+      // then the line keeps what it holds, and a stale refusal, one whose
+      // case is not the one sent, says again what the line said of it.
+      if (current && current.revision <= line.current.drawn.revision) {
+        if (told.current && current.revision !== revision) setRefusal(told.current);
+      } else if (current) {
         const { line: next, said } = lineFollows(lineFrom(current), c);
         line.current = next;
+        told.current = said || "";
         if (said) setRefusal(said);
       }
     } finally {
       clearTimeout(release);
-      sending.current = false;
+      done();
     }
   }
   if (!open) {
