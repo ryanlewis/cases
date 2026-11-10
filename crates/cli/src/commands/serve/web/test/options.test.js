@@ -334,6 +334,62 @@ for (const [name, draw] of [
   });
 }
 
+// Each dialog, drawn, and a function that draws it again and gives its new
+// tree: the options dialog redrawn as a choice redraws it, the keys dialog
+// called again, as its parent does when it redraws.
+for (const [name, mountDialog] of [
+  [
+    "options",
+    () => {
+      const o = open({ theme: "system" });
+      let n = 0;
+      return [o.tree, async () => (await o.act(() => o.radio("theme", ++n % 2 ? "dark" : "light").props.onChange()), o.tree)];
+    },
+  ],
+  [
+    "keys",
+    () => {
+      const props = { dialog: { current: null } };
+      return [Keys(props), async () => Keys(props)];
+    },
+  ],
+]) {
+  test(`the ${name} dialog keeps a press on its backdrop across a redraw`, async () => {
+    browser("granted");
+    const [tree, redraw] = mountDialog();
+    const d = backdropOf(tree);
+    const release = async () => (await redraw()).props.onClick({ target: d.el, currentTarget: d.el });
+    // Pressed on the backdrop, drawn again, released on it: closes.
+    d.press(d.el);
+    const before = tree;
+    await release();
+    assert.notEqual((await redraw()).props.onClick, before.props.onClick);
+    assert.equal(d.el.closed, 1);
+    // Pressed inside the form, drawn again, released on the backdrop: stays.
+    d.press(d.inside);
+    await release();
+    assert.equal(d.el.closed, 1);
+    // Pressed on the backdrop, then pressed inside with no click between,
+    // drawn again, released on the backdrop: stays.
+    d.press(d.el);
+    d.press(d.inside);
+    await release();
+    assert.equal(d.el.closed, 1);
+    // Pressed on the backdrop and cancelled (a touch that turns into a
+    // scroll gives no click), then a click with no press: stays.
+    d.press(d.el);
+    tree.props.onPointerCancel({ target: d.el, currentTarget: d.el });
+    await release();
+    assert.equal(d.el.closed, 1);
+    // A press on another dialog is not one on this.
+    const other = backdropOf(tree);
+    other.press(other.el);
+    await release();
+    assert.equal(d.el.closed, 1);
+    other.click(other.inside);
+  });
+}
+
 test("the keys dialog lists the keys, in a dialog the ref holds", () => {
   const dialog = { current: null };
   const tree = Keys({ dialog });

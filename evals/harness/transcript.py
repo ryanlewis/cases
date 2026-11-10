@@ -6,7 +6,9 @@ command. The parsing of `cases` commands and the cost of an API call follow
 the cost study's script (notes: projects/cases/research/cases-cost-in-sessions.py).
 """
 import json
+import os
 import re
+import shlex
 
 # The subcommands `cases` has. A segment counts as a `cases` call only when a
 # real subcommand follows, so prose in a heredoc is not matched.
@@ -21,6 +23,39 @@ SEG = re.compile(
 )
 # Where a segment ends, to cut out its arguments.
 END = re.compile(r'&&|\|\||;|\n(?!\s)|\|(?!\|)')
+
+# A heredoc's body is data, such as a case body written to a file, not
+# commands. The rest of its opening line is kept: `<<EOF && git push` runs git.
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n.*?\n\s*\2(?=\s|$)", re.S)
+
+
+def strip_heredocs(cmd):
+    """A command with each heredoc's body taken out, as `<<HEREDOC`."""
+    return HEREDOC.sub(lambda m: "<<HEREDOC" + m.group(3), cmd or "")
+
+
+# What may stand beside `cases` calls in a command that is still bookkeeping.
+# Control words are skipped, so the command after them is what counts.
+CONTROL = set("if then elif else do while until ! { } ( ) time".split())
+# Glue that moves or tests text: it does no work whatever its arguments,
+# except that a redirection it makes must go to a file the case uses.
+GLUE = set("echo printf cd true false test [ [[ ] ]] fi done : exit sleep".split())
+# Text tools: glue only when every file they read or write is one the case
+# uses (a body file, a wait's output, stdin), so `cat src/main.rs` is work.
+# The number is how many operands come before the files (a pattern, a program).
+TEXT = {"cat": 0, "head": 0, "tail": 0, "wc": 0, "sort": 0, "uniq": 0, "cut": 0,
+        "grep": 1, "sed": 1, "awk": 1, "jq": 1, "tr": 2, "tee": 0}
+CASES = re.compile(r"(?:\S*/)?cases")
+BODY_FILE = re.compile(r"--(?:body|outcome|text)-file[=\s]+(\"[^\"]*\"|'[^']*'|\S+)")
+# A text tool's options that take the next word as their value.
+VALUE_FLAGS = {"cut": {"-d": 1, "-f": 1, "-c": 1, "-b": 1}, "sort": {"-t": 1, "-k": 1},
+               "head": {"-n": 1, "-c": 1}, "tail": {"-n": 1, "-c": 1}, "awk": {"-F": 1, "-v": 1},
+               "grep": {"-e": 1, "-A": 1, "-B": 1, "-C": 1, "-m": 1}, "sed": {"-e": 1},
+               "jq": {"--arg": 2, "--argjson": 2}}
+# Commands that run the command after them: it is that command that counts.
+WRAPPERS = {"timeout": 1, "nohup": 0, "time": 0, "xargs": 0}
+XARGS_VALUES = {"-n", "-I", "-L", "-P", "-d", "-s", "-E"}
+REDIRECT = re.compile(r"^\d*(?:>>?|&>|<)(.*)$")
 
 EXIT = re.compile(r'Exit code (\d+)')
 BG = re.compile(r'running in background with ID: (\w+)')
@@ -71,6 +106,186 @@ def cases_segments(cmd):
             continue
         out.append((sub, args))
     return out
+
+
+def _scan(cmd):
+    """A command's simple commands, split at &&, ||, ;, |, &, a newline, ( and
+    ), outside quotes and command substitutions, which nest as the shell nests
+    them. Each `$(...)` or backtick substitution in a piece is replaced by
+    `$SUB`, and its body is returned beside the pieces, to be checked in its
+    turn. A `#` that starts a word starts a comment. The last value says
+    whether every quote and substitution was closed: a command left open
+    cannot be read, so it is not bookkeeping."""
+    cmd = strip_heredocs(cmd).replace("\\\n", " ")
+    pieces, subs, cur, stack, start, i = [], [], [], [], 0, 0
+    while i < len(cmd):
+        ch, top = cmd[i], (stack[-1] if stack else None)
+        outer = not ({"$(", "(", "`"} & set(stack))
+        if top not in ("'", '"') and ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()`"):
+            while i < len(cmd) and cmd[i] != "\n":
+                i += 1
+            continue
+        if top == "'":
+            if ch == "'":
+                stack.pop()
+        elif ch == "\\":
+            if outer:
+                cur.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif top == '"' and ch == '"':
+            stack.pop()
+        elif ch == "`":
+            if top == "`":
+                stack.pop()
+                if not ({"$(", "(", "`"} & set(stack)):
+                    subs.append(cmd[start:i])
+                    i += 1
+                    continue
+            else:
+                if outer:
+                    start = i + 1
+                    cur.append("$SUB")
+                stack.append("`")
+                i += 1
+                continue
+        elif cmd.startswith("$(", i):
+            if outer:
+                start = i + 2
+                cur.append("$SUB")
+            stack.append("$(")
+            i += 2
+            continue
+        elif top == '"':
+            pass
+        elif ch in "'\"":
+            stack.append(ch)
+        elif top in ("$(", "(") and ch == "(":
+            stack.append("(")
+        elif top in ("$(", "(") and ch == ")":
+            stack.pop()
+            if not ({"$(", "(", "`"} & set(stack)):
+                subs.append(cmd[start:i])
+                i += 1
+                continue
+        elif top is None and (cmd.startswith("&&", i) or cmd.startswith("||", i)):
+            pieces.append("".join(cur))
+            cur = []
+            i += 2
+            continue
+        elif top is None and (ch in ";|\n()" or (ch == "&" and cmd[i - 1:i] not in (">", "<")
+                                                  and cmd[i + 1:i + 2] != ">")):
+            pieces.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        if outer:
+            cur.append(ch)
+        i += 1
+    pieces.append("".join(cur))
+    return [p.strip() for p in pieces if p.strip()], subs, not stack
+
+
+def _words(piece):
+    try:
+        return shlex.split(piece)
+    except ValueError:
+        return piece.split()
+
+
+def _files_ok(words, allowed):
+    """Whether every file a text tool reads or writes, after its leading
+    operands, is one the case uses. Flags, their values and numbers are not
+    files."""
+    tool = words[0]
+    skip = TEXT.get(tool, 0)
+    if tool in ("grep", "sed") and ("-e" in words or "--regexp" in words):
+        skip = 0
+    takes = VALUE_FLAGS.get(tool, {})
+    values = 0
+    for w in words[1:]:
+        if values:
+            values -= 1
+            continue
+        if REDIRECT.match(w):
+            continue
+        if w.startswith("-") and w != "-":
+            values = takes.get(w, 0)
+            continue
+        if skip:
+            skip -= 1
+            continue
+        if w.lstrip("+-").isdigit() or w.startswith("<<"):
+            continue
+        if not allowed(w):
+            return False
+    return True
+
+
+def _redirects_ok(words, allowed):
+    """Whether every file a command redirects to or from is one the case uses."""
+    for k, w in enumerate(words):
+        r = REDIRECT.match(w)
+        if not r or w.startswith("<<"):
+            continue
+        target = r.group(1) or (words[k + 1] if k + 1 < len(words) else "")
+        if target.startswith("&") or target == "":
+            continue
+        if not allowed(target):
+            return False
+    return True
+
+
+def _bookkeeping(piece, allowed):
+    """Whether one simple command is cases bookkeeping: a `cases` call, an
+    assignment, a comment, glue, or a text tool on the case's files."""
+    words = _words(piece)
+    while words and (words[0] in CONTROL or re.match(r"^[A-Za-z_]\w*=", words[0])):
+        words = words[1:]
+    while words and words[0] in WRAPPERS:
+        wrapper, words = words[0], words[1:]
+        operands = WRAPPERS[wrapper]
+        while words and (words[0].startswith("-") or operands):
+            if words[0].startswith("-"):
+                flag, words = words[0], words[1:]
+                if wrapper == "xargs" and flag in XARGS_VALUES:
+                    words = words[1:]
+            else:
+                words, operands = words[1:], operands - 1
+    if not words or words[0] == "for":
+        return True
+    head = words[0]
+    if CASES.fullmatch(head):
+        return True
+    if head in GLUE:
+        return _redirects_ok(words, allowed)
+    if head in TEXT:
+        return _files_ok(words, allowed) and _redirects_ok(words, allowed)
+    return False
+
+
+def names_output(text, tid):
+    """Whether `text` names background task `tid`'s output file, by its whole name."""
+    return re.search(r"(?<![\w.-])%s\.output(?![\w.-])" % re.escape(tid), text) is not None
+
+
+def bookkeeping_only(cmd, wait_tasks=()):
+    """Whether every simple command of a shell command, those inside command
+    substitutions included, is cases bookkeeping. A file counts as the case's
+    when it is a `--body-file`, `--outcome-file` or `--text-file` of a `cases`
+    call in the command, the output of one of `wait_tasks` (background task
+    ids of `cases wait`), stdin or /dev/null."""
+    named = {f.strip("\"'") for f in BODY_FILE.findall(strip_heredocs(cmd))}
+
+    def allowed(path):
+        return (path in named or path in ("-", "/dev/null", "/dev/stdout", "/dev/stderr")
+                or os.path.basename(path) in {tid + ".output" for tid in wait_tasks})
+
+    def check(text, depth=0):
+        pieces, subs, closed = _scan(text)
+        return (closed and all(_bookkeeping(p, allowed) for p in pieces)
+                and (depth > 8 or all(check(s, depth + 1) for s in subs)))
+    return check(cmd)
 
 
 def has_flag(args, flag):
@@ -251,7 +466,15 @@ class Transcript:
         return sum(r.get("total_cost_usd") or 0 for r in self.results)
 
     def call_classes(self):
-        """Sort each API call that made only `cases` tool calls into ask or extra.
+        """Sort each API call that made only `cases` bookkeeping into ask or extra.
+
+        A call counts only when each of its tool calls is bookkeeping: a Bash
+        command with a `cases` call or a read of a wait's output in it whose
+        every simple command, inside `$(...)` too, is bookkeeping (see
+        bookkeeping_only); another tool reading a wait's output; or the cases
+        skill. Work chained with bookkeeping, such as `git commit ... && cases
+        close ...`, is not counted: it is the call the skill asks for. A wait
+        is a background task whose command ran `cases wait`.
 
         An ask opens a case (in chat, that is the turn that asks); every other
         cases-only call (close, a separate wait, reading wait output, show,
@@ -263,15 +486,19 @@ class Transcript:
             per_call.setdefault(t.call_index, []).append(t)
         ask = extra = 0
         calls = []
-        wait_files = {tid for tid in self.tasks}
+        wait_files = {tid for tid, t in self.tasks.items() if "wait" in t.subs}
         for ci, ts in per_call.items():
             tagged = []
             for t in ts:
-                if t.segments:
-                    tagged.append(set(t.subs))
-                elif t.name == "Skill" and "cases" in str(t.input.get("skill", "")):
+                blob = json.dumps(t.input)
+                reads = any(names_output(blob, tid) for tid in wait_files)
+                # The subcommands outside heredoc bodies, as the bookkeeping check reads them.
+                subs = {s for s, _ in cases_segments(strip_heredocs(t.cmd))} & set(t.subs)
+                if t.name == "Skill" and "cases" in str(t.input.get("skill", "")):
                     tagged.append({"skill"})
-                elif any(tid + ".output" in json.dumps(t.input) for tid in wait_files):
+                elif t.name == "Bash" and (subs or reads) and bookkeeping_only(t.cmd, wait_files):
+                    tagged.append(subs | ({"wait-read"} if reads else set()))
+                elif t.name != "Bash" and reads:
                     tagged.append({"wait-read"})
                 else:
                     tagged.append(None)
