@@ -11,7 +11,7 @@ mod memory;
 
 use std::cell::{Cell, RefCell};
 
-use cases_core::{Append, Cases, Changes, Key, Poller, Store, Time, Version, Writer};
+use cases_core::{Append, Cases, Changes, Key, Poller, Refolded, Store, Time, Version, Writer};
 
 use memory::{Fault, Memory};
 
@@ -183,4 +183,63 @@ fn a_poll_after_a_failed_one_reads_every_case() {
         "the poll after a failed one asked since a version"
     );
     assert_eq!(folds(), 3);
+}
+
+/// What the cases folded again and dropped were, poll by poll, as the poll
+/// before left them.
+fn only(folded: &[Key], removed: &[Key]) -> Refolded {
+    Refolded::Some {
+        folded: folded.to_vec(),
+        removed: removed.to_vec(),
+    }
+}
+
+/// Each poll says what it folded again and what it dropped: every case on
+/// the first poll, on one given every case even when nothing changed, and
+/// on one after a poll that failed; otherwise the cases written to and
+/// opened, and the cases it had that were taken out. A case opened and
+/// taken out between two polls was never had, so it is neither.
+#[test]
+fn a_poll_says_which_cases_it_folded_again_and_dropped() {
+    let store = Memory::new(start());
+    let first = create(&store);
+    let second = create(&store);
+    let mut poller = watched(&store);
+    assert_eq!(poller.refolded(), &Refolded::All, "before any poll");
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &Refolded::All);
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &only(&[], &[]));
+
+    note(&store, second);
+    let third = create(&store);
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &only(&[second, third], &[]));
+    assert_eq!(folds(), 4);
+
+    store.delete(&first, None).unwrap();
+    store.archive(&third, None).unwrap();
+    let passing = create(&store);
+    store.delete(&passing, None).unwrap();
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &only(&[], &[first, third]));
+
+    // Given every case, though nothing changed: every case is folded
+    // again, and so said.
+    ALL.set(true);
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &Refolded::All);
+    ALL.set(false);
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &only(&[], &[]));
+
+    FAIL.set(true);
+    assert!(poller.poll().is_err());
+    assert_eq!(poller.refolded(), &Refolded::All, "after a failed poll");
+    note(&store, second);
+    assert_eq!(keys(poller.poll().unwrap()), vec![second]);
+    assert_eq!(poller.refolded(), &Refolded::All, "the poll after it");
+    note(&store, second);
+    poller.poll().unwrap();
+    assert_eq!(poller.refolded(), &only(&[second], &[]));
 }
