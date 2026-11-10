@@ -595,6 +595,27 @@ CREATE TABLE archive_events (
         ));
         drop(tx);
         drop(lock);
+
+        // Written through the open that read it, which does not upgrade it
+        // again: what changed is every case, not a read of the log of
+        // removals the store does not have yet.
+        let key = db.list().unwrap()[0].0;
+        note(&db, key);
+        let changes = db.rows_since(Some(&version)).unwrap();
+        let Changes::All {
+            version: now,
+            cases,
+        } = changes
+        else {
+            panic!("not every case: {changes:?}");
+        };
+        assert!(now.as_str().starts_with('.'), "{now:?}");
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].0, key);
+        assert_eq!(
+            cases[0].1.last().map(|row| row.event.as_str()),
+            Some("note")
+        );
         drop(db);
 
         // No longer locked: the next open upgrades it.
