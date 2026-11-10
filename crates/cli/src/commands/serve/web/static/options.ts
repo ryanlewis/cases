@@ -174,17 +174,33 @@ function writeCursor(c: Cursor | null): void {
   try {
     if (c) localStorage.setItem(CURSOR, JSON.stringify(c));
     else localStorage.removeItem(CURSOR);
-  } catch (e) {
-    // localStorage cannot be written: this tab's copy stands in.
+  } catch {
+    // localStorage cannot be written: this tab's copy stands in. A cursor
+    // it still holds is older than this tab's copy. Read back, it would show
+    // again what this tab has shown, so it is removed. A full quota still
+    // allows that.
+    try {
+      localStorage.removeItem(CURSOR);
+    } catch {
+      // Nor can it be removed.
+    }
   }
 }
 
 // Shows `item`, unless notifications are on for blocking cases only and it
 // is not one. Its tag is the same in every tab, so the desktop shows it
-// once; a click opens the case with `open`.
+// once; a click opens the case with `open`. One the browser will not make
+// (Chrome on Android makes them only from a service worker) is passed over,
+// and the cursor moves past it all the same: each item is tried once,
+// shown or not.
 function show(item: Item, open: (path: string) => void): void {
   if (prefs.read("notify") === "blocking" && !(item.case && item.case.urgency === "blocking")) return;
-  const notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  let notification: Notification;
+  try {
+    notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  } catch {
+    return;
+  }
   notification.onclick = () => {
     window.focus();
     open(item.url);

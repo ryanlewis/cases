@@ -677,6 +677,95 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
     );
 }
 
+/// A steady wait with no timeout that holds an answer, and whose connection
+/// then drops with the far side out of reach, prints the answer at the end
+/// of its quiet time, exit 0, rather than wait on it for ever (AG-18).
+#[test]
+fn a_steady_forwarded_wait_that_cannot_reach_the_far_side_while_it_collects_prints_what_it_has() {
+    // The stand-in ssh as ever, but out of reach once the file `.cut`
+    // is there; its relay copies what the wait sends to `.sent`, and
+    // writes the far side's pid to `.far`.
+    let script = SSH
+        .replacen(
+            "echo \"$*\" >> \"@LOG@\"\n",
+            "echo \"$*\" >> \"@LOG@\"\n[ -e \"@LOG@.cut\" ] && exit 255\n",
+            1,
+        )
+        .replacen("exec cat'", "exec tee -a \"@LOG@.sent\"'", 1)
+        .replacen(
+            "perl -e 'setpgrp; ",
+            "perl -e 'setpgrp; open my $f, \">\", \"@LOG@.far\"; print $f $$; close $f; ",
+            1,
+        );
+    let f = Forwarding::with_ssh(&script);
+    let answered = f.open_decision();
+    let left = f.open_decision();
+    f.ok(&["answer", &answered, "--option", "1", "--as", "ryan"]);
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let start = Instant::now();
+    // Since a time before the answer, the wait's first read finds it new,
+    // and it collects from there.
+    let mut wait = spawn(
+        f.env
+            .command([
+                "wait",
+                "--id",
+                &answered,
+                "--id",
+                &left,
+                "--mood",
+                "steady",
+                "--since",
+                "2000-01-01T00:00:00Z",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // Once it holds a poll, it has read the answer: its connection drops,
+    // and every one it dials after fails.
+    let sent = f.env.path("ssh.log.sent");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read_to_string(&sent).is_ok_and(|sent| sent.contains("/store/changes?after=")) {
+        assert!(Instant::now() < until, "the wait held no poll");
+        thread::sleep(Duration::from_millis(50));
+    }
+    fs::write(f.env.path("ssh.log.cut"), "").unwrap();
+    let relay: u32 = fs::read_to_string(f.env.path("relay.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let far: u32 = fs::read_to_string(f.env.path("ssh.log.far"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    signal("KILL", far);
+    signal("KILL", relay);
+    // Its quiet time is 10 s; well past it, the wait is stopped.
+    let until = Instant::now() + Duration::from_secs(40);
+    while wait.try_wait().unwrap().is_none() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let took = start.elapsed();
+    if wait.try_wait().unwrap().is_none() {
+        wait.kill().unwrap();
+        let out = wait.wait_with_output().unwrap();
+        panic!("still waiting after {took:?}: {out:?}");
+    }
+    let waited: Output = wait.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 0, "{waited:?}");
+    let lines: Vec<_> = waited.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{waited:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+    assert!(took >= Duration::from_secs(9), "{took:?}");
+    assert_eq!(
+        waited.stderr,
+        "warning: could not reach the store on ssh://devbox: ssh failed (exit 255); the wait \
+         goes on, trying again until it prints what it has\n"
+    );
+}
+
 #[test]
 fn a_listening_wait_is_recorded_at_the_far_side() {
     let f = Forwarding::new();
@@ -989,6 +1078,67 @@ fn a_second_pickup_wait_on_a_forwarded_store_is_refused() {
     assert!(waited.stdout.contains(r#""choice":1"#), "{waited:?}");
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(!again.stderr.contains("already picking up"), "{again:?}");
+}
+
+/// A pickup wait on the far side's store by its own path there, and one
+/// forwarded to a dial-stdio that names the store by a symlink to it, each
+/// hold off the other (AG-05): both lock beside the store file itself.
+#[test]
+fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_each_other() {
+    let mut f = Forwarding::new();
+    f.open_decision();
+    let link = f.env.path("link.db");
+    std::os::unix::fs::symlink(&f.far, &link).unwrap();
+    f.env.set(
+        "CASES_FORWARD",
+        &format!(
+            "exec:CASES_STORE='{}' exec '{}' dial-stdio",
+            link.display(),
+            env!("CARGO_BIN_EXE_cases")
+        ),
+    );
+    let far = f.far.to_str().unwrap();
+    let local = ["--store", far, "wait", "--pickup", "--worker", "lead"];
+    let refused = |out: &Output, holder: &std::process::Child| {
+        assert_eq!(out.code, 1, "{out:?}");
+        let want = format!(
+            "Error: another wait is already picking up worker \"lead\" (pid {}, since ",
+            holder.id()
+        );
+        assert!(out.stderr.starts_with(&want), "{want}: {out:?}");
+    };
+
+    let mut first = picking_up_by(&f, f.env.command(local.iter().chain(&["--timeout", "60s"])));
+    let second = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
+    refused(&second, &first);
+    first.kill().unwrap();
+    first.wait().unwrap();
+
+    // The far side's dial-stdio is the holder, as it takes the lock. The
+    // lock file names the killed wait until it does.
+    let locks = f.far.with_file_name("far.db-waits");
+    let before = holder(&locks, "worker-lead-");
+    let mut first = spawn(
+        f.env
+            .command(["wait", "--pickup", "--worker", "lead", "--timeout", "60s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let until = Instant::now() + Duration::from_secs(10);
+    while holder(&locks, "worker-lead-") == before {
+        assert!(Instant::now() < until, "the forwarded wait took no lock");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let second = f.run(&[&local[..], &["--timeout", "1s"]].concat());
+    assert_eq!(second.code, 1, "{second:?}");
+    assert!(
+        second
+            .stderr
+            .starts_with("Error: another wait is already picking up worker \"lead\" (pid "),
+        "{second:?}"
+    );
+    first.kill().unwrap();
+    first.wait().unwrap();
 }
 
 /// A pickup wait killed outright, with no chance to let go, keeps its

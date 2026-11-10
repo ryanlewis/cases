@@ -165,14 +165,25 @@ async fn store(State(app): State<Arc<App>>, request: Request) -> Response {
     );
     let answered = tokio::task::spawn_blocking(move || {
         let answer = dial::handle_http(&app.db, &request, &app.leases);
-        (answer.status(), answer.body().to_string().into_bytes())
+        let cause = answer.body()["error"]["message"]
+            .as_str()
+            .map(str::to_owned);
+        (
+            answer.status(),
+            answer.body().to_string().into_bytes(),
+            cause,
+        )
     })
     .await;
     match answered {
-        Ok((status, body)) => json(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            body,
-        ),
+        Ok((status, body, cause)) => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let response = json(status, body);
+            match cause {
+                Some(cause) => failed(response, &cause),
+                None => response,
+            }
+        }
         Err(error) => Refusal::store(error).into_response(),
     }
 }
@@ -499,15 +510,21 @@ impl IntoResponse for Refusal {
                 case: self.case.as_ref(),
             },
         };
-        let mut response = match serde_json::to_vec(&body) {
+        let response = match serde_json::to_vec(&body) {
             Ok(body) => json(self.status, body),
             Err(_) => self.status.into_response(),
         };
-        if self.status.is_server_error() {
-            response.extensions_mut().insert(Failure(self.message));
-        }
-        response
+        failed(response, &self.message)
     }
+}
+
+/// `response`, with `cause` attached for the log when it is a 500 or
+/// another server error.
+fn failed(mut response: Response, cause: &str) -> Response {
+    if response.status().is_server_error() {
+        response.extensions_mut().insert(Failure(cause.to_owned()));
+    }
+    response
 }
 
 /// A JSON response of `body`. API responses are never cached.
@@ -1149,6 +1166,230 @@ mod tests {
             "{lines:?}"
         );
         assert_eq!(app.requests.load(Ordering::Relaxed), 2);
+    }
+
+    /// A store route that fails with a 500 logs its cause on the line
+    /// before the request's, as the inbox's routes do; one refused with a
+    /// 404 logs the request alone. The responses are the store's own.
+    #[tokio::test]
+    async fn a_store_route_s_500_logs_its_cause_before_the_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("cases.db");
+        std::fs::create_dir(&store).unwrap();
+        let app = Arc::new(App {
+            log: Arc::new(Log::new(false, 16)),
+            ..app(&dir, &[], &[])
+        });
+        let cases = format!("/v1/stores/{}/store/cases", cases_store_remote::DIAL_STORE);
+        let (status, failed) = through(&app, "GET", &cases, "").await;
+        let cause = format!("store {} is a directory, not a file", store.display());
+        assert_eq!(status, 500, "{failed}");
+        assert_eq!(
+            failed,
+            serde_json::json!({"error": {"category": "store", "message": cause}})
+        );
+        let (status, refused) = through(&app, "GET", "/v1/stores/other/store/cases", "").await;
+        assert_eq!(status, 404, "{refused}");
+        let lines = app.log.last();
+        let request = |line: &str| {
+            // The line is `{at} {method} {uri} {status} {ms}ms`.
+            let (_, rest) = line.split_once(' ').unwrap();
+            let (rest, ms) = rest.rsplit_once(' ').unwrap();
+            assert!(
+                ms.strip_suffix("ms").unwrap().parse::<u128>().is_ok(),
+                "{line}"
+            );
+            rest.to_owned()
+        };
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0], format!("error: {cause}"));
+        assert_eq!(request(&lines[1]), format!("GET {cases} 500"));
+        assert_eq!(request(&lines[2]), "GET /v1/stores/other/store/cases 404");
+    }
+
+    /// What the inbox gives across store changes, as the watch reads them:
+    /// the list and each case by the API, the screen's counts, and the
+    /// version the stream sends. One case changed among several, a case
+    /// added, one archived, one deleted, and one that does not fold until
+    /// a row makes it fold: each read gives the store as it is, and a case
+    /// that did not change is given as it was.
+    #[tokio::test]
+    async fn the_inbox_follows_each_change_to_the_store() {
+        use cases_core::{Append, Store};
+        use cases_store_sqlite::Writer;
+        use serde_json::Value;
+
+        let dir = tempfile::tempdir().unwrap();
+        let app = Arc::new(app(&dir, &[], &[]));
+        let db = Arc::clone(&app.db);
+        let since: cases_core::Time = "2000-01-01T00:00:00Z".parse().unwrap();
+        let mut counts = super::super::screen::Counts::new(since);
+        let mut snapshots = app.watch.subscribe();
+        let append = |author: &str, event: &str, data: &str| Append {
+            author: author.into(),
+            event: event.into(),
+            data: data.into(),
+        };
+        let open = |kind: &str, urgency: &str, title: &str| {
+            let options = if kind == "decision" {
+                r#","options":["Pin","Float"]"#
+            } else {
+                ""
+            };
+            let data = format!(
+                r#"{{"kind":"{kind}","urgency":"{urgency}","title":"{title}","body":"First."{options}}}"#
+            );
+            db.create(&append("agent", "open", &data), &Writer::new(None))
+                .unwrap()
+                .0
+        };
+        // Every case the list gives in any state, by id.
+        let all = "/v1/cases?state=open,parked,sent,answered,pickedup,closed,withdrawn";
+        let listed = |app: Arc<App>| async move {
+            let (status, body) = through(&app, "GET", all, "").await;
+            assert_eq!(status, 200, "{body}");
+            body["list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| (case["id"].as_str().unwrap().to_owned(), case.clone()))
+                .collect::<std::collections::BTreeMap<String, Value>>()
+        };
+        let shown = |app: Arc<App>, key: cases_core::Key| async move {
+            through(&app, "GET", &format!("/v1/cases/{key}"), "").await
+        };
+        // The stream's version, and whether the watch published a new one.
+        let mut moved = || {
+            let changed = snapshots.has_changed().unwrap();
+            snapshots.borrow_and_update();
+            changed
+        };
+        let stats = |counts: &mut super::super::screen::Counts| {
+            let stats = counts.of(&app.watch.read().unwrap());
+            (stats.open, stats.answered, stats.picked_up, stats.closed)
+        };
+
+        let kept = open("fyi", "today", "A");
+        let amended = open("question", "blocking", "B");
+        let answered = open("decision", "whenever", "C");
+        let first = listed(Arc::clone(&app)).await;
+        assert_eq!(first.len(), 3);
+        assert_eq!(stats(&mut counts), ([1, 1, 1], 0, 0, 0));
+        assert!(moved());
+        assert_eq!(
+            app.watch.read().unwrap().version,
+            db.version().unwrap().to_string()
+        );
+
+        // One case changes among several: it alone is given anew.
+        db.append(
+            &amended,
+            &append("agent", "amend", r#"{"body":"Second."}"#),
+            &Writer::new(None),
+            None,
+        )
+        .unwrap();
+        let second = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(second[&kept.to_string()], first[&kept.to_string()]);
+        assert_eq!(second[&answered.to_string()], first[&answered.to_string()]);
+        assert_ne!(second[&amended.to_string()], first[&amended.to_string()]);
+        assert_eq!(second[&amended.to_string()]["revision"], 2);
+        let (status, case) = shown(Arc::clone(&app), amended).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "Second.");
+        assert_eq!(case["revision"], 2);
+        let (status, case) = shown(Arc::clone(&app), kept).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "First.");
+        assert_eq!(stats(&mut counts), ([1, 1, 1], 0, 0, 0));
+
+        // A case answered moves between the counts.
+        db.append(
+            &answered,
+            &append("human", "answer", r#"{"choice":1}"#),
+            &Writer::new(None),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stats(&mut counts), ([1, 1, 0], 1, 0, 0));
+        assert!(moved());
+
+        // A case added.
+        let added = open("fyi", "blocking", "D");
+        let third = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(third.len(), 4);
+        assert_eq!(third[&kept.to_string()], first[&kept.to_string()]);
+        assert_eq!(third[&added.to_string()]["title"], "D");
+        assert_eq!(stats(&mut counts), ([2, 1, 0], 1, 0, 0));
+
+        // One archived and one deleted: gone from the list and the API.
+        db.archive(&kept, None).unwrap();
+        db.delete(&added, None).unwrap();
+        let fourth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        let mut left = vec![amended.to_string(), answered.to_string()];
+        left.sort();
+        assert_eq!(fourth.keys().cloned().collect::<Vec<_>>(), left);
+        assert_eq!(fourth[&amended.to_string()], second[&amended.to_string()]);
+        for gone in [kept, added] {
+            assert_eq!(shown(Arc::clone(&app), gone).await.0, 404, "{gone}");
+        }
+        assert_eq!(stats(&mut counts), ([1, 0, 0], 1, 0, 0));
+
+        // A case whose rows do not fold is left out, until a row makes it
+        // fold.
+        let conn = rusqlite::Connection::open(dir.path().join("cases.db")).unwrap();
+        conn.execute(
+            "INSERT INTO cases (opened_at) VALUES ('2026-11-10T09:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let unfolded =
+            cases_core::Key::new(u64::try_from(conn.last_insert_rowid()).unwrap()).unwrap();
+        let row = |seq: i64, event: &str, data: &str| {
+            conn.execute(
+                "INSERT INTO events (case_key, seq, author, event, at, data) \
+                 VALUES (?1, ?2, 'agent', ?3, '2026-11-10T09:00:00Z', ?4)",
+                rusqlite::params![
+                    i64::try_from(unfolded.get()).unwrap(),
+                    seq,
+                    event,
+                    data.as_bytes()
+                ],
+            )
+            .unwrap();
+        };
+        row(1, "note", r#"{"body":"No open."}"#);
+        let fifth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(fifth, fourth);
+        assert_eq!(shown(Arc::clone(&app), unfolded).await.0, 404);
+        assert_eq!(stats(&mut counts), ([1, 0, 0], 1, 0, 0));
+        row(
+            2,
+            "open",
+            r#"{"kind":"fyi","urgency":"today","title":"E","body":"Late."}"#,
+        );
+        let sixth = listed(Arc::clone(&app)).await;
+        assert!(moved());
+        assert_eq!(sixth.len(), 3);
+        assert_eq!(sixth[&unfolded.to_string()]["title"], "E");
+        assert_eq!(sixth[&unfolded.to_string()]["revision"], 2);
+        assert_eq!(sixth[&amended.to_string()], second[&amended.to_string()]);
+        let (status, case) = shown(Arc::clone(&app), unfolded).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(case["body"], "Late.");
+        assert_eq!(stats(&mut counts), ([1, 1, 0], 1, 0, 0));
+
+        // Nothing moved: nothing is published, and the same is given.
+        assert_eq!(listed(Arc::clone(&app)).await, sixth);
+        assert!(!moved());
+        assert_eq!(
+            app.watch.read().unwrap().version,
+            db.version().unwrap().to_string()
+        );
     }
 
     /// A renewal is a store route's lock renewal, as `Client::hold` sends
