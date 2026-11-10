@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use cases_core::Store as _;
 use cases_core::{
-    Answer, Author, Case, Event, EventType, Kind, Park, Pickup, Record, State, Time, Urgency,
-    Version, Withdraw,
+    Actor, Answer, Author, Case, Event, EventType, Kind, Park, Pickup, Record, State, Time,
+    Urgency, Version, Withdraw,
 };
 use cases_store_sqlite::{Cases, HEARTBEAT, Key, Writer};
 use serde::Serialize;
@@ -1384,9 +1384,9 @@ fn print(
     // before it writes. A message wait took is picked up already, so it is
     // printed with its actors named by id alone rather than lost.
     let read = if args.full {
-        ctx.actors()
+        actors_of(ctx)
     } else {
-        Ok(Actors::default())
+        Ok(Known::default())
     };
     let mut actors = match read {
         Ok(actors) => actors,
@@ -1394,7 +1394,7 @@ fn print(
             ctx::warn(format_args!(
                 "the actors cannot be read, so they are named by id: {error}"
             ));
-            Actors::default()
+            Known::default()
         }
         Err(error) => return Err(error),
     };
@@ -1425,15 +1425,19 @@ fn print(
                 }
             };
         // A pickup makes its actor when the table does not have it, such as
-        // for a case opened by hand. A read that fails keeps the table read
-        // before, so that the case is still printed.
+        // for a case opened by hand, so the table is read again then, and
+        // only then: the pickup's actor is the case's agent, its worker or a
+        // message's taker, whom the table has after the first pickup by it.
+        // A read that fails keeps
+        // the table read before, so that the case is still printed.
         if args.full
             && picked
-            && let Ok(now) = ctx.actors()
+            && !actors.has(turn.case.events().last().and_then(Event::actor))
+            && let Ok(now) = actors_of(ctx)
         {
             actors = now;
         }
-        let printed = match line(&turn, &actors, next_since, args.full) {
+        let printed = match line(&turn, &actors.actors, next_since, args.full) {
             Ok(text) => {
                 writeln!(ctx.out, "{text}").map_err(|error| (error.to_string(), Error::from(error)))
             }
@@ -1454,6 +1458,36 @@ fn print(
         }
     }
     Ok(())
+}
+
+/// The store's table of actors, as a `--full` wait names them from, with
+/// the ids it has.
+#[derive(Debug, Default)]
+struct Known {
+    actors: Actors,
+    ids: HashSet<String>,
+}
+
+impl Known {
+    /// Whether the table has `actor`; an event with none needs nothing.
+    fn has(&self, actor: Option<&Actor>) -> bool {
+        actor.is_none_or(|actor| self.ids.contains(&actor.id))
+    }
+}
+
+/// The store's actors, as [`Ctx::actors`] gives them: none from a store
+/// that is not there yet.
+fn actors_of(ctx: &Ctx) -> Result<Known, Error> {
+    let rows = match ctx.store.actors() {
+        Ok(rows) => rows,
+        Err(error) if error.is_missing() => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let ids = rows.iter().map(|row| row.id.clone()).collect();
+    Ok(Known {
+        actors: Actors::new(rows),
+        ids,
+    })
 }
 
 /// The line `turn` prints as: its case short, or when `full` as `show
@@ -1873,5 +1907,39 @@ mod tests {
         listening.due = Some(Instant::now());
         listening.beat(&db, &mut warned);
         assert_eq!(doing_of(&db, "ada"), None);
+    }
+
+    /// A `--full` wait names actors from the store's table: none from a
+    /// store not there, as one removed while the wait runs is, and every
+    /// actor the table has, by id, from one that is.
+    #[test]
+    fn the_actors_of_a_store_not_there_are_none_and_of_one_there_are_its_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let ctx = |db| Ctx {
+            store: db,
+            target: crate::store::Target::Local { path: path.clone() },
+            config: crate::config::Config::default(),
+            store_flag: None,
+            out: std::io::stdout().lock(),
+        };
+        let clock = Arc::new(AtomicI64::new(100));
+        let none = actors_of(&ctx(clocked(&path, &clock))).unwrap();
+        assert!(none.ids.is_empty());
+        assert!(!path.exists());
+
+        let db = clocked(&path, &clock);
+        make(&db);
+        let known = actors_of(&ctx(db)).unwrap();
+        let actor = |id: &str| {
+            let mut actor = Actor::default();
+            id.clone_into(&mut actor.id);
+            actor
+        };
+        assert_eq!(known.ids.len(), 1);
+        let agent = actor(known.ids.iter().next().unwrap());
+        assert!(known.has(Some(&agent)));
+        assert!(known.has(None));
+        assert!(!known.has(Some(&actor("gone"))));
     }
 }

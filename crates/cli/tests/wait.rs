@@ -3083,23 +3083,12 @@ fn a_full_wait_that_took_a_message_prints_it_by_actor_id_when_the_actors_cannot_
     assert_eq!(env.case(&id).state().as_str(), "pickedup");
 }
 
-/// How many times a `--full` pickup wait that picks up three cases reads
-/// the store's actors: once before any pickup, then again after each, so
-/// that an actor a pickup made is named. It is counted on a forwarded
-/// store, whose every call is a request on the pipe. The count is pinned
-/// so that reading them less changes it on purpose.
+/// Runs a `--full` pickup wait of `cases`, answered after `since`, on a
+/// forwarded store, whose every call is a request on the pipe, checks that
+/// it picked up each, and gives the lines it printed and how many times it
+/// read the actors.
 #[cfg(unix)]
-#[test]
-fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
-    let mut env = Env::new();
-    let cases = [
-        env.open_decision(),
-        env.open_decision(),
-        env.open_decision(),
-    ];
-    for id in &cases {
-        run(&env, "answer", id, &["--option", "1"]);
-    }
+fn full_pickup_actors_reads(env: &mut Env, since: &str, cases: &[String]) -> (Vec<Value>, usize) {
     let log = env.path("requests.log");
     // The far side writes its profile, under `cargo llvm-cov`, in the
     // test's own directory: the near side kills it 200 ms after closing
@@ -3121,12 +3110,12 @@ fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
         "10s",
         "--full",
         "--since",
-        &cases[0],
+        since,
         "--pickup",
         "--by",
         "me",
     ];
-    for id in &cases {
+    for id in cases {
         args.extend(["--id", id.as_str()]);
     }
     let out: Output = common::output(
@@ -3151,7 +3140,57 @@ fn a_full_pickup_wait_of_three_cases_reads_the_actors_four_times() {
     let actors = requests
         .matches("GET /v1/stores/st_dialstdio0000000/store/actors HTTP/1.1")
         .count();
-    assert_eq!(actors, 4, "{requests}");
+    (lines, actors)
+}
+
+/// A `--full` pickup wait reads the store's actors once, before any
+/// pickup. A pickup's actor is the case's worker, which the table has
+/// already when the agent opened the case, so no pickup makes one and the
+/// table is not read again. The count is pinned so that reading them more
+/// changes it on purpose.
+#[cfg(unix)]
+#[test]
+fn a_full_pickup_wait_of_three_cases_reads_the_actors_once() {
+    let mut env = Env::new();
+    let cases = [
+        env.open_decision(),
+        env.open_decision(),
+        env.open_decision(),
+    ];
+    for id in &cases {
+        run(&env, "answer", id, &["--option", "1"]);
+    }
+    let since = cases[0].clone();
+    let (_, reads) = full_pickup_actors_reads(&mut env, &since, &cases);
+    assert_eq!(reads, 1);
+}
+
+/// A pickup whose worker the table does not have, as for cases opened by
+/// hand, makes its actor, so the wait reads the actors again after it, to
+/// name it: once up front and once after the first pickup, and not after
+/// the others, whose actor is the one the first made.
+#[cfg(unix)]
+#[test]
+fn a_full_pickup_wait_reads_the_actors_again_only_after_a_pickup_that_made_one() {
+    let mut env = Env::new();
+    let first = env.open_fyi("Makes the store");
+    let since = event_at(&env, &first, 1);
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w9"}"#;
+    let cases: Vec<String> = (0..3)
+        .map(|_| env.insert(None, 1, "agent", "open", open))
+        .collect();
+    for id in &cases {
+        run(&env, "answer", id, &["--ack"]);
+    }
+    let (lines, reads) = full_pickup_actors_reads(&mut env, &since, &cases);
+    assert_eq!(reads, 2);
+    // Each line names the actor the first pickup made.
+    for line in &lines {
+        let pickup = &line["events"][2]["actor"];
+        assert_eq!(pickup["kind"], "agent", "{line}");
+        assert_eq!(pickup["name"], "w9", "{line}");
+        assert_eq!(pickup, &lines[0]["events"][2]["actor"]);
+    }
 }
 
 /// A listening wait whose stdout fails after its first line names, as it
