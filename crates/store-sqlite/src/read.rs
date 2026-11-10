@@ -656,4 +656,32 @@ mod tests {
         assert!(case.problems().is_empty(), "{:?}", case.problems());
         assert_eq!(case.revision(), 2);
     }
+
+    /// Unlike `data`, an `author` or `event` that is not UTF-8, which only
+    /// another writer can store, is not read lossily: it fails the read of
+    /// its case, and of the whole list.
+    #[test]
+    fn an_author_or_event_that_is_not_utf8_fails_the_read() {
+        for column in ["author", "event"] {
+            let (_dir, db) = scratch();
+            let key = create(&db);
+            note(&db, key);
+            sql(&db)
+                .execute(
+                    &format!(
+                        "UPDATE events SET {column} = CAST(x'ff' AS TEXT)
+                         WHERE case_key = ?1 AND seq = 2"
+                    ),
+                    [key.sql()],
+                )
+                .unwrap();
+            let read = db.rows(&key);
+            assert!(matches!(read, Err(Error::Sqlite(_))), "{column}: {read:?}");
+            let listed = db.list();
+            assert!(
+                matches!(listed, Err(Error::Sqlite(_))),
+                "{column}: {listed:?}"
+            );
+        }
+    }
 }
