@@ -5,9 +5,11 @@
 //! The HTTP client opens one child for each connection it makes, and keeps
 //! it while it is idle, as it would keep a socket: a later request reuses
 //! it, and a connection that fails is dropped and the next request starts a
-//! new child. A child's stdout is read on a thread of its own, so a read
-//! can time out as a socket's does. Its stderr is kept, the last part of
-//! it, to say why a child ended with no answer.
+//! new child. A child's stdout is read, and its stdin written, on threads
+//! of their own, so a read or a write can time out as a socket's does: a
+//! request larger than the pipe holds, to a child that does not read it,
+//! would otherwise wait for as long as the child lasts. Its stderr is
+//! kept, the last part of it, to say why a child ended with no answer.
 //!
 //! A [`Hold`](crate::Hold) is a child of its own, outside the HTTP client,
 //! sent one request and kept open after its answer, for what the far side
@@ -19,7 +21,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -198,12 +200,51 @@ impl Resolver for NoAddress {
 /// end, with the sender dropped, is the end of the child's stdout.
 type Chunk = io::Result<Vec<u8>>;
 
+/// A child's stdin, written on a thread of its own: each request is sent
+/// to the thread, and its result sent back, so that it can be waited for
+/// with a time limit. Dropped, it ends the thread once a write on its way
+/// is done, which closes the stdin.
+struct Stdin {
+    requests: Sender<Vec<u8>>,
+    /// In a mutex for the same reason as the pipe's `stdout`.
+    written: Mutex<Receiver<io::Result<()>>>,
+    /// Set once a write was not done in time. Its bytes may be in the pipe
+    /// in part, so the child cannot take another request: each later write
+    /// fails at once.
+    stuck: bool,
+}
+
+impl Stdin {
+    fn new(mut stdin: ChildStdin) -> Stdin {
+        let (requests, to_write) = mpsc::channel::<Vec<u8>>();
+        let (done, written) = mpsc::channel();
+        thread::spawn(move || {
+            // A write that fails ends the thread, and the connection: the
+            // child closed its stdin, or ended. A write the child does not
+            // read ends when it is killed, as its pipe is dropped.
+            for bytes in to_write {
+                let result = stdin.write_all(&bytes).and_then(|()| stdin.flush());
+                let failed = result.is_err();
+                if done.send(result).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Stdin {
+            requests,
+            written: Mutex::new(written),
+            stuck: false,
+        }
+    }
+}
+
 /// One connection: a child, its stdin, what it has written to stdout and
 /// not been read yet, and its stderr.
 pub(crate) struct Pipe {
     dial: Arc<Dial>,
     child: Child,
-    stdin: Option<ChildStdin>,
+    /// Boxed, to keep the pipe as small as a stdin alone left it.
+    stdin: Option<Box<Stdin>>,
     /// In a mutex only so that the pipe is `Sync`, as a transport must be:
     /// it is reached through `&mut self` alone.
     stdout: Mutex<Receiver<Chunk>>,
@@ -240,7 +281,7 @@ impl Pipe {
                 format!("could not run {}: {error}", dial.program.to_string_lossy()),
             ))
         })?;
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().map(|stdin| Box::new(Stdin::new(stdin)));
         let mut stdout = child.stdout.take().ok_or_else(|| no_pipe("stdout"))?;
         let mut stderr = child.stderr.take().ok_or_else(|| no_pipe("stderr"))?;
         let (send, stdout_chunks) = mpsc::channel();
@@ -294,6 +335,46 @@ impl Pipe {
             buffers: LazyBuffers::new(input, output),
             ended: false,
         })
+    }
+
+    /// Writes `bytes` to the child's stdin, within `within` (no limit for
+    /// `None`), or fails as a timeout for `reason`. A write that fails
+    /// says why the child closed its stdin, when it exits.
+    fn write(
+        &mut self,
+        bytes: Vec<u8>,
+        within: Option<Duration>,
+        reason: ureq::Timeout,
+    ) -> Result<(), ureq::Error> {
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(self.closed());
+        };
+        if stdin.stuck {
+            return Err(ureq::Error::Timeout(reason));
+        }
+        let written = if stdin.requests.send(bytes).is_ok() {
+            let written = stdin
+                .written
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner);
+            match within {
+                Some(within) => written.recv_timeout(within),
+                None => written.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            }
+        } else {
+            Err(RecvTimeoutError::Disconnected)
+        };
+        match written {
+            Ok(Ok(())) => Ok(()),
+            Err(RecvTimeoutError::Timeout) => {
+                stdin.stuck = true;
+                Err(ureq::Error::Timeout(reason))
+            }
+            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                self.stdin = None;
+                Err(self.closed())
+            }
+        }
     }
 
     /// The child's status, once it has exited, waiting up to `grace`.
@@ -359,17 +440,7 @@ impl Pipe {
         limit: u64,
     ) -> Result<(u16, Vec<u8>), ureq::Error> {
         let deadline = Instant::now() + timeout;
-        let Some(stdin) = self.stdin.as_mut() else {
-            return Err(self.closed());
-        };
-        if stdin
-            .write_all(request)
-            .and_then(|()| stdin.flush())
-            .is_err()
-        {
-            self.stdin = None;
-            return Err(self.closed());
-        }
+        self.write(request.to_vec(), Some(timeout), ureq::Timeout::Global)?;
         let mut got = Vec::new();
         loop {
             if let Some(answer) = answer_in(&got, limit)? {
@@ -559,21 +630,12 @@ impl Transport for Pipe {
         if timeout.after.is_zero() {
             return Err(ureq::Error::Timeout(timeout.reason));
         }
-        let Some(stdin) = self.stdin.as_mut() else {
-            return Err(self.closed());
-        };
-        let output = &self.buffers.output()[..amount];
-        // A write fails when the child closed its stdin: it says why when
-        // it exits.
-        if stdin
-            .write_all(output)
-            .and_then(|()| stdin.flush())
-            .is_err()
-        {
-            self.stdin = None;
-            return Err(self.closed());
-        }
-        Ok(())
+        let output = self.buffers.output()[..amount].to_vec();
+        self.write(
+            output,
+            timeout.not_zero().map(|after| *after),
+            timeout.reason,
+        )
     }
 
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
@@ -622,8 +684,9 @@ impl Transport for Pipe {
     /// Whether the connection can take another request. A pipe that
     /// failed is never asked: the HTTP client drops it.
     fn is_open(&mut self) -> bool {
-        // Bytes the child sent past its answer close it.
-        if !self.pending.is_empty() {
+        // Bytes the child sent past its answer close it, as does a write
+        // not done in time.
+        if !self.pending.is_empty() || self.stdin.as_ref().is_none_or(|stdin| stdin.stuck) {
             return false;
         }
         // So do bytes it sent since, and its stdout's end.
@@ -865,6 +928,78 @@ mod tests {
             answer_in(&endless[..ANSWER_HEAD_LIMIT], 10)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_not_done_in_time_leaves_the_pipe_stuck() {
+        // The child reads nothing for 1 s, and then all it is sent.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 1; cat > /dev/null"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let large = vec![b'x'; 200 * 1024];
+        let start = Instant::now();
+        let written = pipe.write(
+            large,
+            Some(Duration::from_millis(100)),
+            ureq::Timeout::SendBody,
+        );
+        assert!(
+            matches!(written, Err(ureq::Error::Timeout(ureq::Timeout::SendBody))),
+            "{written:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            start.elapsed()
+        );
+        // Part of the request is in the pipe, so the child cannot take
+        // another.
+        assert!(!Transport::is_open(&mut pipe));
+        // A later write fails at once: it does not wait, nor take the
+        // timed-out write's result, which comes once the child reads, as
+        // its own.
+        let start = Instant::now();
+        let again = pipe.write(
+            b"GET".to_vec(),
+            Some(Duration::from_secs(5)),
+            ureq::Timeout::Global,
+        );
+        assert!(
+            matches!(again, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{again:?}"
+        );
+        let exchanged = pipe.exchange(b"GET / HTTP/1.1\r\n\r\n", Duration::from_secs(5), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(_))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(!Transport::is_open(&mut pipe));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exchange_with_a_child_that_does_not_read_times_out() {
+        // A hold's request, renewal and release: a request larger than
+        // the pipe, to a child that never reads, fails at its timeout and
+        // not when the child exits, at 3 s.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 3"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let start = Instant::now();
+        let exchanged = pipe.exchange(&vec![b'x'; 200 * 1024], Duration::from_millis(300), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 
