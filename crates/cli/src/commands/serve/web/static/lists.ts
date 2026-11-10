@@ -690,21 +690,11 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     setReason("");
     setRefusal("");
   }
-  async function submit(e: Event): Promise<void> {
+  function submit(e: Event): Promise<void> {
     e.preventDefault();
-    if (sending.current) return;
-    const self = {};
-    sending.current = self;
-    newest.current = self;
-    // As the case view's (sendOnce, case.ts): a send while one is out does
-    // nothing, until it is answered or 10 s have passed (IN-09). One slower
-    // than 10 s does not, when it comes back, let go of the send after it.
-    const done = () => {
-      if (sending.current === self) sending.current = null;
-    };
-    const release = setTimeout(done, 10000);
-    const why = reason.trim();
-    try {
+    return api.once(sending, async (self) => {
+      newest.current = self;
+      const why = reason.trim();
       const { revision } = line.current.drawn;
       const { after, refusal: problem, current } = await api.send(c.id, "withdraw", why ? { revision, reason: why } : { revision });
       if (after) {
@@ -727,10 +717,7 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
         told.current = said || "";
         if (said) setRefusal(said);
       }
-    } finally {
-      clearTimeout(release);
-      done();
-    }
+    });
   }
   if (!open) {
     return html`<button type="button" class="row-withdraw" ref=${button} aria-label=${`withdraw ${c.title}`} onClick=${start}>withdraw</button>`;
