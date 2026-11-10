@@ -102,7 +102,7 @@ LLM judge (`claude-haiku-4-5`, 20 runs per `claude -p` call, no tools), for what
 - options_explained: every decision says what its options cost and why the recommended one.
 - outcome_honest: every close outcome says what the commands show was done, and matches the answer.
 
-Cost, as the cost study counted it (`transcript.py`): API calls, turns, context tokens and dollars per run and per decision (a human answer, park, resume, withdrawal or message), and extra calls: API calls that made only `cases` calls other than an open.
+Cost, as the cost study counted it (`transcript.py`): API calls, turns, context tokens and dollars per run and per decision (a human answer, park, resume, withdrawal or message), and extra calls: API calls that made only `cases` bookkeeping other than an open (`transcript.bookkeeping_only`). Until 2026-11-09 a call that chained work with a `cases` call counted too, so BASELINE.md's extra calls are not comparable with later runs.
 
 ## Known weaknesses of the graders
 
