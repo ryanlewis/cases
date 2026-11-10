@@ -1426,8 +1426,9 @@ fn print(
             };
         // A pickup makes its actor when the table does not have it, such as
         // for a case opened by hand, so the table is read again then, and
-        // only then: the pickup's actor is the case's worker, whom the table
-        // has after the first pickup of its cases. A read that fails keeps
+        // only then: the pickup's actor is the case's agent, its worker or a
+        // message's taker, whom the table has after the first pickup by it.
+        // A read that fails keeps
         // the table read before, so that the case is still printed.
         if args.full
             && picked

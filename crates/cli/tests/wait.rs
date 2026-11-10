@@ -3084,9 +3084,9 @@ fn a_full_wait_that_took_a_message_prints_it_by_actor_id_when_the_actors_cannot_
 }
 
 /// Runs a `--full` pickup wait of `cases`, answered after `since`, on a
-/// forwarded store,
-/// whose every call is a request on the pipe, and gives the lines it
-/// printed, each case picked up, and how many times it read the actors.
+/// forwarded store, whose every call is a request on the pipe, checks that
+/// it picked up each, and gives the lines it printed and how many times it
+/// read the actors.
 #[cfg(unix)]
 fn full_pickup_actors_reads(env: &mut Env, since: &str, cases: &[String]) -> (Vec<Value>, usize) {
     let log = env.path("requests.log");
