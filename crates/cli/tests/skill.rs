@@ -303,3 +303,177 @@ fn an_unknown_agent_is_refused_and_every_agent_is_named() {
     let help = env.run(["skill", "install", "--help"]).stdout;
     assert!(help.contains("claude, codex, pi"), "{help}");
 }
+
+/// With no directory to install into, install says why and writes nothing.
+#[test]
+fn install_without_a_directory_to_install_into_says_why() {
+    let mut env = Env::new();
+    env.unset("HOME");
+    let out = env.run(["skill", "install", "claude"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("neither $CLAUDE_CONFIG_DIR nor $HOME is set"),
+        "{out:?}"
+    );
+    assert!(!env.path("SKILL.md").exists());
+    assert!(!env.path("skills").exists());
+}
+
+/// Runs `cases skill install claude --path dir` in a terminal of its own,
+/// as `script` gives one, types `answer` and Enter at it, and gives what the
+/// terminal showed.
+#[cfg(unix)]
+fn install_at_a_terminal(env: &Env, dir: &Path, answer: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const RUN: &str = r#"exec "$CASES" skill install claude --path "$DIR""#;
+    let mut command = Command::new("/usr/bin/script");
+    if cfg!(target_os = "linux") {
+        command.args(["-q", "-c", RUN, "/dev/null"]);
+    } else {
+        command.args(["-q", "/dev/null", "/bin/sh", "-c", RUN]);
+    }
+    let mut script = common::spawn(
+        command
+            .env_clear()
+            .envs(common::coverage_vars())
+            .env("CASES", env!("CARGO_BIN_EXE_cases"))
+            .env("DIR", dir)
+            .env("HOME", env.path("home"))
+            .env("CASES_NO_KEYCHAIN", "1")
+            .current_dir(env.path(""))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    );
+    // The line waits in the terminal until install reads it.
+    let stdin = script.stdin.as_mut().unwrap();
+    stdin.write_all(&[answer, b"\n"].concat()).unwrap();
+    stdin.flush().unwrap();
+    let out = script.wait_with_output().unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// At a terminal, install asks before it replaces a different skill, and
+/// replaces it only on a yes. An answer it cannot read is not a yes.
+#[cfg(unix)]
+#[test]
+fn install_at_a_terminal_asks_before_it_replaces_a_different_skill() {
+    let env = Env::new();
+    let skill = skill_md(&env);
+    let dir = env.path("cases");
+    let file = dir.join("SKILL.md");
+    for answer in [&b"n"[..], b""] {
+        write_file(&file, "old\n");
+        let shown = install_at_a_terminal(&env, &dir, answer);
+        assert!(
+            shown.contains(&format!(
+                "A different skill is installed at {}. Overwrite? [y/N]",
+                dir.display()
+            )),
+            "{answer:?}: {shown}"
+        );
+        assert!(shown.contains("Error: cancelled"), "{answer:?}: {shown}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "old\n", "{answer:?}");
+    }
+    // Not text: an error, not a no.
+    let shown = install_at_a_terminal(&env, &dir, b"\xff");
+    assert!(shown.contains("Error: "), "{shown}");
+    assert!(!shown.contains("cancelled"), "{shown}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "old\n");
+    let shown = install_at_a_terminal(&env, &dir, b"y");
+    assert!(
+        shown.contains(&format!("Installed claude skill to {}", dir.display())),
+        "{shown}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), skill);
+}
+
+/// A directory that cannot be made is named in the error, with why.
+#[cfg(unix)]
+#[test]
+fn install_names_a_directory_it_cannot_make() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new();
+    let parent = env.path("locked");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o500)).unwrap();
+    if fs::create_dir(parent.join("probe")).is_ok() {
+        // Running as root: the mode does not stop the write.
+        return;
+    }
+    let dir = parent.join("cases");
+    let out = env.run([
+        "skill",
+        "install",
+        "claude",
+        "--path",
+        dir.to_str().unwrap(),
+    ]);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .starts_with(&format!("Error: {}: ", dir.display())),
+        "{out:?}"
+    );
+    // The directory's error, not the file's, which would find no directory.
+    assert!(out.stderr.contains("ermission denied"), "{out:?}");
+    assert!(!dir.exists());
+}
+
+/// A skill file that cannot be written is named by its directory.
+#[test]
+fn install_names_the_directory_of_a_file_it_cannot_write() {
+    let env = Env::new();
+    let dir = env.path("cases");
+    // A directory where the file goes: it cannot be read as the skill, so
+    // only -y goes on to write it.
+    fs::create_dir_all(dir.join("SKILL.md")).unwrap();
+    let out = env.run([
+        "skill",
+        "install",
+        "claude",
+        "--path",
+        dir.to_str().unwrap(),
+        "-y",
+    ]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .starts_with(&format!("Error: {}: ", dir.display())),
+        "{out:?}"
+    );
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(dir.join("SKILL.md").is_dir());
+}
+
+/// A stdout that takes nothing fails install, after the skill is in place.
+#[cfg(target_os = "linux")]
+#[test]
+fn install_fails_when_it_cannot_say_what_it_did() {
+    let env = Env::new();
+    let dir = env.path("cases");
+    // Once to install it, then again when it is up to date.
+    for run in 0..2 {
+        let out = common::output(
+            env.command([
+                "skill",
+                "install",
+                "claude",
+                "--path",
+                dir.to_str().unwrap(),
+            ])
+            .stdout(fs::File::create("/dev/full").unwrap())
+            .stderr(std::process::Stdio::piped()),
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{run}: {stderr}");
+        assert!(stderr.starts_with("Error: "), "{run}: {stderr}");
+        assert_eq!(
+            fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            skill_md(&env)
+        );
+    }
+}
