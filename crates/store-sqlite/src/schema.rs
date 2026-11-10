@@ -188,12 +188,12 @@ fn upgrade_or_wait(conn: &mut Connection, path: &Path) -> Result<(), Error> {
 /// transaction, and leaves the store as it was when it fails. An older
 /// cases goes on reading and writing the store after, as before.
 fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
-    if upgraded(conn)? {
+    if upgraded(conn)?.is_some() {
         return Ok(());
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another cases may have upgraded it while this one waited.
-    if !upgraded(&tx)? {
+    if upgraded(&tx)?.is_none() {
         check_version(&tx, path)?;
         if !has_store_id(&tx)? {
             tx.execute_batch("ALTER TABLE meta ADD COLUMN store_id TEXT")?;
@@ -208,21 +208,25 @@ fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether the store has its id and the log of removals.
-pub(crate) fn upgraded(conn: &Connection) -> Result<bool, Error> {
-    let logged: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE (type, name) IN
-         (VALUES ('table', 'removed'), ('trigger', 'removed_log'),
-                 ('table', 'gone'), ('trigger', 'gone_log'))",
+/// The store's id, when the store has its id and the log of removals, as
+/// it does once upgraded; `None` otherwise. It is read each time, never
+/// kept: another cases can upgrade the store at any time.
+pub(crate) fn upgraded(conn: &Connection) -> Result<Option<String>, Error> {
+    // The tables and triggers of the log, and the id's column, are looked
+    // up first, in the catalog: a statement that names the column does not
+    // prepare in a store without it.
+    let ready: bool = conn.query_row(
+        "SELECT (SELECT count(*) FROM sqlite_master WHERE (type, name) IN
+                 (VALUES ('table', 'removed'), ('trigger', 'removed_log'),
+                         ('table', 'gone'), ('trigger', 'gone_log'))) >= 4
+            AND (SELECT count(*) FROM pragma_table_info('meta') WHERE name = 'store_id') > 0",
         [],
         |row| row.get(0),
     )?;
-    if logged < 4 || !has_store_id(conn)? {
-        return Ok(false);
+    if !ready {
+        return Ok(None);
     }
-    let id: Option<String> =
-        conn.query_row("SELECT max(store_id) FROM meta", [], |row| row.get(0))?;
-    Ok(id.is_some())
+    Ok(conn.query_row("SELECT max(store_id) FROM meta", [], |row| row.get(0))?)
 }
 
 /// Whether `meta` has the column for the store id.
@@ -663,5 +667,128 @@ CREATE TABLE archive_events (
             )
             .unwrap();
         assert_eq!((has_id, removed), (0, 0));
+    }
+
+    /// A store read before it was upgraded, and upgraded since by another
+    /// open, is read as upgraded at the next read of the same connection:
+    /// its version and its poll take the id, and what changed after is read
+    /// from the log of removals. Nothing the connection read before is kept.
+    #[test]
+    fn a_store_upgraded_by_another_open_is_read_as_upgraded_at_the_next_read() {
+        let (dir, db) = scratch();
+        drop(older(&db));
+        drop(db);
+        let path = dir.path().join("cases.db");
+
+        // Read under another writer's lock, so not upgraded, and polled.
+        let mut lock = Connection::open(&path).unwrap();
+        let tx = lock
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let db = Db::new(&path).with_busy_timeout(std::time::Duration::from_millis(50));
+        let before = db.version().unwrap();
+        assert!(before.as_str().starts_with('.'), "{before:?}");
+        let mut poller = db.poller();
+        assert_eq!(poller.poll().unwrap().len(), 1);
+        assert_eq!(poller.version(), Some(&before));
+        drop(tx);
+        drop(lock);
+
+        // Another open upgrades it.
+        let other = Db::new(&path);
+        let upgraded = other.version().unwrap();
+        let id = upgraded.as_str().split('.').next().unwrap();
+        assert_eq!(id.len(), 22, "{upgraded:?}");
+
+        // The first open's next reads see the upgrade.
+        assert_eq!(db.version().unwrap(), upgraded);
+        assert_eq!(poller.poll().unwrap().len(), 1);
+        assert_eq!(poller.version(), Some(&upgraded));
+        assert!(matches!(
+            db.rows_since(Some(&upgraded)).unwrap(),
+            Changes::Unchanged { .. }
+        ));
+
+        // A case written and one deleted by the other open since are what
+        // changed, read from the log of removals.
+        let key = other.list().unwrap()[0].0;
+        let new = create(&other);
+        other.delete(&key, None).unwrap();
+        let Changes::Since { cases, removed, .. } = db.rows_since(Some(&upgraded)).unwrap() else {
+            panic!("not what changed");
+        };
+        let keys: Vec<_> = cases.iter().map(|(key, _)| *key).collect();
+        assert_eq!((keys, removed), (vec![new], vec![key]));
+        let polled: Vec<_> = poller.poll().unwrap().keys().copied().collect();
+        assert_eq!(polled, [new]);
+        assert_eq!(poller.version(), Some(&db.version().unwrap()));
+    }
+
+    /// A store with only part of the upgrade, as a read that cannot upgrade
+    /// it finds it, has no id: its version is the older store's, whichever
+    /// part it has. With all of it, the version has the id, and the tag.
+    #[test]
+    fn a_store_with_part_of_the_upgrade_is_read_with_no_id() {
+        // The version of an older store with `parts` of the upgrade made
+        // by hand, read under another writer's lock.
+        let read = |parts: &str| {
+            let (dir, db) = scratch();
+            let conn = older(&db);
+            drop(db);
+            conn.execute_batch(parts).unwrap();
+            drop(conn);
+            let path = dir.path().join("cases.db");
+            let mut lock = Connection::open(&path).unwrap();
+            let tx = lock
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let db = Db::new(&path).with_busy_timeout(std::time::Duration::from_millis(50));
+            let version = db.version().unwrap();
+            drop(tx);
+            version
+        };
+        let older = read("");
+        // Two cases made, a note, and an archive: four changes.
+        assert_eq!(older.as_str(), ".4.2.1.");
+        let column = "ALTER TABLE meta ADD COLUMN store_id TEXT;";
+        let id = "UPDATE meta SET store_id = 'hV3kQ9mZr2pX7wLc0tBnAg';";
+        let logs = super::REMOVALS;
+        for parts in [
+            column.to_owned(),
+            format!("{column}{id}"),
+            logs.to_owned(),
+            format!("{logs}{column}"),
+            format!("{logs}{column}{id}DROP TABLE removed;"),
+            format!("{logs}{column}{id}DROP TRIGGER removed_log;"),
+            format!("{logs}{column}{id}DROP TRIGGER gone_log;"),
+            format!("{logs}{column}{id}DROP TRIGGER gone_log; DROP TABLE gone;"),
+        ] {
+            assert_eq!(read(&parts), older, "{parts}");
+        }
+        // The removal at change 4 was logged in the table the older store
+        // dropped, so it has no tag; the note at change 3 has one.
+        let whole = read(&format!("{logs}{column}{id}"));
+        assert_eq!(whole.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.4.2.1.");
+        let at_note = read(&format!(
+            "{logs}{column}{id}UPDATE sqlite_sequence SET seq = 3 WHERE name = 'events';"
+        ));
+        let (head, tag) = at_note
+            .as_str()
+            .split_at("hV3kQ9mZr2pX7wLc0tBnAg.3.2.1.".len());
+        assert_eq!(head, "hV3kQ9mZr2pX7wLc0tBnAg.3.2.1.");
+        assert!(tag.ends_with('Z'), "{at_note:?}: no tag");
+
+        // A store with no counter yet for its events or its cases counts
+        // from 0, and no row has the change 0, so it has no tag.
+        let none = read(&format!(
+            "{logs}{column}{id}DELETE FROM sqlite_sequence WHERE name IN ('events', 'cases');"
+        ));
+        assert_eq!(none.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.0.0.1.");
+        let no_events = read(&format!(
+            "{logs}{column}{id}DELETE FROM sqlite_sequence WHERE name = 'events';"
+        ));
+        assert_eq!(no_events.as_str(), "hV3kQ9mZr2pX7wLc0tBnAg.0.2.1.");
+        let older_none = read("DELETE FROM sqlite_sequence;");
+        assert_eq!(older_none.as_str(), ".0.0.1.");
     }
 }
