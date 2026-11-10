@@ -431,7 +431,9 @@ async function submit(s: Sending, e: Event): Promise<void> {
 
 // The dialog's own events: Escape, and a click on the dialog itself, which
 // is on the backdrop: the composer fills it, on a phone too (style.css). A
-// press that starts inside and ends outside, as a drag does, is not.
+// press that starts inside and ends outside, as a drag does, is not, nor
+// one that starts outside and ends inside: the browser sends that click to
+// the dialog, the nearest element both were in, so the release is noted.
 function dialogEvents(c: Leaving, down: { current: boolean }) {
   return {
     onCancel: (e: Event) => {
@@ -439,6 +441,9 @@ function dialogEvents(c: Leaving, down: { current: boolean }) {
       leave(c);
     },
     onPointerDown: (e: PointerEvent) => (down.current = e.target === e.currentTarget),
+    onPointerUp: (e: PointerEvent) => {
+      if (e.target !== e.currentTarget) down.current = false;
+    },
     onClick: (e: MouseEvent) => {
       if (e.target === e.currentTarget && down.current) leave(c);
       down.current = false;

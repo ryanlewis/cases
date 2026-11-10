@@ -111,8 +111,12 @@ pub(crate) fn path(store: &Path) -> Result<PathBuf, Error> {
 ///
 /// When the file is there but cannot be read, or is not an instance file.
 pub(crate) fn running(store: &Path) -> Result<Option<Info>, Error> {
-    let path = path(store)?;
-    let text = match fs::read_to_string(&path) {
+    running_at(&path(store)?)
+}
+
+/// [`running`], for the instance file at `path`.
+pub(crate) fn running_at(path: &Path) -> Result<Option<Info>, Error> {
+    let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(Error::new(format!("read {}: {error}", path.display()))),
