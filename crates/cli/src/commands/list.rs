@@ -1,5 +1,6 @@
 //! `cases list`: the cases in the store, by state and filter (AG-14).
 
+use std::borrow::Borrow;
 use std::io::Write;
 use std::time::Duration;
 
@@ -102,13 +103,17 @@ pub(crate) const WAITING: [State; 2] = [State::Open, State::Parked];
 
 /// The cases `keep` takes, in inbox order: most urgent first, then in the
 /// order they were opened. `cases` are in the order they were opened, as the
-/// store gives them, and a stable sort keeps it within each urgency.
-pub(crate) fn inbox_order(
-    cases: &[(Key, Case)],
+/// store gives them, and a stable sort keeps it within each urgency. A case
+/// is held as it is, or shared, as serve's snapshot holds it.
+pub(crate) fn inbox_order<C: Borrow<Case>>(
+    cases: &[(Key, C)],
     keep: impl Fn(&Case) -> bool,
-) -> Vec<&(Key, Case)> {
-    let mut shown: Vec<_> = cases.iter().filter(|(_, case)| keep(case)).collect();
-    shown.sort_by_key(|(_, case)| case.urgency());
+) -> Vec<&(Key, C)> {
+    let mut shown: Vec<_> = cases
+        .iter()
+        .filter(|(_, case)| keep(case.borrow()))
+        .collect();
+    shown.sort_by_key(|(_, case)| case.borrow().urgency());
     shown
 }
 

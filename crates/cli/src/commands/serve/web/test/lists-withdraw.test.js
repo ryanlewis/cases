@@ -1,0 +1,648 @@
+// What a row's withdraw (RowWithdraw in static/lists.ts, ST-14) does once it
+// is pressed: render-to-string runs neither effects nor handlers, so these
+// tests give lists.ts a stand-in for preact/hooks (hooks-stand-in.js), take
+// RowWithdraw from the tree the inbox-zero panel gives, call it as a
+// function, hand its refs stand-in elements that log their focus, and call
+// the handlers in the tree it gives, with serve stood in for by a fetch
+// that holds each POST until the test answers it.
+//
+// The stand-in is in place only if this file loads lists.ts first, so it
+// needs a process of its own, as `node --test` gives each file by default.
+import { test, mock } from "node:test";
+import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+import { render } from "preact-render-to-string";
+
+const standIn = new URL("./hooks-stand-in.js", import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === "preact/hooks" && context.parentURL?.endsWith("/static/lists.ts")) return next(standIn, context);
+    return next(specifier, context);
+  },
+});
+const { mount } = await import("./hooks-stand-in.js");
+const { List, Zero } = await import("../static/lists.ts");
+const { decision, steps } = await import("./case.js");
+
+const now = Date.parse("2026-09-25T13:40:00Z");
+
+// Every vnode of `tree`, in order.
+function* nodes(tree) {
+  if (Array.isArray(tree)) {
+    for (const child of tree) yield* nodes(child);
+    return;
+  }
+  if (!tree || typeof tree !== "object") return;
+  yield tree;
+  yield* nodes(tree.props?.children);
+}
+
+// The component called `name` that `tree` draws, mounting each component
+// on the way down until it is found: its function and its props.
+function find(tree, name) {
+  for (const v of nodes(tree)) {
+    if (typeof v.type !== "function") continue;
+    if (v.type.name === name) return v;
+    const inner = find(mount(v.type, v.props).tree, name);
+    if (inner) return inner;
+  }
+  return null;
+}
+
+const RowWithdraw = find(Zero({ z: { today: 0, week: 0, closed: 0, lastAnswer: "", outbox: [], flights: [{ c: decision("answered", steps.open, steps.answer), who: "w", last: "answered", at: steps.answer.at }] }, now }), "RowWithdraw").type;
+
+// The text of a vnode's children, where they are strings.
+const text = (v) => [...nodes(v)].flatMap((n) => [n.props?.children].flat().filter((c) => typeof c === "string" || typeof c === "number")).join("");
+
+// Stands in for serve: the token at /v1, and each POST held until the test
+// answers it with `answer(i, status, body)`, or fails it with `lose(i)`.
+function serve(t) {
+  const was = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = was;
+  });
+  const posts = [];
+  globalThis.fetch = (url, init = {}) => {
+    if (url === "/v1") return Promise.resolve(new Response(JSON.stringify({ csrf: "tok" }), { status: 200 }));
+    return new Promise((resolve, reject) => posts.push({ url, body: JSON.parse(init.body), resolve, reject }));
+  };
+  const answer = (i, status, body) => posts[i].resolve(new Response(JSON.stringify(body), { status }));
+  const lose = (i) => posts[i].reject(new TypeError("Failed to fetch"));
+  return { posts, answer, lose };
+}
+
+const settle = async () => {
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+};
+
+// A row's withdraw on case `c`, mounted: its tree, the focus its refs were
+// given, what `sent` was called with, and the handlers of what it draws.
+function row(c) {
+  const log = [];
+  const sent = [];
+  const props = { c, sent: (what, after) => sent.push([what, after.revision]) };
+  const attach = (tree) => {
+    for (const v of nodes(tree)) {
+      if (v.ref && v.type === "input") v.ref.current = { focus: () => log.push(`focus ${v.props.name}`) };
+      if (v.ref && v.type === "button") v.ref.current = { focus: () => log.push("focus withdraw") };
+    }
+  };
+  const m = mount(RowWithdraw, props, attach);
+  const one = (pred) => [...nodes(m.tree)].find(pred);
+  const r = {
+    log,
+    sent,
+    props,
+    get tree() {
+      return m.tree;
+    },
+    html: () => render(m.tree),
+    draw: () => m.draw(),
+    // The stream brings `next`: the row is drawn again with it.
+    bring(next) {
+      props.c = next;
+      m.dirty = true;
+      m.draw();
+    },
+    press: () => {
+      one((v) => v.type === "button" && v.props.class === "row-withdraw").props.onClick();
+      m.draw();
+    },
+    type: (value) => {
+      one((v) => v.type === "input").props.onInput({ target: { value } });
+      m.draw();
+    },
+    keep: () => {
+      one((v) => v.type === "button" && text(v) === "keep").props.onClick();
+      m.draw();
+    },
+    key: (key) => {
+      one((v) => v.type === "form").props.onKeyDown({ key });
+      m.draw();
+    },
+    // Submits the form; `prevented` says whether its default was prevented.
+    submit() {
+      const e = { prevented: false, preventDefault() { this.prevented = true; } };
+      const done = one((v) => v.type === "form").props.onSubmit(e);
+      return { e, done };
+    },
+    refusal: () => text(one((v) => v.type === "p" && v.props.class === "error")),
+  };
+  return r;
+}
+
+const answered = decision("answered", steps.open, steps.answer);
+const pickedUp = decision("pickedup", steps.open, steps.answer, steps.pickup);
+
+test("a row's withdraw is a button named for its case, which opens the line with the focus in the reason", () => {
+  const r = row(answered);
+  assert.equal(r.html(), `<button type="button" class="row-withdraw" aria-label="withdraw ${answered.title}">withdraw</button>`);
+  assert.deepEqual(r.log, [], "nothing is focused before it is pressed");
+  r.press();
+  assert.equal(
+    r.html(),
+    '<form class="row-confirm" data-write="withdraw"><label>reason, if any <input type="text" name="reason" value/></label><div class="actions"><button type="submit">withdraw it</button><button type="button">keep</button></div></form>',
+  );
+  assert.deepEqual(r.log, ["focus reason"]);
+});
+
+test("keep, or Escape, puts the button back with the focus on it, the reason and any refusal gone", async (t) => {
+  const { posts, answer } = serve(t);
+  for (const close of [(r) => r.keep(), (r) => r.key("Escape")]) {
+    const r = row(answered);
+    r.press();
+    r.type("not needed");
+    const { done } = r.submit();
+    await settle();
+    answer(posts.length - 1, 403, { error: { category: "request", message: "the case is not yours to withdraw" } });
+    await done;
+    r.draw();
+    assert.equal(r.refusal(), "the case is not yours to withdraw");
+    close(r);
+    assert.match(r.html(), /^<button type="button" class="row-withdraw"/);
+    assert.deepEqual(r.log, ["focus reason", "focus withdraw"]);
+    r.press();
+    assert.match(r.html(), /name="reason" value\/>/, "the reason is gone");
+    assert.equal(r.refusal(), "", "the refusal is gone");
+  }
+});
+
+test("another key in the line does nothing", () => {
+  const r = row(answered);
+  r.press();
+  r.key("Enter");
+  r.key("a");
+  assert.match(r.html(), /^<form class="row-confirm"/);
+});
+
+test("the withdraw is sent at the revision the row had when it was pressed, with the reason trimmed, or none", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  r.type("  not needed  ");
+  const { e, done } = r.submit();
+  assert.equal(e.prevented, true, "the form is not submitted by the browser");
+  await settle();
+  assert.deepEqual(posts.map((p) => [p.url, p.body]), [[`/v1/cases/${answered.id}/withdraw`, { revision: answered.revision, reason: "not needed" }]]);
+  answer(0, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await done;
+  assert.deepEqual(r.sent, [["withdraw", answered.revision + 1]], "the page is told what landed");
+  const blank = row(answered);
+  blank.press();
+  blank.type("   ");
+  const second = blank.submit();
+  await settle();
+  assert.deepEqual(posts[1].body, { revision: answered.revision }, "a blank reason is no reason");
+  answer(1, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await second.done;
+});
+
+test("a withdraw that lands with no one told of it leaves the line as it was", async (t) => {
+  const { answer } = serve(t);
+  const r = row(answered);
+  // props is the object the row reads on each draw.
+  r.props.sent = undefined;
+  r.press();
+  const { done } = r.submit();
+  await settle();
+  answer(0, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await done;
+  r.draw();
+  assert.match(r.html(), /^<form class="row-confirm"/, "the stream takes the row away, not the row itself");
+  assert.equal(r.refusal(), "");
+});
+
+test("a refusal is said in the line, as serve says it, and the line stays open to send again", async (t) => {
+  const { posts, answer } = serve(t);
+  const refusals = [
+    [403, { error: { category: "request", message: "a write from another site" } }, "a write from another site"],
+    [409, { error: { category: "transition", message: "the case is closed" } }, "the case is closed"],
+    [500, null, "serve answered 500"],
+  ];
+  for (const [status, body, said] of refusals) {
+    const r = row(answered);
+    r.press();
+    const { done } = r.submit();
+    await settle();
+    answer(posts.length - 1, status, body);
+    await done;
+    r.draw();
+    assert.equal(r.refusal(), said);
+    assert.match(r.html(), /<p class="error" role="alert">/);
+    assert.deepEqual(r.sent, []);
+    // It can be sent again, at the same revision.
+    const again = r.submit();
+    await settle();
+    assert.deepEqual(posts[posts.length - 1].body, { revision: answered.revision });
+    answer(posts.length - 1, status, body);
+    await again.done;
+  }
+});
+
+test("a stale refusal says so, and the line takes the case the refusal shows, to be sent at once it is seen", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  // Refused as stale: the case was picked up since the row was drawn.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await first.done;
+  r.draw();
+  // The line takes the refusal's case against the case the row was drawn
+  // with, which is older, so nothing more is said than the stale refusal.
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  const second = r.submit();
+  await settle();
+  assert.deepEqual(posts[1].body, { revision: pickedUp.revision }, "sent again at the case the refusal showed");
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await second.done;
+  assert.deepEqual(r.sent, [["withdraw", pickedUp.revision + 1]]);
+});
+
+test("a stale refusal whose case is in the state the row was drawn in says the stale message, and takes its revision", async (t) => {
+  const { posts, answer } = serve(t);
+  const later = { ...answered, revision: answered.revision + 1 };
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  answer(0, 409, { error: { category: "stale", message: "stale", case: later } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, later.revision);
+  answer(1, 409, { error: { category: "stale", message: "stale" } });
+  await second.done;
+});
+
+test("a stale refusal of a case older than one the stream brought while the send was out keeps the line on the newer one", async (t) => {
+  const { posts, answer } = serve(t);
+  // Picked up, then a label added: the stream brings that while the send
+  // is out, and the line follows it.
+  const amend = { seq: 4, author: "agent", event: "amend", from: "pickedup", file: "", data: { labels: ["gifts"] } };
+  const labelled = decision("pickedup", steps.open, steps.answer, steps.pickup, amend);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  r.bring(labelled);
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  // Refused as stale, with the case as serve read it: picked up, before
+  // the label, older than the one the stream brought.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await first.done;
+  r.draw();
+  // The line keeps the case the stream brought, and says how it moved on.
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, labelled.revision, "sent at the newer case");
+  answer(1, 200, { ...labelled, state: "withdrawn", revision: labelled.revision + 1 });
+  await second.done;
+  assert.deepEqual(r.sent, [["withdraw", labelled.revision + 1]]);
+});
+
+test("serve out of reach says the outcome is not known, and the line stays open", async (t) => {
+  const { lose } = serve(t);
+  const r = row(answered);
+  r.press();
+  const { done } = r.submit();
+  await settle();
+  lose(0);
+  await done;
+  r.draw();
+  assert.equal(r.refusal(), "serve could not be reached, so this may or may not have been recorded. check the thread before sending again.");
+  assert.deepEqual(r.sent, []);
+});
+
+test("while the line is open it follows the stream; while it is shut, a case that moved on is taken when it is pressed", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  // Shut: the stream's case is not followed, but is taken on the press.
+  r.bring(pickedUp);
+  assert.match(r.html(), /^<button type="button" class="row-withdraw"/, "shut, it stays the button");
+  r.press();
+  assert.equal(r.refusal(), "", "nothing to say: the line is drawn on the case as it is");
+  const { done } = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, pickedUp.revision);
+  answer(0, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await done;
+  // Open: the line follows, and says a state the case moved on to.
+  const o = row(answered);
+  o.press();
+  o.bring(pickedUp);
+  assert.equal(o.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+});
+
+test("a second submit while the first send is out sends nothing", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  const second = r.submit();
+  await settle();
+  assert.equal(posts.length, 1);
+  await second.done;
+  answer(0, 409, { error: { category: "transition", message: "no" } });
+  await first.done;
+  // Answered, the guard is released: the next submit is sent.
+  const third = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await third.done;
+});
+
+test("a send out for more than 10 s lets the next go, and its late answer does not let a third go while the second is out", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  r.submit();
+  await settle();
+  assert.equal(posts.length, 1, "within 10 s a second submit sends nothing");
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "after 10 s the guard lets a second withdraw go");
+  // The first answers while the second is out: the guard is the second's,
+  // and only the second lets it go.
+  answer(0, 409, { error: { category: "transition", message: "no" } });
+  await a.done;
+  const between = r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "nothing is sent while the second is out");
+  await between.done;
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
+  const c = r.submit();
+  await settle();
+  assert.equal(posts.length, 3, "once the second is answered, the next is sent");
+  assert.deepEqual(posts.map((p) => p.body.revision), [answered.revision, answered.revision, answered.revision]);
+  answer(2, 409, { error: { category: "transition", message: "no" } });
+  await c.done;
+});
+
+// A part of the list folded by the human, as List draws it under the
+// stand-in hooks.
+test("a folded part of the list stays as the human left it, and opens when it comes to hold the case shown", () => {
+  const briefing = { ...answered, id: "b1", kind: "briefing", answer: { answered_at: steps.answer.at } };
+  const props = { inbox: [], done: [], briefings: [briefing], show: "briefings", selected: "", now };
+  const folded = find(mount(List, props).tree, "Folded");
+  assert.ok(folded, "the answered briefings are a folded part");
+  const m = mount(folded.type, folded.props);
+  const details = () => [...nodes(m.tree)].find((v) => v.type === "details");
+  assert.equal(details().props.open, undefined, "folded at first, not holding the case shown");
+  details().props.onToggle({ target: { open: true } });
+  m.draw();
+  assert.equal(details().props.open, true, "opened by the human");
+  details().props.onToggle({ target: { open: false } });
+  m.draw();
+  assert.equal(details().props.open, undefined, "and folded again");
+  const holding = mount(folded.type, { ...folded.props, holds: true });
+  assert.equal([...nodes(holding.tree)].find((v) => v.type === "details").props.open, true, "open when it holds the case shown");
+  // Folded by the human, then the case shown comes to be one of its own.
+  const props2 = { ...folded.props, holds: false };
+  const later = mount(folded.type, props2);
+  const laterDetails = () => [...nodes(later.tree)].find((v) => v.type === "details");
+  assert.equal(laterDetails().props.open, undefined);
+  props2.holds = true;
+  later.dirty = true;
+  later.draw();
+  assert.equal(laterDetails().props.open, true, "it opens itself");
+});
+
+test("a stale refusal of a case older than one the stream brought before the send says how the case moved on, and keeps the newer", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  // The stream brings the pickup while the line is open, before the send.
+  r.bring(pickedUp);
+  const first = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, pickedUp.revision);
+  // Refused as stale, with the case as it was before the pickup: late.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 409, { error: { category: "stale", message: "stale" } });
+  await second.done;
+});
+
+test("an open line follows a newer revision of the case in the same state, when only rows that keep its state came since", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  // A row since that kept the case answered, as fresh.ts's `since` reads
+  // one: made up, as an agent's amend of an answered case reopens it.
+  const amend = { seq: answered.last_seq + 1, author: "agent", event: "amend", from: "answered", file: "", data: { labels: ["x"] } };
+  const later = { ...answered, events: [...answered.events, amend], revision: answered.revision + 1, last_seq: amend.seq };
+  r.bring(later);
+  assert.equal(r.refusal(), "", "nothing to say");
+  const { done } = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, later.revision);
+  answer(0, 409, { error: { category: "stale", message: "stale" } });
+  await done;
+});
+
+test("a send answered at once frees the guard for good: its 10 s does not free the guard of the send after it", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  answer(0, 409, { error: { category: "transition", message: "no" } });
+  await a.done;
+  mock.timers.tick(5000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  // 10 s after the first was sent, the second is still out.
+  mock.timers.tick(5000);
+  r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "the first's timer is gone with its answer");
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
+});
+
+test("the late answer of a send that another went after does not undo what the newer send's answer said", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  // The second is refused as stale, with the case picked up: the line takes it.
+  answer(1, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await b.done;
+  r.draw();
+  const said = r.refusal();
+  // Then the first comes back, refused as stale with the case as it was.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), said, "the refusal is the newer send's");
+  const c = r.submit();
+  await settle();
+  assert.equal(posts[2].body.revision, pickedUp.revision, "the next goes at the case the newer refusal showed");
+  answer(2, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await c.done;
+});
+
+test("the late success of a send that another went after is still passed to the page, as it landed", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  answer(0, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await a.done;
+  assert.deepEqual(r.sent, [["withdraw", answered.revision + 1]]);
+  answer(1, 409, { error: { category: "transition", message: "the case is withdrawn" } });
+  await b.done;
+  assert.equal(posts.length, 2);
+});
+
+test("the answer of a send from before the line was kept and opened again says nothing in the new line", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  r.keep();
+  r.bring(pickedUp);
+  r.press();
+  // The first send comes back stale, with the case as it was: the line,
+  // opened on the case picked up, is the human's new one.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), "");
+  const b = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await b.done;
+});
+
+test("a stale refusal does not move the line past a case the stream brought that changed more than it can say", async (t) => {
+  const { posts, answer } = serve(t);
+  const note = { ...steps.note, data: { body: "Follow-up", reopen: true } };
+  const again = { ...steps.answer, seq: 5, from: "open" };
+  // Reopened by the agent's note, then answered again: the line drawn at
+  // answered keeps its mark, so that a withdraw is refused as stale.
+  const reopened = decision("open", steps.open, steps.answer, steps.pickup, note);
+  const answeredAgain = decision("answered", steps.open, steps.answer, steps.pickup, note, again);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  r.bring(answeredAgain);
+  // Refused as stale, with the case reopened, before the second answer.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: reopened } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, reopened.revision, "at the case the refusal showed, not past the one the stream brought");
+  answer(1, 409, { error: { category: "stale", message: "stale", case: answeredAgain } });
+  await second.done;
+});
+
+test("a stale refusal showing the very case the stream brought while the send was out keeps the line, and says how it moved on", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  r.bring(pickedUp);
+  answer(0, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await second.done;
+});
+
+test("a line opened again forgets what the last one said: a stale refusal of an older case then says it is stale", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  r.keep();
+  r.press();
+  const first = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, pickedUp.revision);
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+});
+
+test("a refusal that is not stale, with the case the line holds, says its own reason", async (t) => {
+  const { answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  const first = r.submit();
+  await settle();
+  answer(0, 409, { error: { category: "transition", message: "a picked-up case of this kind is not withdrawn", case: pickedUp } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "a picked-up case of this kind is not withdrawn");
+});
+
+test("a refusal that moves the line forgets what the line said before it", async (t) => {
+  const { posts, answer } = serve(t);
+  const reopened = decision("open", steps.open, steps.answer, steps.pickup, { ...steps.note, data: { body: "Follow-up", reopen: true } });
+  const noted = decision("open", steps.open, steps.answer, steps.pickup, { ...steps.note, data: { body: "Follow-up", reopen: true } }, { ...steps.note, seq: 5, from: "open", data: { body: "and the budget?" } });
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  const a = r.submit();
+  await settle();
+  // Refused as stale with the case reopened: the line moves to it.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: reopened } });
+  await a.done;
+  r.draw();
+  const b = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, reopened.revision);
+  // A note while it is out: the line follows it, and the send is refused
+  // as stale with it.
+  r.bring(noted);
+  answer(1, 409, { error: { category: "stale", message: "stale", case: noted } });
+  await b.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.", "not that it was picked up");
+});

@@ -181,10 +181,18 @@ function writeCursor(c: Cursor | null): void {
 
 // Shows `item`, unless notifications are on for blocking cases only and it
 // is not one. Its tag is the same in every tab, so the desktop shows it
-// once; a click opens the case with `open`.
+// once; a click opens the case with `open`. One the browser will not make
+// (Chrome on Android makes them only from a service worker) is passed over,
+// and the cursor moves past it all the same: each item is tried once,
+// shown or not.
 function show(item: Item, open: (path: string) => void): void {
   if (prefs.read("notify") === "blocking" && !(item.case && item.case.urgency === "blocking")) return;
-  const notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  let notification: Notification;
+  try {
+    notification = new Notification(item.title, { body: item.body, tag: item.tag });
+  } catch {
+    return;
+  }
   notification.onclick = () => {
     window.focus();
     open(item.url);
