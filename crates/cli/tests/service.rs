@@ -1096,3 +1096,21 @@ fn a_query_killed_by_a_signal_is_an_error() {
     assert!(out.stderr.contains("killed by a signal"), "{out:?}");
     assert!(!out.stdout.contains("Loaded:"), "{out:?}");
 }
+
+/// A query killed by a signal after it printed a state is an error, not
+/// that state: status does not report the service loaded, or not loaded.
+/// The states are systemd's; launchd's query is judged by its exit alone.
+#[test]
+fn a_query_killed_after_it_printed_is_an_error() {
+    let service = Service::new();
+    for state in ["activating", "inactive"] {
+        service.replace_manager(&format!("#!/bin/sh\necho {state}\nkill -KILL $$\n"));
+        let out = service.run(&[]);
+        assert_eq!(out.code, 1, "{state}: {out:?}");
+        // The state printed is in the error, so the query's output was read
+        // and then not taken for an answer.
+        let error = format!("killed by a signal: {state}");
+        assert!(out.stderr.contains(&error), "{state}: {out:?}");
+        assert!(!out.stdout.contains("Loaded:"), "{state}: {out:?}");
+    }
+}

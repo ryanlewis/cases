@@ -313,15 +313,18 @@ impl Manager {
     /// # Errors
     ///
     /// When the query fails without saying, as when the service manager
-    /// cannot be reached. That is not a service that is not there.
+    /// cannot be reached, or is killed by a signal, whatever it printed
+    /// first. That is not a service that is not there.
     pub(crate) fn active(&self) -> Result<bool, Error> {
         if self.system == System::Launchd {
             return self.loaded();
         }
         let args = ["--user", "is-active", UNIT];
         let ran = (self.run)(self.system.program(), &args)?;
-        if ran.code == Some(0) {
-            return Ok(true);
+        match ran.code {
+            Some(0) => return Ok(true),
+            None => return Err(self.failed(&args, &ran)),
+            Some(_) => {}
         }
         match ran.output.trim() {
             "activating" => Ok(true),
@@ -1062,8 +1065,19 @@ WantedBy=default.target
     }
 
     /// Ways the query can fail without saying whether the service is there:
-    /// the program cannot be run, or it cannot reach the service manager.
+    /// the program cannot be run, it cannot reach the service manager, or it
+    /// is killed by a signal after it printed a state.
     fn query_failures() -> Vec<(System, Runner)> {
+        /// A runner whose every command prints `output` and is then killed
+        /// by a signal.
+        fn killed(output: &'static str) -> Runner {
+            Box::new(move |_, _| {
+                Ok(Ran {
+                    code: None,
+                    output: output.to_owned(),
+                })
+            })
+        }
         fn cannot_run(_: &str, _: &[&str]) -> Result<Ran, Error> {
             Err(Error::new("cannot run"))
         }
@@ -1078,6 +1092,8 @@ WantedBy=default.target
                 System::Systemd,
                 fake(&[("systemctl", 1, "Failed to connect to bus: No medium found")]).0,
             ),
+            (System::Systemd, killed("activating\n")),
+            (System::Systemd, killed("inactive\n")),
         ]
     }
 
@@ -1087,6 +1103,24 @@ WantedBy=default.target
             let dir = tempfile::tempdir().unwrap();
             let manager = Manager::new(system, dir.path().to_owned(), 501, run);
             assert!(manager.active().is_err(), "{system:?}");
+        }
+    }
+
+    /// A query killed by a signal has not answered, whatever it printed
+    /// before it was killed: its output is not read as the unit's state.
+    #[test]
+    fn a_query_killed_after_it_printed_is_an_error() {
+        for state in ["activating\n", "inactive\n"] {
+            let dir = tempfile::tempdir().unwrap();
+            let run: Runner = Box::new(move |_, _| {
+                Ok(Ran {
+                    code: None,
+                    output: state.to_owned(),
+                })
+            });
+            let manager = Manager::new(System::Systemd, dir.path().to_owned(), 501, run);
+            let error = manager.active().unwrap_err().to_string();
+            assert!(error.contains("killed by a signal"), "{state:?}: {error}");
         }
     }
 
