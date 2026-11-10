@@ -1829,7 +1829,8 @@ fn open_wait_over_ssh_opens_waits_and_picks_up_on_the_far_side() {
     assert_eq!(line["state"], "pickedup");
     let shown = json(&f.far(&["show", &id, "--json"]));
     assert_eq!(shown["pickup"]["by"], "lead");
-    // Its locks are let go: a pickup wait on the worker starts at once.
-    let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "100ms"]);
+    // Its lock is let go: a pickup wait on the same id, which is refused
+    // while another holds it, starts at once.
+    let again = f.run(&["wait", "--pickup", "--id", &id, "--timeout", "100ms"]);
     assert_eq!(again.code, 2, "{again:?}");
 }
