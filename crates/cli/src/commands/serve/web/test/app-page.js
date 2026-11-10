@@ -328,9 +328,10 @@ if (!rendered.length) throw new Error("app.ts's start() drew nothing within 5 tu
 const App = rendered[0].vnode.type;
 export const first = { build: rendered[0].vnode.props.build, scrollRestoration: history.scrollRestoration, parent: rendered[0].parent, body: firstPage.document.body, requests: firstPage.requests };
 
-// App, mounted on a page loaded at `url` (see setUp), its clock at NOW and
-// its timers the test's to move. `extra(page)` runs before the mount, to
-// add what the page has beyond the plain one. Gives the page with:
+// App, mounted on a page loaded at `url` (see setUp), its clock at `now`
+// (NOW unless given) and its timers the test's to move. `extra(page)`
+// runs before the mount, to add what the page has beyond the plain one.
+// Gives the page with:
 // - tree, html: what App gave last, and that drawn
 // - settle(): lets what App started run, and draws again
 // - tick(ms): moves the clock
@@ -338,9 +339,9 @@ export const first = { build: rendered[0].vnode.props.build, scrollRestoration: 
 // - back(), forward(): the browser's buttons
 // - stream: the event stream open last
 // - find(type): the vnodes of a component in the tree
-export async function openApp({ build = BUILD, extra, ...options } = {}) {
+export async function openApp({ build = BUILD, extra, now = NOW, ...options } = {}) {
   mock.timers.reset();
-  mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: NOW });
+  mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now });
   const page = setUp(options);
   page.dialogs = { options: dialog(page, "options"), keys: dialog(page, "keys") };
   extra?.(page);
