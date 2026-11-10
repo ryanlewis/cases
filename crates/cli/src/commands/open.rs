@@ -117,8 +117,9 @@ pub(crate) struct Args {
 
     /// Then wait on the case, as `cases wait --id ID --since ID --pickup
     /// --by WORKER` does: the id is printed first, and the case's line once
-    /// it is your turn, picked up when answered. Exit 2 at --timeout.
-    #[arg(long)]
+    /// it is your turn, picked up when answered. Exit 2 at --timeout. Not
+    /// with --json.
+    #[arg(long, conflicts_with = "json")]
     wait: bool,
 
     /// With --wait: give up after this long, such as 30s or 10m, after the
@@ -205,6 +206,12 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         let key = ctx::exact(re)?;
         ctx.case(key)?;
         open.re = key.to_string();
+    }
+
+    // A wait that would fail on the config file fails before the case is
+    // opened, so that there is no case left with no wait on it.
+    if args.wait {
+        wait::chosen(None, ctx)?;
     }
 
     let writer = Writer::new(Some(&open.worker));

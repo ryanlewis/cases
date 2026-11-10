@@ -158,6 +158,19 @@ impl Mood {
     }
 }
 
+/// A wait's mood: `given` with `--mood`, else the config file's, else eager.
+///
+/// # Errors
+///
+/// When the config file's mood is not a mood.
+pub(crate) fn chosen(given: Option<Mood>, ctx: &Ctx) -> Result<Mood, Error> {
+    match (given, ctx.config.get("mood")) {
+        (Some(mood), _) => Ok(mood),
+        (None, Some(text)) => mood(text),
+        (None, None) => Ok(Mood::Eager),
+    }
+}
+
 /// The mood the config file gives as `text`.
 ///
 /// # Errors
@@ -400,11 +413,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         Some(text) => since(ctx, text)?,
         None => None,
     };
-    let mood = match (args.mood, ctx.config.get("mood")) {
-        (Some(mood), _) => mood,
-        (None, Some(text)) => mood(text)?,
-        (None, None) => Mood::Eager,
-    };
+    let mood = chosen(args.mood, ctx)?;
     // Held until wait has printed what it picked up. A store not there yet
     // gets no directory of locks either, as a wait makes nothing (ST-08), so
     // a pickup wait started before the store's first open takes none.

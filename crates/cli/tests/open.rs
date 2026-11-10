@@ -955,3 +955,34 @@ fn open_refuses_a_timeout_without_wait_and_writes_nothing() {
     assert!(out.stderr.contains("--wait"), "{out:?}");
     assert!(!env.store.exists());
 }
+
+/// `--json` prints a record over several lines, and the wait's lines are
+/// one each, so `--wait` refuses it: exit 1, and nothing written.
+#[test]
+fn open_refuses_json_with_wait_and_writes_nothing() {
+    let env = Env::new();
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--json", "--wait"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("--json"), "{out:?}");
+    assert!(!env.store.exists());
+}
+
+/// A config file whose mood the wait would refuse is refused before the
+/// case is opened: exit 1, and no case left with no wait on it.
+#[test]
+fn open_wait_refuses_a_bad_mood_before_it_opens_the_case() {
+    let env = Env::new();
+    env.config("mood = \"sleepy\"\n");
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--wait", "--timeout", "100ms"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("\"sleepy\""), "{out:?}");
+    assert!(!env.store.exists());
+}
