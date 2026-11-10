@@ -396,8 +396,15 @@ fn show_gives_the_url_of_the_running_inbox() {
             .contains(&format!("url:      {want}\n"))
     );
 
-    // Nothing accepts on the address once serve stops: the file is stale.
+    // Nothing accepts on the address once serve stops: the file is stale. It is
+    // rewritten at port 0, which takes no connection, ever: the listener's port,
+    // freed, could be taken by another test before show dials it.
     drop(listener);
+    let stale = serde_json::json!({
+        "pid": std::process::id(), "url": "http://127.0.0.1:0/", "addr": "127.0.0.1:0",
+        "store": env.store, "started_at": "2026-09-25T12:00:00Z", "version": "0.0.0",
+    });
+    write_file(&env.instance_file(), &stale.to_string());
     assert_eq!(url(), "");
 }
 
