@@ -3,7 +3,7 @@
 //! which only reads.
 
 use std::env;
-use std::io::Write;
+use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
@@ -323,41 +323,43 @@ fn status(args: &StatusArgs, ctx: &mut Ctx, manager: &Manager) -> Result<(), Err
         serde_json::to_writer_pretty(&mut *out, &report)?;
         writeln!(out)?;
     } else {
-        let yes = |value| if value { "yes" } else { "no" };
-        if report.installed {
-            writeln!(out, "Installed: {}", report.path)?;
-        } else {
-            writeln!(out, "Installed: no ({})", report.path)?;
-        }
-        if !report.args.is_empty() {
-            writeln!(out, "Runs:      {}", shell_join(&report.args))?;
-            writeln!(out, "Store:     {}", report.store)?;
-            writeln!(out, "Listen:    {}", report.listen)?;
-            if !report.allow_hosts.is_empty() {
-                writeln!(out, "Hosts:     {}", report.allow_hosts.join(", "))?;
-            }
-            if !report.tailscale_logins.is_empty() {
-                writeln!(out, "Logins:    {}", report.tailscale_logins.join(", "))?;
-            }
-        }
-        writeln!(
-            out,
-            "Loaded:    {} ({})",
-            yes(report.loaded),
-            manager.check()
-        )?;
-        match report.pid {
-            Some(pid) if report.running => writeln!(out, "Inbox:     {} (pid {pid})", report.url)?,
-            _ => writeln!(out, "Inbox:     not running")?,
-        }
-        for problem in &report.problems {
-            writeln!(out, "Problem:   {problem}")?;
-        }
+        write_text(out, &report, &manager.check())?;
     }
     if report.installed && report.loaded && report.running {
         return Ok(());
     }
     Err(Error::new(""))
+}
+
+/// `report` for people. `check` is the command that shows the service
+/// manager's view of the service.
+fn write_text(out: &mut impl Write, report: &Report, check: &str) -> io::Result<()> {
+    let yes = |value| if value { "yes" } else { "no" };
+    if report.installed {
+        writeln!(out, "Installed: {}", report.path)?;
+    } else {
+        writeln!(out, "Installed: no ({})", report.path)?;
+    }
+    if !report.args.is_empty() {
+        writeln!(out, "Runs:      {}", shell_join(&report.args))?;
+        writeln!(out, "Store:     {}", report.store)?;
+        writeln!(out, "Listen:    {}", report.listen)?;
+        if !report.allow_hosts.is_empty() {
+            writeln!(out, "Hosts:     {}", report.allow_hosts.join(", "))?;
+        }
+        if !report.tailscale_logins.is_empty() {
+            writeln!(out, "Logins:    {}", report.tailscale_logins.join(", "))?;
+        }
+    }
+    writeln!(out, "Loaded:    {} ({check})", yes(report.loaded))?;
+    match report.pid {
+        Some(pid) if report.running => writeln!(out, "Inbox:     {} (pid {pid})", report.url)?,
+        _ => writeln!(out, "Inbox:     not running")?,
+    }
+    for problem in &report.problems {
+        writeln!(out, "Problem:   {problem}")?;
+    }
+    Ok(())
 }
 
 /// What the service manager, the service's file and the instance file say.
@@ -380,46 +382,7 @@ fn report(ctx: &Ctx, manager: &Manager) -> Result<Report, Error> {
     if report.installed {
         match manager.args() {
             Err(error) => report.problems.push(error.to_string()),
-            Ok(args) => {
-                flag_value(&args, "--store")
-                    .unwrap_or_default()
-                    .clone_into(&mut report.store);
-                flag_value(&args, "--listen")
-                    .unwrap_or_default()
-                    .clone_into(&mut report.listen);
-                // The hosts the service's serve answers through a proxy, from
-                // the config file it reads.
-                if let Some(path) = flag_value(&args, "--config") {
-                    let config = config::load(Some(path));
-                    if let Some(error) = config.error {
-                        report.problems.push(error.to_string());
-                    } else {
-                        report.allow_hosts = config.list("allow-hosts").to_vec();
-                        report.tailscale_logins = config.list("tailscale-logins").to_vec();
-                    }
-                }
-                if let Ok(exe) = executable()
-                    && !same_file(Path::new(&args[0]), &exe)
-                {
-                    report.problems.push(format!(
-                        "installed for another binary: {} (this is {})",
-                        args[0],
-                        exe.display()
-                    ));
-                }
-                // The same store by another path is still this one, as install
-                // takes it.
-                if !store.is_empty()
-                    && instance::resolve(Path::new(&report.store))
-                        != instance::resolve(Path::new(&store))
-                {
-                    report.problems.push(format!(
-                        "installed for another store: {} (this command uses {store})",
-                        report.store
-                    ));
-                }
-                report.args = args;
-            }
+            Ok(args) => read_installed(&mut report, args, &store),
         }
     }
     let running = if report.store.is_empty() {
@@ -436,27 +399,88 @@ fn report(ctx: &Ctx, manager: &Manager) -> Result<Report, Error> {
         Ok(None) => {}
         Err(error) => report.problems.push(error.to_string()),
     }
-    let system = manager.system.name();
-    let problem = match (report.installed, report.loaded, report.running) {
+    report.problems.extend(problem(
+        report.installed,
+        report.loaded,
+        report.running,
+        manager.system,
+        &manager.check(),
+        report.pid,
+    ));
+    Ok(report)
+}
+
+/// What the installed service's `args` say into `report`: its store and
+/// address, the hosts its config file allows, and whether it is for
+/// another binary, or for another store than this command's `store`
+/// (empty for a store with no file here).
+fn read_installed(report: &mut Report, args: Vec<String>, store: &str) {
+    flag_value(&args, "--store")
+        .unwrap_or_default()
+        .clone_into(&mut report.store);
+    flag_value(&args, "--listen")
+        .unwrap_or_default()
+        .clone_into(&mut report.listen);
+    // The hosts the service's serve answers through a proxy, from the
+    // config file it reads.
+    if let Some(path) = flag_value(&args, "--config") {
+        let config = config::load(Some(path));
+        if let Some(error) = config.error {
+            report.problems.push(error.to_string());
+        } else {
+            report.allow_hosts = config.list("allow-hosts").to_vec();
+            report.tailscale_logins = config.list("tailscale-logins").to_vec();
+        }
+    }
+    if let Ok(exe) = executable()
+        && !same_file(Path::new(&args[0]), &exe)
+    {
+        report.problems.push(format!(
+            "installed for another binary: {} (this is {})",
+            args[0],
+            exe.display()
+        ));
+    }
+    // The same store by another path is still this one, as install takes
+    // it.
+    if !store.is_empty()
+        && instance::resolve(Path::new(&report.store)) != instance::resolve(Path::new(store))
+    {
+        report.problems.push(format!(
+            "installed for another store: {} (this command uses {store})",
+            report.store
+        ));
+    }
+    report.args = args;
+}
+
+/// The problem with a service `installed` (its file is there), `loaded` in
+/// `system` and `running` (its inbox answers, as `pid`), if there is one.
+/// `check` is the command that shows the service manager's view.
+fn problem(
+    installed: bool,
+    loaded: bool,
+    running: bool,
+    system: System,
+    check: &str,
+    pid: Option<i32>,
+) -> Option<String> {
+    let system = system.name();
+    match (installed, loaded, running) {
         (true, false, _) => Some(format!(
             "installed but not loaded in {system}; cases service install loads it again"
         )),
         (false, true, _) => Some(format!(
             "loaded in {system} but its file is missing; cases service uninstall stops it"
         )),
-        (true, true, false) => Some(format!(
-            "loaded but the inbox does not answer; see {}",
-            manager.check()
-        )),
+        (true, true, false) => Some(format!("loaded but the inbox does not answer; see {check}")),
         (false, false, true) => Some(format!(
             "not installed, but a cases serve started by hand is running (pid {}); stop it \
              before cases service install",
-            report.pid.unwrap_or_default()
+            pid.unwrap_or_default()
         )),
         _ => None,
-    };
-    report.problems.extend(problem);
-    Ok(report)
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +493,46 @@ mod tests {
         assert_eq!(
             shell_join(&args),
             r"/bin/cases --as 'Ryan Lewis' '' 'it'\''s'"
+        );
+    }
+
+    /// Every combination of installed, loaded and running, row by row: the
+    /// four that disagree name their problem and what to do; the others
+    /// have none.
+    #[test]
+    fn problem_names_each_disagreement_and_what_to_do() {
+        let check = "systemctl --user status cases-serve.service";
+        let not_loaded =
+            "installed but not loaded in systemd; cases service install loads it again";
+        let file_gone =
+            "loaded in systemd but its file is missing; cases service uninstall stops it";
+        let not_answering = format!("loaded but the inbox does not answer; see {check}");
+        let by_hand = "not installed, but a cases serve started by hand is running (pid 42); \
+                       stop it before cases service install";
+        let rows: [(bool, bool, bool, Option<&str>); 8] = [
+            (false, false, false, None),
+            (false, false, true, Some(by_hand)),
+            (false, true, false, Some(file_gone)),
+            (false, true, true, Some(file_gone)),
+            (true, false, false, Some(not_loaded)),
+            (true, false, true, Some(not_loaded)),
+            (true, true, false, Some(&not_answering)),
+            (true, true, true, None),
+        ];
+        for (installed, loaded, running, want) in rows {
+            assert_eq!(
+                problem(installed, loaded, running, System::Systemd, check, Some(42)).as_deref(),
+                want,
+                "{installed} {loaded} {running}"
+            );
+        }
+        assert_eq!(
+            problem(true, false, false, System::Launchd, check, None).as_deref(),
+            Some("installed but not loaded in launchd; cases service install loads it again")
+        );
+        assert_eq!(
+            problem(false, true, false, System::Launchd, check, None).as_deref(),
+            Some("loaded in launchd but its file is missing; cases service uninstall stops it")
         );
     }
 
