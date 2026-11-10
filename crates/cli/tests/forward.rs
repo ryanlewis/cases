@@ -221,7 +221,10 @@ fn a_case_goes_round_over_ssh() {
     let runs = f.ssh_runs();
     assert!(!runs.is_empty());
     for run in &runs {
-        assert_eq!(run, "-T -o BatchMode=yes -- devbox cases dial-stdio");
+        assert_eq!(
+            run,
+            "-T -o BatchMode=yes -o ConnectTimeout=10 -- devbox cases dial-stdio"
+        );
     }
 }
 
@@ -447,7 +450,7 @@ fn a_user_and_a_port_go_to_ssh() {
     f.ok(&["list"]);
     assert_eq!(
         f.ssh_runs(),
-        ["-T -o BatchMode=yes -p 2222 -- ryan@devbox cases dial-stdio"]
+        ["-T -o BatchMode=yes -o ConnectTimeout=10 -p 2222 -- ryan@devbox cases dial-stdio"]
     );
 }
 
