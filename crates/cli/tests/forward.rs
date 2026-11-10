@@ -1205,6 +1205,64 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
     );
 }
 
+/// A pickup wait that ends lets go of its locks on a far side out of its
+/// reach at once, though their lease there is long: it releases them
+/// before its connection ends. The end alone would keep them until the
+/// lease ran out, as the wait said it lets them go itself, and the relayed
+/// `dial-stdio` is not killed with the connection, as a far side on another
+/// machine is not, so that does not let them go either.
+#[test]
+fn a_pickup_wait_that_ends_releases_its_locks_on_a_far_side_out_of_reach() {
+    let f = leasing(60_000);
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let first = picking_up(&f);
+    let (lock, holder) = taken(&f, "worker-lead-");
+    // The far side holding them is the relayed one, which the ssh stand-in
+    // starts, not the wait itself as it does with no relay. It is killed if
+    // the test fails, as nothing else would.
+    let far: u32 = holder.split_whitespace().next().unwrap().parse().unwrap();
+    let parent = common::output(
+        std::process::Command::new("ps")
+            .args(["-o", "ppid=", "-p", &far.to_string()])
+            .stdout(Stdio::piped()),
+    );
+    let parent = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
+    assert!(
+        !parent.is_empty() && parent != first.id().to_string(),
+        "the locks are not on the relayed connection: {parent:?}"
+    );
+    let _far = Kill(far);
+    signal("TERM", first.id());
+    let waited = first.wait_with_output().unwrap();
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&waited.status),
+        Some(15),
+        "{waited:?}"
+    );
+    // Read off the lock, as a second wait is started some time before it
+    // takes it.
+    let ended = Instant::now();
+    while kept(&lock, &holder) {
+        assert!(
+            ended.elapsed() < Duration::from_secs(5),
+            "not let go at once"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Kills the process with this pid when dropped, as a test that fails
+/// might leave it.
+struct Kill(u32);
+
+impl Drop for Kill {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &self.0.to_string()])
+            .status();
+    }
+}
+
 /// The far side's lock file whose name starts with `prefix`, and the line
 /// its holder's take wrote in it, once all of it is there: a take writes
 /// it in parts.
