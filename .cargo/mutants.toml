@@ -52,4 +52,7 @@ exclude_re = [
     # trait carries the method (the dial route and `cases serve` answer it
     # from the local store, which their own tests check).
     'replace <impl Store for Forwarded>::listeners .* with Ok\(vec!\[\]\)',
+    # Equivalent: a report has a pid only when its inbox runs, as both are
+    # set together from the instance file.
+    'replace match guard report.running with true in write_text',
 ]

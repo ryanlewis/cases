@@ -30,7 +30,9 @@ const STATUS = {
 
 // Closes `dialog` on a click on its backdrop: a press and release on the
 // dialog itself, whose form fills it, so that a drag that starts inside the
-// form and ends outside does not close it. Escape and the close button
+// form and ends outside, or outside and ends inside, does not close it. The
+// click alone cannot tell: the browser sends it to the nearest element both
+// the press and the release were in, the dialog. Escape and the close button
 // (a method=dialog form) close it by themselves. Whether a press started on
 // the backdrop is kept with the dialog, not the handlers, so that a redraw
 // between the press and the click, which gives new ones, does not lose it.
@@ -40,6 +42,10 @@ function backdrop() {
     onPointerDown: (e: PointerEvent) => {
       if (e.target === e.currentTarget) pressed.add(e.currentTarget!);
       else pressed.delete(e.currentTarget!);
+    },
+    // Released off the backdrop, it is not a click on it.
+    onPointerUp: (e: PointerEvent) => {
+      if (e.target !== e.currentTarget) pressed.delete(e.currentTarget!);
     },
     // A press the browser cancels (a touch that turns into a scroll) gives
     // no click, and is not one.
