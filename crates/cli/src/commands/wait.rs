@@ -1907,4 +1907,38 @@ mod tests {
         listening.beat(&db, &mut warned);
         assert_eq!(doing_of(&db, "ada"), None);
     }
+
+    /// A `--full` wait names actors from the store's table: none from a
+    /// store not there, as one removed while the wait runs is, and every
+    /// actor the table has, by id, from one that is.
+    #[test]
+    fn the_actors_of_a_store_not_there_are_none_and_of_one_there_are_its_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let ctx = |db| Ctx {
+            store: db,
+            target: crate::store::Target::Local { path: path.clone() },
+            config: crate::config::Config::default(),
+            store_flag: None,
+            out: std::io::stdout().lock(),
+        };
+        let clock = Arc::new(AtomicI64::new(100));
+        let none = actors_of(&ctx(clocked(&path, &clock))).unwrap();
+        assert!(none.ids.is_empty());
+        assert!(!path.exists());
+
+        let db = clocked(&path, &clock);
+        make(&db);
+        let known = actors_of(&ctx(db)).unwrap();
+        let actor = |id: &str| {
+            let mut actor = Actor::default();
+            id.clone_into(&mut actor.id);
+            actor
+        };
+        assert_eq!(known.ids.len(), 1);
+        let agent = actor(known.ids.iter().next().unwrap());
+        assert!(known.has(Some(&agent)));
+        assert!(known.has(None));
+        assert!(!known.has(Some(&actor("gone"))));
+    }
 }
