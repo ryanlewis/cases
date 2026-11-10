@@ -303,8 +303,9 @@ function backdropOf(tree) {
   };
   const inside = {};
   const press = (target) => tree.props.onPointerDown({ target, currentTarget: el });
+  const lift = (target) => tree.props.onPointerUp?.({ target, currentTarget: el });
   const click = (target) => tree.props.onClick({ target, currentTarget: el });
-  return { el, inside, press, click };
+  return { el, inside, press, lift, click };
 }
 
 for (const [name, draw] of [
@@ -326,9 +327,34 @@ for (const [name, draw] of [
     d.click(d.el);
     assert.equal(d.el.closed, 1);
     // Pressed on the backdrop, released inside: stays, and the press is
-    // used up.
+    // used up. The browser sends the click to the dialog, the nearest
+    // element both the press and the release were in.
     d.press(d.el);
-    d.click(d.inside);
+    d.lift(d.inside);
+    d.click(d.el);
+    d.click(d.el);
+    assert.equal(d.el.closed, 1);
+  });
+
+  test(`the ${name} dialog stays open on a press on its backdrop released inside its form, as a browser sends it`, () => {
+    browser("granted");
+    const d = backdropOf(draw());
+    // Pressed on the backdrop, released on a field in the form: the click
+    // goes to the dialog, which both are in. Stays.
+    d.press(d.el);
+    d.lift(d.inside);
+    d.click(d.el);
+    assert.equal(d.el.closed, 0);
+    // Pressed and released on the backdrop, every event as a browser sends
+    // it: closes.
+    d.press(d.el);
+    d.lift(d.el);
+    d.click(d.el);
+    assert.equal(d.el.closed, 1);
+    // Pressed inside, released on the backdrop: the click goes to the
+    // dialog. Stays.
+    d.press(d.inside);
+    d.lift(d.el);
     d.click(d.el);
     assert.equal(d.el.closed, 1);
   });
