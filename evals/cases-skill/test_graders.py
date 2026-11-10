@@ -130,6 +130,15 @@ class Graders(unittest.TestCase):
                      "status_beside_first_open", "opens_as_expected"):
             self.assertEqual(g[rule], "pass", rule)
 
+    def test_cost_counts_only_calls_that_are_all_bookkeeping(self):
+        b = good()
+        b.bash("cat > q.md <<'EOF'\ncases open --kind fyi, as before\nEOF\n"
+               "cases close UkLWZ --revision 3 --outcome-file q.md", out="UkLWZ closed")
+        c = graders.grade(b.write(self.root), TASK)["cost"]
+        # The open with its wait is the ask; reading the wait's output and the close
+        # whose body file mentions an open are extra; the sed with its close is work.
+        self.assertEqual((c["ask_calls"], c["extra_calls"]), (1, 2))
+
     def test_a_close_without_revision_fails(self):
         b = good()
         b.command("cases close", 'cases close UkLWZ --outcome "x"')

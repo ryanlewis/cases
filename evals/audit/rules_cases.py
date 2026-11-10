@@ -139,8 +139,8 @@ def _cost_of(u):
 
 def cost(session):
     """Per session: decisions (cases opened, plus messages taken), the API calls
-    that made only cases calls (an open is the ask; the rest are extra), and
-    what those cases-only calls cost."""
+    that made only cases bookkeeping (`Transcript.call_classes`: an open is the
+    ask; the rest are extra), and what those cases-only calls cost."""
     t = session.t
     opens = sum(s == "open" for tool in t.tools for s in tool.subs)
     messages = sum(len(re.findall(r'"kind":\s*"message"', tool.text())) for tool in t.tools if "wait" in tool.subs)
