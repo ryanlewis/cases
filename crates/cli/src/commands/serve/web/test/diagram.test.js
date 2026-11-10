@@ -358,3 +358,48 @@ test("a diagram that fails to draw again keeps the one it had, with no line", as
   assert.equal(error(el), undefined);
   el.remove();
 });
+
+test("a diagram whose redraw failed is drawn again on the next change, in the new colours", async (t) => {
+  t.after(() => {
+    look.vars = { "--bg": " #0d0f14 ", "--fg": "#eceef4", "--prose": "serif" };
+  });
+  let colour = "old";
+  mermaid.svg = () => `<svg><text>${colour}</text></svg>`;
+  const el = fence("flowchart LR");
+  draw(document.body);
+  await settle();
+  mermaid.svg = () => {
+    throw new Error("a redraw that failed");
+  };
+  observers[0].callback();
+  await settle();
+  assert.equal(drawnSvg(el).textContent, "old");
+  colour = "new";
+  mermaid.svg = () => `<svg><text>${colour}</text></svg>`;
+  look.vars = { "--bg": "#000", "--bg-1": "#654321" };
+  const configs = mermaid.configs.length;
+  observers[0].callback();
+  await settle();
+  assert.equal(drawnSvg(el).textContent, "new");
+  assert.equal(mermaid.configs[configs]?.themeVariables.primaryColor, "#654321");
+  assert.equal(error(el), undefined);
+  el.remove();
+});
+
+test("text that does not parse is not tried again, on a draw or a change", async () => {
+  mermaid.svg = () => {
+    throw new Error("Parse error on line 1:\nExpecting 'AMP', got 'EOF'");
+  };
+  const el = fence("flowchart LR\n  A -->");
+  draw(document.body);
+  await settle();
+  const renders = mermaid.renders.length;
+  mermaid.svg = () => "<svg><text>A</text></svg>";
+  draw(document.body);
+  observers[0].callback();
+  await settle();
+  assert.equal(mermaid.renders.length, renders);
+  assert.equal(el.querySelectorAll(".diagram-error").length, 1);
+  assert.equal(el.shadowRoot, null);
+  el.remove();
+});
