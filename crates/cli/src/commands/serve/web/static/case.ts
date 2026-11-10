@@ -60,11 +60,35 @@ function old(at: Time | undefined, now: number): string {
   return a === "now" ? "now" : `${a} ago`;
 }
 
+// `parse`, remembered by what it is given: the case view is drawn again on
+// every keystroke in its form and every event of the store, and its texts
+// change only when the case does. The arguments are the key, so they must
+// hold all the HTML depends on that can change while the page is open: the
+// text, and the wrap option, which every code block, a script's or one in
+// markdown, draws on its button (code.js). The page's origin, for links,
+// does not change. The last `size` held are kept.
+function remembered<A extends unknown[]>(parse: (...args: A) => string, size = 128): (...args: A) => string {
+  const held = new Map<string, string>();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    let html = held.get(key);
+    if (html === undefined) html = parse(...args);
+    else held.delete(key);
+    held.set(key, html);
+    if (held.size > size) held.delete(held.keys().next().value!);
+    return html;
+  };
+}
+const markdownOf = remembered((text: string | undefined, _wrap: boolean) => markdown(text));
+// Inline markdown has no code blocks, so no wrap option.
+const inlineMarkdownOf = remembered(inlineMarkdown);
+const scriptOf = remembered((text: string, wrap: boolean) => codeBlock(text, isDiff(text), wrap));
+
 // Markdown, with any diagram in it drawn once it is in the page
 // (diagram.js).
 function Markdown({ text, class: classes = "body" }: { text: string | undefined; class?: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const body = markdown(text);
+  const body = markdownOf(text, wrapped());
   useEffect(() => {
     if (ref.current) draw(ref.current);
   }, [body]);
@@ -73,7 +97,7 @@ function Markdown({ text, class: classes = "body" }: { text: string | undefined;
 
 // A row's script as a code block (code.js), drawn as a diff when it is one.
 function Script({ text }: { text: string }) {
-  return html`<div class="code" dangerouslySetInnerHTML=${{ __html: codeBlock(text, isDiff(text), wrapped()) }} />`;
+  return html`<div class="code" dangerouslySetInnerHTML=${{ __html: scriptOf(text, wrapped()) }} />`;
 }
 
 // A link of the case's or a row's: an address the page may link to
@@ -707,7 +731,7 @@ function approvalRow({ f, preselect, setIn }: Form, row: ApprovalRow): Component
   const words = verdictWords(row);
   return html`<fieldset class="row" key=${row.id} data-preset=${preset || undefined} data-by=${row.by || undefined}>
   <legend class="row-title">${row.label}${human && html` <span class="badge by-human" title="a step you carry out">you</span>`}</legend>
-  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdown(row.note) }} />`}
+  ${row.note && html`<p class="context row-note" dangerouslySetInnerHTML=${{ __html: inlineMarkdownOf(row.note) }} />`}
   <p><${Link} href=${row.link || ""} /></p>
   <${Script} text=${row.script || ""} />
   <div class="verdicts">
