@@ -356,7 +356,7 @@ test("a second submit while the first send is out sends nothing", async (t) => {
   await third.done;
 });
 
-test("a send out for more than 10 s lets the next go, and its late answer lets a third go while the second is out", async (t) => {
+test("a send out for more than 10 s lets the next go, and its late answer does not let a third go while the second is out", async (t) => {
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
   const { posts, answer } = serve(t);
@@ -371,19 +371,21 @@ test("a send out for more than 10 s lets the next go, and its late answer lets a
   const b = r.submit();
   await settle();
   assert.equal(posts.length, 2, "after 10 s the guard lets a second withdraw go");
-  // The first answers while the second is out. Pinned as it is today: its
-  // release frees the guard the second holds, so a third is sent while the
-  // second is still out (the case view's sendOnce does not; reported). Each
-  // carries the same revision, so serve records at most one.
+  // The first answers while the second is out: the guard is the second's,
+  // and only the second lets it go.
   answer(0, 409, { error: { category: "transition", message: "no" } });
   await a.done;
+  const between = r.submit();
+  await settle();
+  assert.equal(posts.length, 2, "nothing is sent while the second is out");
+  await between.done;
+  answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
   const c = r.submit();
   await settle();
-  assert.equal(posts.length, 3);
+  assert.equal(posts.length, 3, "once the second is answered, the next is sent");
   assert.deepEqual(posts.map((p) => p.body.revision), [answered.revision, answered.revision, answered.revision]);
-  answer(1, 409, { error: { category: "transition", message: "no" } });
   answer(2, 409, { error: { category: "transition", message: "no" } });
-  await b.done;
   await c.done;
 });
 
@@ -474,5 +476,75 @@ test("a send answered at once frees the guard for good: its 10 s does not free t
   await settle();
   assert.equal(posts.length, 2, "the first's timer is gone with its answer");
   answer(1, 409, { error: { category: "transition", message: "no" } });
+  await b.done;
+});
+
+test("the late answer of a send that another went after does not undo what the newer send's answer said", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  assert.equal(posts.length, 2);
+  // The second is refused as stale, with the case picked up: the line takes it.
+  answer(1, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await b.done;
+  r.draw();
+  const said = r.refusal();
+  // Then the first comes back, refused as stale with the case as it was.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), said, "the refusal is the newer send's");
+  const c = r.submit();
+  await settle();
+  assert.equal(posts[2].body.revision, pickedUp.revision, "the next goes at the case the newer refusal showed");
+  answer(2, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await c.done;
+});
+
+test("the late success of a send that another went after is still passed to the page, as it landed", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  mock.timers.tick(10000);
+  const b = r.submit();
+  await settle();
+  answer(0, 200, { ...answered, state: "withdrawn", revision: answered.revision + 1 });
+  await a.done;
+  assert.deepEqual(r.sent, [["withdraw", answered.revision + 1]]);
+  answer(1, 409, { error: { category: "transition", message: "the case is withdrawn" } });
+  await b.done;
+  assert.equal(posts.length, 2);
+});
+
+test("the answer of a send from before the line was kept and opened again says nothing in the new line", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const a = r.submit();
+  await settle();
+  r.keep();
+  r.bring(pickedUp);
+  r.press();
+  // The first send comes back stale, with the case as it was: the line,
+  // opened on the case picked up, is the human's new one.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await a.done;
+  r.draw();
+  assert.equal(r.refusal(), "");
+  const b = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
   await b.done;
 });
