@@ -13,6 +13,7 @@
 mod common;
 
 use std::fs;
+use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -106,10 +107,50 @@ impl Service {
 
     /// Installs the service on a free address, which it gives.
     fn install(&self) -> String {
-        let addr = free_addr();
-        let out = self.run(&["install", "--listen", &addr]);
+        let (addr, out) = self.install_free(&[]);
         assert_eq!(out.code, 0, "{out:?}");
         addr
+    }
+
+    /// `cases service install --listen <a free address>` and then `args`:
+    /// the address and what install gave. Another test can take a port
+    /// picked free before install checks it, which install then refuses,
+    /// so a refusal of the address alone is tried again on another, with
+    /// the calls of the refused tries forgotten.
+    fn install_free(&self, args: &[&str]) -> (String, common::Output) {
+        for _ in 0..TRIES {
+            let addr = free_addr();
+            let mut all = vec!["install", "--listen", &addr];
+            all.extend(args);
+            let out = self.run(&all);
+            if !taken(&out, &addr) {
+                return (addr, out);
+            }
+            self.calls();
+        }
+        panic!("no address stayed free in {TRIES} tries");
+    }
+
+    /// Installs the service on a free address, as [`Service::install`]
+    /// does, and fakes the service's serve on it: the address and the
+    /// serve, as [`Env::fake_serve`] gives it. Another test can take the
+    /// port between install's check and the serve's, so install is done
+    /// again on another address until the serve has it.
+    fn serving(&self) -> (String, (TcpListener, String)) {
+        for _ in 0..TRIES {
+            let addr = self.install();
+            match common::try_listen(&addr) {
+                Ok(listener) => {
+                    let serve = self.env.fake_serve_with(&self.env.store, listener);
+                    return (addr, serve);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    self.calls();
+                }
+                Err(error) => panic!("{addr}: {error}"),
+            }
+        }
+        panic!("no address stayed free in {TRIES} tries");
     }
 
     /// `cases service`, which must only have asked, and whether it exited 0.
@@ -142,8 +183,17 @@ fn uid(env: &Env) -> u32 {
     fs::metadata(env.path("bin")).unwrap().uid()
 }
 
-/// A loopback address nothing listens on, since install refuses one that is
-/// taken.
+/// How many free addresses a test tries before it gives up.
+const TRIES: usize = 20;
+
+/// Whether install refused `addr` because something holds it.
+fn taken(out: &common::Output, addr: &str) -> bool {
+    out.code == 1 && out.stderr.contains(&format!("{addr} is already in use"))
+}
+
+/// A loopback address nothing listened on just now, since install refuses
+/// one that is taken. Another test can take it before it is used: see
+/// [`Service::install_free`].
 fn free_addr() -> String {
     let listener = common::listen("127.0.0.1:0");
     listener.local_addr().unwrap().to_string()
@@ -173,8 +223,7 @@ fn assert_lines(out: &str, want: &[&str]) {
 fn install_writes_the_service_and_starts_it() {
     let service = Service::new();
     let env = &service.env;
-    let addr = free_addr();
-    let out = service.run(&["install", "--listen", &addr, "--as", "Ryan Lewis"]);
+    let (addr, out) = service.install_free(&["--as", "Ryan Lewis"]);
     assert_eq!(out.code, 0, "{out:?}");
     let file = service.file();
     let body = fs::read_to_string(&file).unwrap();
@@ -280,30 +329,36 @@ fn install_writes_the_service_and_starts_it() {
 #[test]
 fn install_takes_the_address_and_name_from_the_config_file() {
     let service = Service::new();
-    let addr = free_addr();
-    service
-        .env
-        .config(&format!("listen = \"{addr}\"\nname = \"From File\"\n"));
-    let out = service.run(&["install"]);
+    // The address is in the file, so a try whose address was taken writes
+    // the file again with another.
+    let (addr, out) = (0..TRIES)
+        .map(|_| {
+            let addr = free_addr();
+            service
+                .env
+                .config(&format!("listen = \"{addr}\"\nname = \"From File\"\n"));
+            let out = service.run(&["install"]);
+            if taken(&out, &addr) {
+                service.calls();
+            }
+            (addr, out)
+        })
+        .find(|(addr, out)| !taken(out, addr))
+        .expect("an address that stayed free");
     assert_eq!(out.code, 0, "{out:?}");
     let body = fs::read_to_string(service.file()).unwrap();
     assert!(body.contains(&addr), "{body}");
     assert!(body.contains("From File"), "{body}");
 
     // A flag beats the file.
-    let flag = free_addr();
-    assert_eq!(
-        service
-            .run(&["install", "--listen", &flag, "--as", "Flag"])
-            .code,
-        0
-    );
+    let (flag, out) = service.install_free(&["--as", "Flag"]);
+    assert_eq!(out.code, 0, "{out:?}");
     let body = fs::read_to_string(service.file()).unwrap();
     assert!(body.contains(&flag) && body.contains("Flag") && !body.contains("From File"));
 
     // Without either, no name is recorded.
     fs::remove_file(service.env.path("config").join("cases/config.toml")).unwrap();
-    assert_eq!(service.run(&["install", "--listen", &free_addr()]).code, 0);
+    assert_eq!(service.install_free(&[]).1.code, 0);
     assert!(!fs::read_to_string(service.file()).unwrap().contains("--as"));
 }
 
@@ -457,8 +512,7 @@ fn install_refuses_an_address_that_is_taken() {
 #[test]
 fn reinstall_while_the_service_runs() {
     let service = Service::new();
-    let addr = service.install();
-    let (_listener, _) = service.env.fake_serve(&addr);
+    let (addr, (_listener, _)) = service.serving();
     service.active(true);
     let out = service.run(&["install", "--listen", &addr]);
     assert_eq!(out.code, 0, "{out:?}");
@@ -470,8 +524,7 @@ fn reinstall_while_the_service_runs() {
 #[test]
 fn reinstall_checks_what_changed() {
     let mut service = Service::new();
-    let addr = service.install();
-    let (_listener, _) = service.env.fake_serve(&addr);
+    let (addr, (_listener, _)) = service.serving();
     service.active(true);
 
     let held = common::listen("127.0.0.1:0");
@@ -529,9 +582,8 @@ fn service_status_names_a_serve_started_by_hand() {
 #[test]
 fn service_status_when_installed_loaded_and_answering() {
     let service = Service::new();
-    let addr = service.install();
+    let (addr, (_listener, url)) = service.serving();
     service.active(true);
-    let (_listener, url) = service.env.fake_serve(&addr);
     let store = store(&service.env);
     for args in [&[][..], &["status"]] {
         let (out, ok) = service.status(args);
@@ -596,9 +648,8 @@ fn service_status_shows_the_hosts_its_config_file_allows() {
 #[test]
 fn service_status_reads_a_file_in_the_old_format() {
     let service = Service::new();
-    let addr = service.install();
+    let (addr, (_listener, url)) = service.serving();
     service.active(true);
-    let (_listener, url) = service.env.fake_serve(&addr);
     let body = fs::read_to_string(service.file()).unwrap();
     let old = if LAUNCHD {
         let start = body.find("<key>KeepAlive</key>").unwrap();
@@ -646,7 +697,7 @@ fn a_reinstall_moves_an_old_plist_to_serve_s_own_log() {
         return;
     }
     let service = Service::new();
-    let addr = service.install();
+    let (addr, (_listener, url)) = service.serving();
     let log = service
         .env
         .path("state/cases/serve.log")
@@ -661,7 +712,6 @@ fn a_reinstall_moves_an_old_plist_to_serve_s_own_log() {
     );
     fs::write(service.file(), &old).unwrap();
     service.active(true);
-    let (_listener, url) = service.env.fake_serve(&addr);
     let (out, ok) = service.status(&[]);
     assert!(ok, "{out}");
     assert_lines(
@@ -733,10 +783,9 @@ fn service_status_when_loaded_with_its_file_gone() {
 #[test]
 fn service_status_names_another_store_and_another_binary() {
     let mut service = Service::new();
-    let addr = service.install();
-    service.active(true);
     // The service's own store is the one checked for a running inbox.
-    let (_listener, _) = service.env.fake_serve(&addr);
+    let (_, (_listener, _)) = service.serving();
+    service.active(true);
     let own = store(&service.env);
     service.env.store = service.env.path("other.db");
     let other = store(&service.env);
@@ -764,8 +813,7 @@ fn service_status_names_another_store_and_another_binary() {
 #[test]
 fn a_store_named_through_a_parent_is_the_same_store() {
     let mut service = Service::new();
-    let addr = service.install();
-    let (_listener, _) = service.env.fake_serve(&addr);
+    let (addr, (_listener, _)) = service.serving();
     service.active(true);
     service.env.store = service.env.path("sub/../cases.db");
     let (out, ok) = service.status(&[]);
@@ -785,8 +833,7 @@ fn a_reinstall_through_a_symlink_is_the_same_store() {
     let link = service.env.path("link");
     std::os::unix::fs::symlink(real.parent().unwrap(), &link).unwrap();
     service.env.store = link.join(real.file_name().unwrap());
-    let addr = service.install();
-    let (_listener, _) = service.env.fake_serve(&addr);
+    let (addr, (_listener, _)) = service.serving();
     service.active(true);
     service.env.store = real;
     let (out, ok) = service.status(&[]);

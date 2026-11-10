@@ -10,6 +10,7 @@ import { CaseView, response } from "../static/case.ts";
 import { List, counts, icon, listed, parts, split, tally } from "../static/lists.ts";
 import { under } from "../static/routes.ts";
 import { answered, thread } from "../static/thread.ts";
+import { fields } from "./case.js";
 
 const now = Date.parse("2026-10-31T12:00:00Z");
 const at = (minutes) => new Date(now - minutes * 60000).toISOString();
@@ -110,8 +111,6 @@ test("a briefing's card says whether it landed and how much it left out", () => 
   assert.equal(ask(briefing("l1", "open", "today", 1, { landed: true, left_out: ["a", "b"] }), null), "landed · 2 left out");
 });
 
-// A form's fields, with `extra` set.
-const fields = (extra) => ({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "", ...extra });
 const doc = briefing("g1", "open", "blocking", 1, { left_out: ["the docs", "a bench", "the TUI"] });
 
 test("the form sends accept, with the ticked items to file in order, and a note when one is written", () => {

@@ -321,9 +321,9 @@ fn a_second_serve_on_the_same_store_is_refused() {
 /// counts as no serve, and a new serve replaces it.
 #[test]
 fn a_stale_record_is_replaced() {
-    let closed = common::listen("127.0.0.1:0");
-    let closed_addr = closed.local_addr().unwrap().to_string();
-    drop(closed);
+    // Port 0 takes no connection, ever: a port freed for the test could be
+    // taken by another before serve dials it.
+    let closed_addr = "127.0.0.1:0";
     let mut gone = common::spawn(&mut std::process::Command::new("true"));
     gone.wait().unwrap();
     for pid in [gone.id(), std::process::id()] {

@@ -46,8 +46,7 @@ fn remote_url(args: &Args, ctx: &mut Ctx, server: &Server) -> Result<String, Err
     let Some(id) = &args.id else {
         return Ok(store::inbox_url(server));
     };
-    let key = ctx.find_case(id)?;
-    let case = ctx.case(key)?;
+    let (key, case) = ctx.find(id)?;
     Ok(hosted_case_url(ctx, key, &case).unwrap_or_else(|| store::inbox_url(server)))
 }
 
@@ -71,8 +70,7 @@ fn local_url(args: &Args, ctx: &mut Ctx, path: &Path) -> Result<String, Error> {
 
 /// The case's page name: its id and title.
 fn case_page(ctx: &mut Ctx, id: &str) -> Result<String, Error> {
-    let key = ctx.find_case(id)?;
-    let case = ctx.case(key)?;
+    let (key, case) = ctx.find(id)?;
     Ok(output::titled(key, case.title()))
 }
 
