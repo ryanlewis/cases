@@ -46,6 +46,10 @@ Tally: 431 criteria, 362 covered, 62 by hand, 5 gap, 0 question, 2 n/a.
 - The line has `state: "pickedup"`, the answer, and the revision after pickup that `close --revision` takes: `crates/cli/tests/wait.rs::wait_pickup_picks_up_the_answer`, `the_recipe_catches_an_answer_that_lands_before_the_wait_starts`
 - One `agent pickup` event with `by`, as the worker's actor: `crates/cli/tests/wait.rs::wait_pickup_picks_up_the_answer`, `a_pickup_that_makes_its_actor_names_it`
 - A later wait never prints that case again, unless the human withdraws it (AG-04): `crates/cli/tests/wait.rs::the_recipe_catches_an_answer_that_lands_before_the_wait_starts`, `a_human_withdraw_of_a_case_an_agent_has_wakes_wait_once`
+- `open --wait` prints the id first, flushed, then does what `wait --id <id> --since <id> --pickup --by <worker>` does: the same lines, stderr and exit; with no worker, it picks up by no name: `crates/cli/tests/open.rs::open_wait_prints_the_id_then_what_the_chained_wait_prints`, `open_wait_with_no_worker_picks_up_by_no_name`
+- `open --wait --timeout D` gives up after D as `wait` does, exit 2, with the id on stdout and the case left open: `crates/cli/tests/open.rs::open_wait_that_times_out_leaves_the_id_on_stdout_and_exits_2`
+- `--timeout` without `--wait` is refused, exit 1, nothing written: `crates/cli/tests/open.rs::open_refuses_a_timeout_without_wait_and_writes_nothing`
+- On a forwarded store, `open --wait` opens and picks up on the far side, and lets its locks there go: `crates/cli/tests/forward.rs::open_wait_over_ssh_opens_waits_and_picks_up_on_the_far_side`
 
 ## AG-04 Wait for a human event (change)
 

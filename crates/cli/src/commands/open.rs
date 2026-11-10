@@ -3,13 +3,16 @@
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use cases_core::{Append, ApprovalRow, Author, Kind, Open, Record, Store, Urgency};
 use cases_store_sqlite::Writer;
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use serde::Deserialize;
 
+use crate::commands::wait;
 use crate::ctx::{self, Ctx};
+use crate::duration;
 use crate::error::Error;
 use crate::output::{self, Written};
 use crate::text;
@@ -111,6 +114,17 @@ pub(crate) struct Args {
     /// Print the id, state and revision as JSON.
     #[arg(short, long)]
     json: bool,
+
+    /// Then wait on the case, as `cases wait --id ID --since ID --pickup
+    /// --by WORKER` does: the id is printed first, and the case's line once
+    /// it is your turn, picked up when answered. Exit 2 at --timeout.
+    #[arg(long)]
+    wait: bool,
+
+    /// With --wait: give up after this long, such as 30s or 10m, after the
+    /// id: one line on stderr, exit 2. 0 waits for ever.
+    #[arg(long, value_name = "DURATION", value_parser = duration::parse, requires = "wait")]
+    timeout: Option<Duration>,
 }
 
 /// The value of the environment variable `var`, unless it is unset, empty
@@ -199,11 +213,19 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     warn_options(&args.options, 1);
     ctx::warn_unwoken(ctx, &case, true);
     if args.json {
-        output::json(&mut ctx.out, &Written::new(key, &case))
+        output::json(&mut ctx.out, &Written::new(key, &case))?;
     } else {
         writeln!(ctx.out, "{key}")?;
-        Ok(())
     }
+    if !args.wait {
+        return Ok(());
+    }
+    // The id is out before the wait begins, so that one killed while it
+    // waits still leaves it.
+    ctx.out.flush()?;
+    let by = Some(case.worker().to_owned()).filter(|worker| !worker.is_empty());
+    let timeout = args.timeout.unwrap_or_default();
+    wait::run(&wait::Args::opened(key.to_string(), by, timeout), ctx)
 }
 
 /// Warns on stderr, without refusing, of each option in `options`, the
