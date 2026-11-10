@@ -1186,11 +1186,8 @@ fn a_stop_waits_for_the_briefing_pass_under_way() {
     let lock = rusqlite::Connection::open(&env.store).unwrap();
     lock.execute_batch("BEGIN IMMEDIATE").unwrap();
     let serve = env.serve(&[]);
-    // serve is up, and its first pass begins on the timer's next tick: a stop
-    // that came first could skip it. This route reads no case: a read of the
-    // store would queue behind the pass, and come back once it had given up.
-    assert_eq!(serve.get("/v1").status, 200);
-    std::thread::sleep(Duration::from_millis(200));
+    // A stop that came before the pass began could skip it.
+    store_held(&serve.addr);
     let pid = i32::try_from(serve.pid()).unwrap();
     serve.raise(Signal::TERM);
     assert!(
@@ -1206,6 +1203,39 @@ fn a_stop_waits_for_the_briefing_pass_under_way() {
         "{out:?}"
     );
     assert_eq!(env.case(&id).state(), cases_core::State::Closed);
+}
+
+/// Waits until a write by serve at `addr` is held on the store's lock: a
+/// read of the store then queues behind it, and takes no answer. Reads made
+/// before the write begins are answered, and made again.
+fn store_held(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut stream = common::serve::connect(addr);
+        stream
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /v1/cases HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut text = Vec::new();
+        match std::io::Read::read_to_end(&mut stream, &mut text) {
+            Err(error)
+                if text.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return;
+            }
+            read => assert!(read.is_ok(), "{read:?}"),
+        }
+        assert!(Instant::now() < deadline, "no write held the store");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// With briefing-close-after off, serve leaves the briefings alone; with a
