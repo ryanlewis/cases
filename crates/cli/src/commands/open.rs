@@ -123,7 +123,8 @@ pub(crate) struct Args {
     wait: bool,
 
     /// With --wait: give up after this long, such as 30s or 10m, after the
-    /// id: one line on stderr, exit 2. 0 waits for ever.
+    /// id: one line on stderr, exit 2. If the store could not be read at the
+    /// last try before then, exit 1 with why instead. 0 waits for ever.
     #[arg(long, value_name = "DURATION", value_parser = duration::parse, requires = "wait")]
     timeout: Option<Duration>,
 }

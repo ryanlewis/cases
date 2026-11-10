@@ -47,7 +47,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--re ID` names the case this one is about, by its whole id, such as a message from the human that left you with a question. The inbox shows the link both ways. An id not in the store is refused.
 - Your events record you as their `actor`: one actor per worker name, or one unnamed agent when you give no worker. An answer records the human's actor too; it changes nothing about what the answer means.
 - Prints the new case id. `--json` prints its `id`, `state` and `revision` instead.
-- `--wait` then waits on the case, as `cases wait --id ID --since ID --pickup --by WORKER` does, with your `--worker` (or no name, without one): the id comes first, flushed, and the case's line follows once it is your turn, picked up when answered. `--timeout D` gives up after D with exit 2, the id already printed; it needs `--wait`. `--wait` refuses `--json`, and a config file whose `mood` the wait would refuse, before it opens the case.
+- `--wait` then waits on the case, as `cases wait --id ID --since ID --pickup --by WORKER` does, with your `--worker` (or no name, without one): the id comes first, flushed, and the case's line follows once it is your turn, picked up when answered. `--timeout D` gives up after D with exit 2, the id already printed, or exit 1 with why if the store could not be read at the last try; it needs `--wait`. `--wait` refuses `--json`, and a config file whose `mood` the wait would refuse, before it opens the case.
 
 ## amend — change a case, or reopen it
 
