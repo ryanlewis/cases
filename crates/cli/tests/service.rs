@@ -24,13 +24,14 @@ const LAUNCHD: bool = cfg!(target_os = "macos");
 
 /// The stand-in service manager. It records each command in `calls`. With
 /// `down` there, every command fails as when the service manager cannot be
-/// reached. With `active` there, every command succeeds; without it,
+/// reached, saying so on stderr as the real ones do. With `active` there,
+/// every command succeeds; without it,
 /// `launchctl print` and `systemctl is-active` answer as for a service that
 /// is not there.
 const FAKE: &str = r#"#!/bin/sh
 dir=${0%/*}
 echo "${0##*/} $*" >> "$dir/calls"
-if [ -e "$dir/down" ]; then echo "Failed to connect to the service manager"; exit 1; fi
+if [ -e "$dir/down" ]; then echo "Failed to connect to the service manager" >&2; exit 1; fi
 if [ -e "$dir/active" ]; then exit 0; fi
 case "${0##*/} $1 $2" in
   "launchctl print "*) echo "Could not find service"; exit 113;;
@@ -573,8 +574,12 @@ fn service_status_names_a_serve_started_by_hand() {
     assert_lines(
         &out,
         &[
-            &format!("Inbox:     {url} (pid {})", std::process::id()),
-            "Problem:   not installed, but a cases serve started by hand is running",
+            &format!("Inbox:     {url} (pid {})\n", std::process::id()),
+            &format!(
+                "Problem:   not installed, but a cases serve started by hand is running (pid \
+                 {}); stop it before cases service install\n",
+                std::process::id()
+            ),
         ],
     );
 }
@@ -624,7 +629,8 @@ fn service_status_when_installed_loaded_and_answering() {
 fn service_status_shows_the_hosts_its_config_file_allows() {
     let service = Service::new();
     let path = service.env.config(
-        "allow-hosts = [\"devbox.example.ts.net:7337\"]\ntailscale-logins = [\"ryan@github\"]\n",
+        "allow-hosts = [\"devbox.example.ts.net:7337\", \"cases.example.com\"]\n\
+         tailscale-logins = [\"ryan@github\", \"sam@github\"]\n",
     );
     let addr = service.install();
     let (out, _) = service.status(&[]);
@@ -633,14 +639,20 @@ fn service_status_shows_the_hosts_its_config_file_allows() {
         &[
             &format!("--config {}", path.display()),
             &format!("Listen:    {addr}\n"),
-            "Hosts:     devbox.example.ts.net:7337\n",
-            "Logins:    ryan@github\n",
+            "Hosts:     devbox.example.ts.net:7337, cases.example.com\n",
+            "Logins:    ryan@github, sam@github\n",
         ],
     );
     let (out, _) = service.status(&["--json"]);
     let got = json(&out);
-    assert_eq!(got["allow_hosts"][0], "devbox.example.ts.net:7337");
-    assert_eq!(got["tailscale_logins"][0], "ryan@github");
+    assert_eq!(
+        got["allow_hosts"],
+        serde_json::json!(["devbox.example.ts.net:7337", "cases.example.com"])
+    );
+    assert_eq!(
+        got["tailscale_logins"],
+        serde_json::json!(["ryan@github", "sam@github"])
+    );
 }
 
 /// A service file written before the service went quiet without its
@@ -736,10 +748,16 @@ fn service_status_when_installed_but_not_loaded() {
         &out,
         &[
             "Loaded:    no",
-            &format!("Problem:   installed but not loaded in {system}"),
+            &format!(
+                "Problem:   installed but not loaded in {system}; cases service install loads \
+                 it again\n"
+            ),
         ],
     );
-    let got = json(&service.status(&["--json"]).0);
+    // --json exits as the text does.
+    let (out, ok) = service.status(&["--json"]);
+    assert!(!ok, "{out}");
+    let got = json(&out);
     assert_eq!(got["loaded"], false);
     assert_eq!(got["problems"].as_array().unwrap().len(), 1);
 }
@@ -774,8 +792,11 @@ fn service_status_when_loaded_with_its_file_gone() {
         &out,
         &[
             "Installed: no",
-            "Problem:   loaded in",
-            "but its file is missing",
+            &format!(
+                "Problem:   loaded in {} but its file is missing; cases service uninstall stops \
+                 it\n",
+                if LAUNCHD { "launchd" } else { "systemd" }
+            ),
         ],
     );
 }
@@ -841,4 +862,237 @@ fn a_reinstall_through_a_symlink_is_the_same_store() {
     assert!(!out.contains("Problem"), "{out}");
     let out = service.run(&["install", "--listen", &addr]);
     assert_eq!(out.code, 0, "{out:?}");
+}
+
+/// A serve answering for the store does not make a service that is not
+/// loaded a working one: status exits 1.
+#[test]
+fn service_status_when_installed_but_not_loaded_with_a_serve_answering() {
+    let service = Service::new();
+    let (_, (_listener, url)) = service.serving();
+    let (out, ok) = service.status(&[]);
+    assert!(!ok, "{out}");
+    assert_lines(
+        &out,
+        &[
+            "Loaded:    no",
+            &format!("Inbox:     {url}"),
+            "Problem:   installed but not loaded in",
+        ],
+    );
+}
+
+/// A service file that names no program is a problem status shows, not
+/// an error that hides the rest.
+#[test]
+fn service_status_names_a_service_file_it_cannot_read() {
+    let service = Service::new();
+    service.install();
+    // An empty plist, and a unit with an empty ExecStart, both name none.
+    let body = if LAUNCHD {
+        ""
+    } else {
+        "[Service]\nExecStart=\n"
+    };
+    fs::write(service.file(), body).unwrap();
+    let (out, ok) = service.status(&[]);
+    assert!(!ok, "{out}");
+    assert_lines(
+        &out,
+        &[
+            &format!("Installed: {}\n", service.file().display()),
+            &format!(
+                "Problem:   read {}: it names no program\n",
+                service.file().display()
+            ),
+            "Inbox:     not running\n",
+        ],
+    );
+    assert!(!out.contains("Runs:"), "{out}");
+}
+
+/// A config file the service's serve cannot read is a problem status
+/// shows. The service is installed with a file
+/// of its own, so that status itself reads the default one.
+#[test]
+fn service_status_names_a_config_file_it_cannot_read() {
+    let mut service = Service::new();
+    let path = service.env.path("service.toml");
+    write_file(&path, "allow-hosts = [\"cases.example.com\"]\n");
+    service.env.set("CASES_CONFIG", path.to_str().unwrap());
+    service.install();
+    service.env.unset("CASES_CONFIG");
+    fs::write(&path, "allow-hosts = [\n").unwrap();
+    let (out, _) = service.status(&[]);
+    assert_lines(
+        &out,
+        &[
+            &format!("--config {}", path.display()),
+            &format!("Problem:   config file {}: ", path.display()),
+        ],
+    );
+}
+
+/// An instance file that cannot be read is a problem status shows, and
+/// the inbox is not taken for running.
+#[test]
+fn service_status_names_an_instance_file_it_cannot_read() {
+    let service = Service::new();
+    service.install();
+    service.active(true);
+    let file = service.env.instance_file_of(&service.env.store);
+    write_file(&file, "not json");
+    let (out, ok) = service.status(&[]);
+    assert!(!ok, "{out}");
+    assert_lines(
+        &out,
+        &[
+            "Inbox:     not running\n",
+            &format!("Problem:   read {}: ", file.display()),
+            "Problem:   loaded but the inbox does not answer",
+        ],
+    );
+}
+
+/// On a forwarded store, which has no file here, status is about the
+/// installed service and its store, which it does not take for another.
+#[test]
+fn service_status_on_a_forwarded_store_is_about_the_installed_service() {
+    let mut service = Service::new();
+    let (addr, (_listener, url)) = service.serving();
+    service.active(true);
+    let own = store(&service.env);
+    service.env.set("CASES_FORWARD", "ssh://devbox");
+    // An ssh that records its runs as the stand-in does.
+    common::copy(&service.bin.join("systemctl"), &service.bin.join("ssh"));
+    service.calls();
+    let out = service.env.run(["service"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_lines(
+        &out.stdout,
+        &[
+            &format!("Store:     {own}\n"),
+            &format!("Listen:    {addr}\n"),
+            &format!("Inbox:     {url}"),
+        ],
+    );
+    assert!(!out.stdout.contains("Problem"), "{out:?}");
+    // Nothing but the service manager's queries ran: no ssh.
+    for call in service.calls() {
+        assert!(
+            call.starts_with("launchctl print ") || call.starts_with("systemctl --user is-active "),
+            "{call}"
+        );
+    }
+
+    // With none installed there is no store to look for an inbox on.
+    fs::remove_file(service.file()).unwrap();
+    service.active(false);
+    let out = service.env.run(["service"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("Inbox:     not running\n"), "{out:?}");
+    assert!(!out.stdout.contains("Problem"), "{out:?}");
+    for call in service.calls() {
+        assert!(
+            call.starts_with("launchctl print ") || call.starts_with("systemctl --user is-active "),
+            "{call}"
+        );
+    }
+}
+
+/// systemd's user directory is under `$XDG_CONFIG_HOME`, or `~/.config`
+/// when that is unset or empty.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_unit_is_under_home_without_xdg_config_home() {
+    let mut service = Service::new();
+    let unit = service
+        .env
+        .path("home")
+        .join(".config/systemd/user/cases-serve.service");
+    for xdg in [None, Some("")] {
+        match xdg {
+            None => service.env.unset("XDG_CONFIG_HOME"),
+            Some(xdg) => service.env.set("XDG_CONFIG_HOME", xdg),
+        }
+        let (out, _) = service.status(&[]);
+        assert_lines(&out, &[&format!("Installed: no ({})\n", unit.display())]);
+    }
+}
+
+/// With neither `$XDG_CONFIG_HOME` nor `$HOME`, or both empty, there is no
+/// systemd user directory: every command says so and touches nothing. The
+/// config file is named, so that cases finds it without either.
+#[test]
+#[cfg(target_os = "linux")]
+fn without_xdg_config_home_or_home_there_is_no_unit_directory() {
+    let mut service = Service::new();
+    let config = service.env.path("config.toml");
+    write_file(&config, "");
+    service.env.set("CASES_CONFIG", config.to_str().unwrap());
+    for value in [None, Some("")] {
+        for var in ["XDG_CONFIG_HOME", "HOME"] {
+            match value {
+                None => service.env.unset(var),
+                Some(value) => service.env.set(var, value),
+            }
+        }
+        // Status, which only reads, goes first: a regression that found a
+        // home elsewhere fails there, before install could write in it.
+        for args in [&[][..], &["uninstall"], &["install"]] {
+            let out = service.run(args);
+            assert_eq!(out.code, 1, "{args:?}: {out:?}");
+            assert!(
+                out.stderr.contains(
+                    "cannot find the systemd user directory: neither $XDG_CONFIG_HOME nor $HOME \
+                     is set"
+                ),
+                "{args:?}: {out:?}"
+            );
+        }
+    }
+    assert!(service.calls().is_empty());
+    assert!(!service.env.path(".config").exists());
+    assert!(!service.env.path("systemd").exists());
+}
+
+impl Service {
+    /// Puts `script` on `$PATH` as `launchctl` and `systemctl`, in place of
+    /// the stand-in, copied while no process starts so that running it does
+    /// not fail as busy.
+    fn replace_manager(&self, script: &str) {
+        let source = self.env.path("manager.sh");
+        write_file(&source, script);
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        for name in ["launchctl", "systemctl"] {
+            common::copy(&source, &self.bin.join(name));
+        }
+    }
+}
+
+/// A service manager program that cannot be started is named in the error.
+#[test]
+fn a_service_manager_that_cannot_be_started_is_named() {
+    let service = Service::new();
+    service.replace_manager("#!/nowhere/sh\n");
+    let program = service
+        .bin
+        .join(if LAUNCHD { "launchctl" } else { "systemctl" });
+    let out = service.run(&[]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr.contains(&format!("{}: ", program.display())),
+        "{out:?}"
+    );
+}
+
+/// A query killed by a signal is an error, not a service that is there.
+#[test]
+fn a_query_killed_by_a_signal_is_an_error() {
+    let service = Service::new();
+    service.replace_manager("#!/bin/sh\nkill -KILL $$\n");
+    let out = service.run(&[]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("killed by a signal"), "{out:?}");
+    assert!(!out.stdout.contains("Loaded:"), "{out:?}");
 }
