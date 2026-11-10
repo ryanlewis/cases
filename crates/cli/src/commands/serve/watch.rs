@@ -255,17 +255,15 @@ impl Reader<'_> {
 }
 
 /// Whether `was`, a case of the last snapshot, is `case` as the poller has
-/// it now, by what changes with every row: a case's rows are only added to,
-/// so one with as many rows, the same highest seq and as many events, the
-/// same open time and the same last event, has the same events. Another
-/// store put at the path, such as a copy amended apart, differs in its last
-/// event, its open time or its counts.
+/// it now. The counts and the last event tell most changed cases at once;
+/// the rest are compared whole, since another store put at the path can
+/// hold a case with the same counts and last row and another history.
+/// Comparing reads each event once and copies nothing.
 fn same(was: &Case, case: &Case) -> bool {
     was.revision() == case.revision()
         && was.last_seq() == case.last_seq()
-        && was.opened_at() == case.opened_at()
-        && was.events().len() == case.events().len()
         && was.events().last() == case.events().last()
+        && was == case
 }
 
 /// Queues a notification for each case in `landed`, with the case as
@@ -447,6 +445,55 @@ mod tests {
         ));
         assert!(!last.cases.iter().any(|(key, _)| *key == keys[0]));
         assert_eq!(shared(&last, added).title(), "Heads up");
+    }
+
+    /// A copy of the store put at its path whose case went apart and then
+    /// took the very same last row, at the very same time, as the case serve
+    /// read: the case has the same counts, open time and last event, and
+    /// another history. The next read shows the copy's case, not the one
+    /// the snapshot before held.
+    #[test]
+    fn a_copy_whose_case_went_apart_and_ends_alike_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let copy = dir.path().join("copy.db");
+        let db = Db::new(&path).with_clock(at("2026-11-01T09:00:00Z"));
+        let key = question(&db, "original");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+            .unwrap();
+        let note = Append {
+            author: "agent".into(),
+            event: "note".into(),
+            data: r#"{"body":"Same last word."}"#.into(),
+        };
+        // Apart, then alike, at the same time; and the store serve reads
+        // has a case more, so that the copy is behind it and is read whole.
+        let other = Db::new(&copy).with_clock(at("2026-11-01T09:05:00Z"));
+        amend(&other, key, "branch B");
+        let other = other.with_clock(at("2026-11-01T09:10:00Z"));
+        other.append(&key, &note, &Writer::new(None), None).unwrap();
+        drop(other);
+        let db = db.with_clock(at("2026-11-01T09:04:00Z"));
+        amend(&db, key, "branch A");
+        let db = db.with_clock(at("2026-11-01T09:10:00Z"));
+        db.append(&key, &note, &Writer::new(None), None).unwrap();
+        fyi(&db);
+
+        let (_db, watch) = watch_db(db);
+        let before = watch.read().unwrap();
+        assert_eq!(body(&before)[0], (key, 3, "branch A".into()));
+        for suffix in ["", "-wal", "-shm"] {
+            let from = dir.path().join(format!("cases.db{suffix}"));
+            if from.exists() {
+                std::fs::rename(&from, dir.path().join(format!("aside.db{suffix}"))).unwrap();
+            }
+        }
+        std::fs::rename(&copy, &path).unwrap();
+        let after = watch.read().unwrap();
+        assert_ne!(after.version, before.version);
+        assert_eq!(body(&after), [(key, 3, "branch B".into())]);
     }
 
     /// A read that finds the store as it was gives the snapshot it has, and
