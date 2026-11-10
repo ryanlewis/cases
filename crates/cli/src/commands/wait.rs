@@ -524,9 +524,9 @@ impl First {
 ///
 /// On a remote store, no request or retry goes past the timeout. After a
 /// first read, a server that cannot be reached, or answers 429, 502, 503 or
-/// 504, is waited out until the timeout and said once on stderr; a first
-/// read that fails fails the wait at once, so a wrong store is not waited
-/// on.
+/// 504, is waited out until the timeout, or the end of a lingering wait's
+/// collecting, and said once on stderr; a first read that fails fails the
+/// wait at once, so a wrong store is not waited on.
 ///
 /// A pickup wait on a forwarded store checks its locks there, `far`, before
 /// each read and each message it takes, and holds no poll and pauses no
@@ -571,7 +571,14 @@ fn wait(
         if let Some(error) = lapsed(far) {
             return stop(taken, error);
         }
-        let cases = match asked.read(&mut poller, &none, first.is_some(), &mut offline) {
+        let read = asked.read(
+            &mut poller,
+            &none,
+            first.is_some(),
+            collecting.as_ref(),
+            &mut offline,
+        );
+        let cases = match read {
             Ok(Some(cases)) => cases,
             Ok(None) => continue,
             Err(error) => return failed(error, collecting.is_some(), collected, taken),
@@ -643,17 +650,19 @@ impl Asked<'_> {
     /// The store as `poller`'s next read finds it: `none`, no cases, when
     /// it is not there yet (ST-08), or nothing, for the wait to read again,
     /// when a read after the first, as `read_before` says this is, fails in
-    /// a way [`Offline`] rides out.
+    /// a way [`Offline`] rides out. A wait `collecting` rides it out no
+    /// longer than its linger, so that it gives what it has then (AG-18).
     ///
     /// # Errors
     ///
-    /// When the read fails for good, or the timeout passes while a failing
-    /// store is ridden out.
+    /// When the read fails for good, or the timeout, or the linger of a
+    /// wait collecting, passes while a failing store is ridden out.
     fn read<'p>(
         &self,
         poller: &'p mut Poller,
         none: &'p Cases,
         read_before: bool,
+        collecting: Option<&Collecting>,
         offline: &mut Offline,
     ) -> Result<Option<&'p Cases>, Error> {
         match poller.poll() {
@@ -664,7 +673,8 @@ impl Asked<'_> {
             // The store is not there yet: wait for it (ST-08).
             Err(error) if error.is_missing() => Ok(Some(none)),
             Err(error) if read_before && error.is_transient() => {
-                offline.pause(&error, self.deadline, self.args, self.far)?;
+                let until = until(self.deadline, self.mood, collecting);
+                offline.pause(&error, until, collecting.is_some(), self.args, self.far)?;
                 Ok(None)
             }
             Err(error) => Err(error.into()),
@@ -795,15 +805,18 @@ impl Asked<'_> {
         offline: &mut Offline,
     ) -> Result<(), Error> {
         let db = &self.ctx.store;
-        let until = match (collecting, self.mood.linger()) {
-            (Some(collecting), Some(linger)) => {
-                let until = collecting.until(linger);
-                Some(self.deadline.map_or(until, |deadline| deadline.min(until)))
-            }
-            _ => self.deadline,
-        };
+        let until = until(self.deadline, self.mood, collecting);
         if let (true, Some(version)) = (db.follows(), poller.version()) {
-            return match follow(db, &version, until, self.args, offline, self.far) {
+            let followed = follow(
+                db,
+                &version,
+                until,
+                collecting.is_some(),
+                self.args,
+                offline,
+                self.far,
+            );
+            return match followed {
                 // Its linger has ended: the next read gives the cases.
                 Err(error) if collecting.is_some() && error.status() == Status::Timeout => Ok(()),
                 result => result,
@@ -859,6 +872,23 @@ impl Found<'_> {
             .chain(self.withdrawn)
             .chain(taken.into_iter().filter(|turn| !keys.contains(&turn.key)))
             .collect()
+    }
+}
+
+/// When a wait in `mood` stops waiting on the store: once it is
+/// `collecting`, at the end of its linger or the `deadline`, whichever is
+/// first; before that, at the `deadline`, if there is one.
+fn until(
+    deadline: Option<Instant>,
+    mood: Mood,
+    collecting: Option<&Collecting>,
+) -> Option<Instant> {
+    match (collecting, mood.linger()) {
+        (Some(collecting), Some(linger)) => {
+            let until = collecting.until(linger);
+            Some(deadline.map_or(until, |deadline| deadline.min(until)))
+        }
+        _ => deadline,
     }
 }
 
@@ -930,9 +960,9 @@ fn timed_out(args: &Args) -> Error {
 /// Holds polls on a remote or forwarded store, each up to [`HOLD_MAX`] and never past the
 /// deadline, until its version is not `version`. A hold too short to make
 /// is slept, and the version asked for at once at its end. A failure the
-/// next try may not have is waited out, as [`Offline`] says. No hold goes
-/// past the time a pickup wait's locks on the far side, `far`, are held
-/// for.
+/// next try may not have is waited out, as [`Offline`] says, by a wait
+/// `collecting` or not. No hold goes past the time a pickup wait's locks on
+/// the far side, `far`, are held for.
 ///
 /// # Errors
 ///
@@ -943,6 +973,7 @@ fn follow(
     db: &AnyStore,
     version: &Version,
     deadline: Option<Instant>,
+    collecting: bool,
     args: &Args,
     offline: &mut Offline,
     far: Option<&FarLocks>,
@@ -968,7 +999,9 @@ fn follow(
                     return Ok(());
                 }
             }
-            Err(error) if error.is_transient() => offline.pause(&error, deadline, args, far)?,
+            Err(error) if error.is_transient() => {
+                offline.pause(&error, deadline, collecting, args, far)?;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -990,9 +1023,10 @@ impl Offline {
         self.pause = Duration::ZERO;
     }
 
-    /// Says `error` once in the wait and pauses before the next try, for
-    /// no longer than a pickup wait's locks on the far side, `far`, are
-    /// held for.
+    /// Says `error` once in the wait, and what ends the wait if the store
+    /// stays out of reach: the deadline, or the end of its collecting when
+    /// it is `collecting`. Then pauses before the next try, for no longer
+    /// than a pickup wait's locks on the far side, `far`, are held for.
     ///
     /// # Errors
     ///
@@ -1003,6 +1037,7 @@ impl Offline {
         &mut self,
         error: &Failure,
         deadline: Option<Instant>,
+        collecting: bool,
         args: &Args,
         far: Option<&FarLocks>,
     ) -> Result<(), Error> {
@@ -1016,7 +1051,9 @@ impl Offline {
         }
         if !self.said {
             self.said = true;
-            let until = if deadline.is_some() {
+            let until = if collecting {
+                " until it prints what it has"
+            } else if deadline.is_some() {
                 " until the timeout"
             } else {
                 ""
@@ -1494,6 +1531,36 @@ mod tests {
         let late = start + cap.saturating_sub(Duration::from_secs(1));
         collecting.saw([((Key::new(3).unwrap(), None), 1)], late);
         assert_eq!(collecting.until(linger), start + cap);
+    }
+
+    #[test]
+    fn a_wait_collecting_stops_at_its_linger_or_its_deadline_whichever_is_first() {
+        let start = Instant::now();
+        let mut collecting = Collecting::new(start);
+        collecting.saw([((Key::new(1).unwrap(), None), 1)], start);
+        let end = collecting.until(Mood::Steady.linger().unwrap());
+        let (soon, late) = (
+            start + Duration::from_secs(1),
+            start + Duration::from_secs(3600),
+        );
+        // Before it collects, only the deadline stops it.
+        assert_eq!(until(None, Mood::Steady, None), None);
+        assert_eq!(until(Some(late), Mood::Steady, None), Some(late));
+        // Once it does, its linger stops it too.
+        assert_eq!(until(None, Mood::Steady, Some(&collecting)), Some(end));
+        assert_eq!(
+            until(Some(late), Mood::Steady, Some(&collecting)),
+            Some(end)
+        );
+        assert_eq!(
+            until(Some(soon), Mood::Steady, Some(&collecting)),
+            Some(soon)
+        );
+        // An eager wait never lingers.
+        assert_eq!(
+            until(Some(late), Mood::Eager, Some(&collecting)),
+            Some(late)
+        );
     }
 
     #[test]
