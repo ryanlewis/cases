@@ -12,6 +12,7 @@
 //! agent's role by the unnamed agent, so it wakes no wait, as the human's
 //! withdraw would, which tells a waiting agent its answer was taken back.
 
+use std::borrow::Borrow;
 use std::thread;
 use std::time::Duration;
 
@@ -51,10 +52,16 @@ pub(crate) fn close_after(config: &Config) -> Result<Option<Duration>, Error> {
 
 /// The briefings among `cases` that are picked up, and were picked up at
 /// least `after` before `now`, with the revision each was read at. A pickup
-/// with no time, or one dated after `now`, is not old.
-pub(crate) fn stale(cases: &[(Key, Case)], after: Duration, now: Time) -> Vec<(Key, u64)> {
+/// with no time, or one dated after `now`, is not old. A case is held as it
+/// is, or shared, as serve's snapshot holds it.
+pub(crate) fn stale<C: Borrow<Case>>(
+    cases: &[(Key, C)],
+    after: Duration,
+    now: Time,
+) -> Vec<(Key, u64)> {
     cases
         .iter()
+        .map(|(key, case)| (key, case.borrow()))
         .filter(|(_, case)| case.kind() == Kind::Briefing && case.state() == State::PickedUp)
         .filter(|(_, case)| {
             case.pickup()
