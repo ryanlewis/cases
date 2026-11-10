@@ -165,7 +165,7 @@ function recorded(t, route, csrf = "tok") {
   const requests = [];
   globalThis.fetch = async (url, init) => {
     requests.push([url, init]);
-    if (url === "/v1") return new Response(JSON.stringify({ csrf, build: "b" }), { status: 200 });
+    if (url === "/v1") return new Response(JSON.stringify({ csrf, version: "0.0.0+aa" }), { status: 200 });
     return route(url, init);
   };
   return requests;
@@ -175,7 +175,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 
 test("each read asks for its route under /v1, and never from the cache", async (t) => {
   const requests = recorded(t, (url) => (url.startsWith("/v1/cases?") ? json({ list: [] }) : json({ list: [], id: "a/b" })));
-  assert.deepEqual(await api.index(), { csrf: "tok", build: "b" });
+  assert.deepEqual(await api.index(), { csrf: "tok", version: "0.0.0+aa" });
   await api.list(["open", "parked"]);
   await api.one("a/b");
   await api.notifications(null);
@@ -234,10 +234,14 @@ test("a write refused for an old token is sent again with the token read again, 
   let token = "old";
   const sentWith = [];
   let reply;
+  let reads = 0;
   const was = globalThis.fetch;
   t.after(() => { globalThis.fetch = was; });
   globalThis.fetch = async (url, init) => {
-    if (url === "/v1") return json({ csrf: token, build: "b" });
+    if (url === "/v1") {
+      reads += 1;
+      return json({ csrf: token, version: "0.0.0+aa" });
+    }
     sentWith.push(init.headers["X-Cases-CSRF"]);
     return reply(sentWith.length);
   };
@@ -246,14 +250,16 @@ test("a write refused for an old token is sent again with the token read again, 
   reply = (n) => (n === 1 ? json({ error: { category: "csrf", message: "bad token" } }, 403) : json(mine));
   assert.deepEqual((await api.send("abc", "answer", { revision: 2 })).after, mine);
   assert.deepEqual(sentWith, ["old", "new"]);
+  assert.equal(reads, 2);
   // A 403 for any other reason, or a csrf refusal of another status, is
-  // not sent again.
+  // not sent again, and the token is not read again for it.
   sentWith.length = 0;
-  reply = () => json({ error: { category: "forbidden", message: "not yours" } }, 403);
-  assert.equal((await api.send("abc", "answer", { revision: 2 })).refusal, "not yours");
+  reply = () => json({ error: { category: "request", message: "a write from another site" } }, 403);
+  assert.equal((await api.send("abc", "answer", { revision: 2 })).refusal, "a write from another site");
   reply = () => json({ error: { category: "csrf", message: "odd" } }, 400);
   assert.equal((await api.send("abc", "answer", { revision: 2 })).refusal, "odd");
   assert.deepEqual(sentWith, ["new", "new"]);
+  assert.equal(reads, 2);
 });
 
 test("a send refused as stale says so plainly; any other refusal says what serve said, or its status", async (t) => {

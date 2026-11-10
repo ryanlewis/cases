@@ -34,14 +34,20 @@ test("a message whose first token read serve refuses says it was not sent, and i
 });
 
 test("the index serve refuses throws with its status, and gives no token", async (t) => {
-  serve(t, () => new Response(JSON.stringify({ csrf: "refused", build: "b" }), { status: 500 }));
+  const calls = serve(t, (url) => {
+    if (url === "/v1") return new Response(JSON.stringify({ csrf: "refused", version: "0.0.0+aa" }), { status: 500 });
+    throw new Error("a write sent with no token");
+  });
   await assert.rejects(api.index(), { message: "GET /v1: 500" });
+  // With no token, the next write reads it first, and goes no further.
+  await api.send("abc", "answer", { revision: 2 });
+  assert.deepEqual(calls, ["GET /v1", "GET /v1"]);
 });
 
 test("a first write reads the token, sends it, and keeps it for the next", async (t) => {
   const tokens = [];
   const calls = serve(t, (url, init) => {
-    if (url === "/v1") return new Response(JSON.stringify({ csrf: "first", build: "b" }), { status: 200 });
+    if (url === "/v1") return new Response(JSON.stringify({ csrf: "first", version: "0.0.0+aa" }), { status: 200 });
     tokens.push(init.headers["X-Cases-CSRF"]);
     return new Response(JSON.stringify({ id: "abc", revision: 3 }), { status: 200 });
   });
