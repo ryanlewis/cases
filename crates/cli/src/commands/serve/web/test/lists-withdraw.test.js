@@ -278,30 +278,31 @@ test("a stale refusal whose case is in the state the row was drawn in says the s
   await second.done;
 });
 
-test("a stale refusal of a case older than one the stream brought while the send was out puts the line back on the older one", async (t) => {
+test("a stale refusal of a case older than one the stream brought while the send was out keeps the line on the newer one", async (t) => {
   const { posts, answer } = serve(t);
+  // Picked up, then a label added: the stream brings that while the send
+  // is out, and the line follows it.
+  const amend = { seq: 4, author: "agent", event: "amend", from: "pickedup", file: "", data: { labels: ["gifts"] } };
+  const labelled = decision("pickedup", steps.open, steps.answer, steps.pickup, amend);
   const r = row(answered);
   r.press();
   const first = r.submit();
   await settle();
-  // The stream brings the case picked up while the send is out.
-  r.bring(pickedUp);
+  r.bring(labelled);
   assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
-  // The refusal shows the case as it was before the pickup: late.
-  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  // Refused as stale, with the case as serve read it: picked up, before
+  // the label, older than the one the stream brought.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
   await first.done;
   r.draw();
-  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  // The line keeps the case the stream brought, and says how it moved on.
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
   const second = r.submit();
   await settle();
-  // Pinned as it is today, and reported: submit compares the refusal's case
-  // with the case of the draw it was sent from, not the newer one the
-  // stream brought while it was out, so the line goes back to the older
-  // revision, and the next send is refused as stale once more. Nothing is
-  // recorded that the human did not see.
-  assert.equal(posts[1].body.revision, answered.revision);
-  answer(1, 409, { error: { category: "stale", message: "stale" } });
+  assert.equal(posts[1].body.revision, labelled.revision, "sent at the newer case");
+  answer(1, 200, { ...labelled, state: "withdrawn", revision: labelled.revision + 1 });
   await second.done;
+  assert.deepEqual(r.sent, [["withdraw", labelled.revision + 1]]);
 });
 
 test("serve out of reach says the outcome is not known, and the line stays open", async (t) => {
@@ -547,4 +548,101 @@ test("the answer of a send from before the line was kept and opened again says n
   assert.equal(posts[1].body.revision, pickedUp.revision);
   answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
   await b.done;
+});
+
+test("a stale refusal does not move the line past a case the stream brought that changed more than it can say", async (t) => {
+  const { posts, answer } = serve(t);
+  const note = { ...steps.note, data: { body: "Follow-up", reopen: true } };
+  const again = { ...steps.answer, seq: 5, from: "open" };
+  // Reopened by the agent's note, then answered again: the line drawn at
+  // answered keeps its mark, so that a withdraw is refused as stale.
+  const reopened = decision("open", steps.open, steps.answer, steps.pickup, note);
+  const answeredAgain = decision("answered", steps.open, steps.answer, steps.pickup, note, again);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  r.bring(answeredAgain);
+  // Refused as stale, with the case reopened, before the second answer.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: reopened } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, reopened.revision, "at the case the refusal showed, not past the one the stream brought");
+  answer(1, 409, { error: { category: "stale", message: "stale", case: answeredAgain } });
+  await second.done;
+});
+
+test("a stale refusal showing the very case the stream brought while the send was out keeps the line, and says how it moved on", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  const first = r.submit();
+  await settle();
+  r.bring(pickedUp);
+  answer(0, 409, { error: { category: "stale", message: "stale", case: pickedUp } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case was picked up since you pressed withdraw. withdraw it if you still mean to.");
+  const second = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, pickedUp.revision);
+  answer(1, 200, { ...pickedUp, state: "withdrawn", revision: pickedUp.revision + 1 });
+  await second.done;
+});
+
+test("a line opened again forgets what the last one said: a stale refusal of an older case then says it is stale", async (t) => {
+  const { posts, answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  r.keep();
+  r.press();
+  const first = r.submit();
+  await settle();
+  assert.equal(posts[0].body.revision, pickedUp.revision);
+  answer(0, 409, { error: { category: "stale", message: "stale", case: answered } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.");
+});
+
+test("a refusal that is not stale, with the case the line holds, says its own reason", async (t) => {
+  const { answer } = serve(t);
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  const first = r.submit();
+  await settle();
+  answer(0, 409, { error: { category: "transition", message: "a picked-up case of this kind is not withdrawn", case: pickedUp } });
+  await first.done;
+  r.draw();
+  assert.equal(r.refusal(), "a picked-up case of this kind is not withdrawn");
+});
+
+test("a refusal that moves the line forgets what the line said before it", async (t) => {
+  const { posts, answer } = serve(t);
+  const reopened = decision("open", steps.open, steps.answer, steps.pickup, { ...steps.note, data: { body: "Follow-up", reopen: true } });
+  const noted = decision("open", steps.open, steps.answer, steps.pickup, { ...steps.note, data: { body: "Follow-up", reopen: true } }, { ...steps.note, seq: 5, from: "open", data: { body: "and the budget?" } });
+  const r = row(answered);
+  r.press();
+  r.bring(pickedUp);
+  const a = r.submit();
+  await settle();
+  // Refused as stale with the case reopened: the line moves to it.
+  answer(0, 409, { error: { category: "stale", message: "stale", case: reopened } });
+  await a.done;
+  r.draw();
+  const b = r.submit();
+  await settle();
+  assert.equal(posts[1].body.revision, reopened.revision);
+  // A note while it is out: the line follows it, and the send is refused
+  // as stale with it.
+  r.bring(noted);
+  answer(1, 409, { error: { category: "stale", message: "stale", case: noted } });
+  await b.done;
+  r.draw();
+  assert.equal(r.refusal(), "this case changed after it was drawn, so this was not recorded. check the thread before sending again.", "not that it was picked up");
 });

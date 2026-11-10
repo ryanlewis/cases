@@ -650,6 +650,9 @@ export function lineFollows(was: Line, c: Case): { line: Line; said?: string } {
 function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
   const [open, setOpen] = useState(false);
   const line = useRef<Line>(lineFrom(c));
+  // What the line last said of a case the stream brought, to say again
+  // when a stale refusal shows the case as it was before that.
+  const told = useRef("");
   const [reason, setReason] = useState("");
   const [refusal, setRefusal] = useState("");
   // The send that is out, which only that send lets go (IN-09).
@@ -668,9 +671,13 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
     if (!open) return;
     const { line: next, said } = lineFollows(line.current, c);
     line.current = next;
-    if (said) setRefusal(said);
+    if (said) {
+      told.current = said;
+      setRefusal(said);
+    }
   }, [c.revision, c.state]);
   function start(): void {
+    told.current = "";
     line.current = lineFrom(c);
     setRefusal("");
     setOpen(true);
@@ -708,11 +715,16 @@ function RowWithdraw({ c, sent }: { c: Case; sent?: OnSent | undefined }) {
       // nothing: the newer send's answer does.
       if (newest.current !== self) return;
       setRefusal(problem);
-      // The case as the refusal shows it, unless the stream has already
-      // brought a later one: that the line follows as it would have.
-      if (current) {
+      // The case as the refusal shows it, unless the line already holds
+      // it or a later one the stream brought, even while this send was out:
+      // then the line keeps what it holds, and a stale refusal, one whose
+      // case is not the one sent, says again what the line said of it.
+      if (current && current.revision <= line.current.drawn.revision) {
+        if (told.current && current.revision !== revision) setRefusal(told.current);
+      } else if (current) {
         const { line: next, said } = lineFollows(lineFrom(current), c);
         line.current = next;
+        told.current = said || "";
         if (said) setRefusal(said);
       }
     } finally {
