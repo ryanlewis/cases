@@ -12,11 +12,11 @@ use std::sync::{Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cases_core::{Case, Category, State, Store, StoreError, Time};
+use cases_core::{Case, Category, Row, State, Store, StoreError, Time, Writer};
 use cases_store_sqlite::{Db, Error, Key};
 use common::{
-    agent_event, answer_of, create, fixed, human_event, insert_row, names, scratch, sql, stored,
-    unnamed,
+    agent_event, answer_of, create, fixed, human_event, insert_row, names, open_of, scratch, sql,
+    stored, unnamed,
 };
 use rusqlite::TransactionBehavior;
 use serde_json::{Value, json};
@@ -701,4 +701,56 @@ fn append_rows_gives_the_rows_of_its_own_write_and_no_later_one() {
         db.append_rows(&gone, &note, &unnamed(), None),
         Err(StoreError::NoCase)
     ));
+}
+
+/// What `create_rows` and `append_rows` give is, field for field, what a
+/// read of the case gives after the write: a first row, later rows with the
+/// time and the actor the write stamps, rows past a gap in the seqs, a row
+/// another writer stored that does not read, and one whose data is not
+/// UTF-8 and reads with U+FFFD.
+#[test]
+fn the_rows_a_write_gives_are_those_a_read_gives_after_it() {
+    let (dir, _) = scratch();
+    let db = fixed(&dir.path().join("cases.db"), "2026-09-15T09:12:03Z");
+    let given = |rows: Vec<Row>, key: Key| {
+        assert_eq!(rows, db.rows(&key).unwrap().unwrap());
+    };
+    for kind in ["fyi", "decision", "approval"] {
+        let (key, rows) = db.create_rows(&open_of(kind), &unnamed()).unwrap();
+        given(rows, key);
+        let note = agent_event("note", r#"{"body": "More."}"#);
+        given(db.append_rows(&key, &note, &unnamed(), None).unwrap(), key);
+        let named = Writer::new(Some("w1"));
+        given(db.append_rows(&key, &note, &named, None).unwrap(), key);
+        given(
+            db.append_rows(&key, &answer_of(kind), &named, None)
+                .unwrap(),
+            key,
+        );
+    }
+
+    // Rows another writer stored: one past a gap in the seqs, one with an
+    // event this cases does not know, and one whose data is not UTF-8.
+    let (key, _) = create(&db, "fyi");
+    insert_row(&db, common::key_sql(key), 5, "agent", "poke", "{}");
+    insert_row(
+        &db,
+        common::key_sql(key),
+        7,
+        "agent",
+        "note",
+        r#"{"body": "x"}"#,
+    );
+    sql(&db)
+        .execute(
+            "UPDATE events SET data = x'7b22626f6479223a22ff227d' WHERE case_key = ?1 AND seq = 7",
+            [common::key_sql(key)],
+        )
+        .unwrap();
+    let note = agent_event("note", r#"{"body": "After."}"#);
+    let rows = db.append_rows(&key, &note, &unnamed(), None).unwrap();
+    let seqs: Vec<u64> = rows.iter().map(|row| row.seq).collect();
+    assert_eq!(seqs, [1, 5, 7, 8]);
+    assert_eq!(rows[2].data, "{\"body\":\"\u{fffd}\"}");
+    given(rows, key);
 }
