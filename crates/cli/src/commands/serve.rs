@@ -392,31 +392,12 @@ impl Serving<'_> {
             writeln!(out, "Serving {} at {}", self.store.display(), self.url)?;
             out.flush()?;
         }
-        let keys = self.terminal && term::can_read_keys();
-        let raw = keys.then(|| {
-            let raw = Arc::new(term::keys_raw());
-            std::thread::spawn(move || {
-                if term::wait_for_q(term::ForegroundStdin) {
-                    let _ = quit.send(());
-                }
-            });
-            raw
-        });
+        let raw = take_keys(self.terminal, quit);
+        let keys = raw.is_some();
         // What a stop forced by a second signal puts back on the terminal
         // before it exits, in place before the screen is drawn.
-        let restore: Box<dyn FnOnce() + Send> = Box::new({
-            let raw = raw.clone();
-            let screen = self.terminal;
-            move || {
-                if screen {
-                    show(Screen::END);
-                }
-                if let Some(raw) = &raw {
-                    raw.restore();
-                }
-            }
-        });
-        *forced.lock().unwrap_or_else(PoisonError::into_inner) = Some(restore);
+        *forced.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(forced_restore(self.terminal, raw.clone()));
         let painter = self
             .terminal
             .then(|| Painter::start(self.store.display().to_string(), self.started, keys));
@@ -428,20 +409,7 @@ impl Serving<'_> {
         // serve stops when its binary is replaced, run by a service manager
         // or by hand: a service manager starts the new one, and by hand the
         // log line says why it stopped.
-        let replaced = {
-            let log = Arc::clone(&self.log);
-            let binary = self.binary;
-            async move {
-                let Some(binary) = binary else {
-                    return std::future::pending().await;
-                };
-                let path = binary.watch().await;
-                log.line(format!(
-                    "{} was replaced: stopping, so that the new version can start",
-                    path.display()
-                ));
-            }
-        };
+        let replaced = replaced(self.binary, Arc::clone(&self.log));
         // Without a keyboard to read, nothing sends on `quits`, and it ends
         // at once: that is no reason to stop.
         let stop = async move {
@@ -478,6 +446,49 @@ impl Serving<'_> {
         }
         Ok(())
     }
+}
+
+/// On a terminal whose keys serve can read, takes them, each as it is
+/// typed, and sends on `quit` when `q` is: gives the keys, to put back.
+/// Without a keyboard to read it takes nothing, and `quit` is dropped.
+fn take_keys(terminal: bool, quit: mpsc::UnboundedSender<()>) -> Option<Arc<term::Keys>> {
+    let keys = terminal && term::can_read_keys();
+    keys.then(|| {
+        let raw = Arc::new(term::keys_raw());
+        std::thread::spawn(move || {
+            if term::wait_for_q(term::ForegroundStdin) {
+                let _ = quit.send(());
+            }
+        });
+        raw
+    })
+}
+
+/// What a stop forced by a second signal puts back on the terminal before
+/// it exits: the cursor and line wrapping, when serve drew its `screen`,
+/// and the keys it took (`raw`).
+fn forced_restore(screen: bool, raw: Option<Arc<term::Keys>>) -> Box<dyn FnOnce() + Send> {
+    Box::new(move || {
+        if screen {
+            show(Screen::END);
+        }
+        if let Some(raw) = &raw {
+            raw.restore();
+        }
+    })
+}
+
+/// Resolves once `binary` is replaced, and logs it; never without a binary
+/// to watch.
+async fn replaced(binary: Option<Binary>, log: Arc<Log>) {
+    let Some(binary) = binary else {
+        return std::future::pending().await;
+    };
+    let path = binary.watch().await;
+    log.line(format!(
+        "{} was replaced: stopping, so that the new version can start",
+        path.display()
+    ));
 }
 
 /// Writes `text` to the terminal on stdout at once, from any thread.
