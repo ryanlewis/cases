@@ -258,6 +258,16 @@ test("a press inside the composer let go on the backdrop, or a later press insid
   assert.deepEqual(c.log.slice(2), []);
 });
 
+test("a press on the composer's backdrop the browser cancels is no click on it", () => {
+  const c = open();
+  const dialog = () => c.find((v) => v.type === "dialog").props;
+  const on = {};
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerCancel({ target: on, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.deepEqual(c.log.slice(2), []);
+});
+
 test("a click on the backdrop with a note written asks first, as Escape does", () => {
   const c = open();
   note(c, "Rebase");
