@@ -552,64 +552,96 @@ function Choice({
 // decision's other and a signoff's request for changes need the note, as a
 // briefing sent back does (IN-14): the store refuses them without one.
 export function response(c: Case, f: Fields, preselect: boolean): { answer: Answer; problem?: never } | { answer?: never; problem: string } {
-  const answer: Answer = {};
   const note = f.note.trim();
-  if (note) answer.note = note;
+  const given = byKind(c, f, note, preselect);
+  if (typeof given === "string") return { problem: given };
+  return { answer: note ? { note, ...given } : given };
+}
+
+// What a kind's answer holds besides the note, or the problem that keeps it
+// from being sent.
+type Given = Answer | string;
+
+// The response the fields give to case `c`, by its kind; `note` is the
+// note, trimmed. A kind with no response of its own, a message, which is
+// never open, gives none.
+function byKind(c: Case, f: Fields, note: string, preselect: boolean): Given {
   switch (c.kind) {
     case "decision":
-      if (!f.choice) return { problem: "choose an option" };
-      if (f.choice === "other" && !note) return { problem: "other needs a note: say what you want instead" };
-      if (f.choice === "other") answer.other = true;
-      else answer.choice = Number(f.choice);
-      break;
+      return decided(f, note);
     case "approval":
-      answer.rows = [];
-      for (const row of c.rows || []) {
-        const verdict = verdictOf(f.verdicts, row.id, preselect && !byHuman(row));
-        if (!verdict) {
-          const [approve, hold, reject] = verdictWords(row).map(([word]) => word);
-          return { problem: `choose ${approve}, ${hold} or ${reject} for "${row.label}"` };
-        }
-        const rowNote = (of(f.rowNotes, row.id) || "").trim();
-        answer.rows.push(
-          (rowNote ? { id: row.id, verdict, note: rowNote } : { id: row.id, verdict }) as RowVerdict,
-        );
-      }
-      break;
+      return judged(c, f, preselect);
     case "signoff":
-      if (!f.signoff) return { problem: "choose accept or request changes" };
-      if (f.signoff === "changes" && !note) return { problem: "requesting changes needs a comment: say what to change" };
-      answer.signoff = f.signoff as Answer["signoff"] & string;
-      break;
-    case "stuck": {
-      const text = f.text.trim();
-      // Guidance typed without its button chosen still means guidance.
-      const choice = f.stuck || (text ? "text" : "");
-      if (choice === "drop") answer.drop = true;
-      else if (choice === "text" && text) answer.text = text;
-      else if (choice === "text") return { problem: "write the guidance, or choose drop" };
-      else return { problem: "choose guidance or drop, or park it" };
-      break;
-    }
-    case "question": {
-      const text = f.text.trim();
-      if (!text) return { problem: "write the reply" };
-      answer.text = text;
-      break;
-    }
+      return signedOff(f, note);
+    case "stuck":
+      return unstuck(f);
+    case "question":
+      return replied(f);
     case "fyi":
-      answer.ack = true;
-      break;
+      return { ack: true };
     case "briefing":
-      if (!f.briefing) return { problem: "choose accept or send back" };
-      if (f.briefing === "send_back" && !note) return { problem: "sending back needs a reason: say what to fix" };
-      answer.briefing = f.briefing as Answer["briefing"] & string;
-      // A tick past the list, from before an amend shortened it, files nothing.
-      const file = f.file.filter((n) => n <= (c.left_out || []).length).sort((a, b) => a - b);
-      if (file.length) answer.file = file;
-      break;
+      return briefed(c, f, note);
   }
-  return { answer };
+  return {};
+}
+
+// A decision's option, or other with the note.
+function decided(f: Fields, note: string): Given {
+  if (!f.choice) return "choose an option";
+  if (f.choice === "other" && !note) return "other needs a note: say what you want instead";
+  return f.choice === "other" ? { other: true } : { choice: Number(f.choice) };
+}
+
+// An approval's verdict on each of its rows, with the row's note.
+function judged(c: Case, f: Fields, preselect: boolean): Given {
+  const rows: RowVerdict[] = [];
+  for (const row of c.rows || []) {
+    const verdict = verdictOf(f.verdicts, row.id, preselect && !byHuman(row));
+    if (!verdict) {
+      const [approve, hold, reject] = verdictWords(row).map(([word]) => word);
+      return `choose ${approve}, ${hold} or ${reject} for "${row.label}"`;
+    }
+    const rowNote = (of(f.rowNotes, row.id) || "").trim();
+    rows.push((rowNote ? { id: row.id, verdict, note: rowNote } : { id: row.id, verdict }) as RowVerdict);
+  }
+  return { rows };
+}
+
+// A signoff's accept, or its request for changes with the note.
+function signedOff(f: Fields, note: string): Given {
+  if (!f.signoff) return "choose accept or request changes";
+  if (f.signoff === "changes" && !note) return "requesting changes needs a comment: say what to change";
+  return { signoff: f.signoff as Answer["signoff"] & string };
+}
+
+// A stuck case's guidance, or its drop.
+function unstuck(f: Fields): Given {
+  const text = f.text.trim();
+  // Guidance typed without its button chosen still means guidance.
+  const choice = f.stuck || (text ? "text" : "");
+  if (choice === "drop") return { drop: true };
+  if (choice === "text" && text) return { text };
+  if (choice === "text") return "write the guidance, or choose drop";
+  return "choose guidance or drop, or park it";
+}
+
+// A question's reply.
+function replied(f: Fields): Given {
+  const text = f.text.trim();
+  if (!text) return "write the reply";
+  return { text };
+}
+
+// A briefing's accept, or its send back with the note, and the left-out
+// items ticked to file, in order.
+function briefed(c: Case, f: Fields, note: string): Given {
+  if (!f.briefing) return "choose accept or send back";
+  if (f.briefing === "send_back" && !note) return "sending back needs a reason: say what to fix";
+  const answer: Answer = { briefing: f.briefing as Answer["briefing"] & string };
+  // A tick past the list, from before an amend shortened it, files nothing.
+  const file = f.file.filter((n) => n <= (c.left_out || []).length).sort((a, b) => a - b);
+  if (file.length) answer.file = file;
+  return answer;
 }
 
 // A choice's text with its marks: "recommended" on the option the agent
