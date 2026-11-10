@@ -643,4 +643,59 @@ CREATE TABLE archive_events (
             .unwrap();
         assert_eq!((has_id, removed), (0, 0));
     }
+
+    /// A store read before it was upgraded, and upgraded since by another
+    /// open, is read as upgraded at the next read of the same connection:
+    /// its version and its poll take the id, and what changed after is read
+    /// from the log of removals. Nothing the connection read before is kept.
+    #[test]
+    fn a_store_upgraded_by_another_open_is_read_as_upgraded_at_the_next_read() {
+        let (dir, db) = scratch();
+        drop(older(&db));
+        drop(db);
+        let path = dir.path().join("cases.db");
+
+        // Read under another writer's lock, so not upgraded, and polled.
+        let mut lock = Connection::open(&path).unwrap();
+        let tx = lock
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let db = Db::new(&path).with_busy_timeout(std::time::Duration::from_millis(50));
+        let before = db.version().unwrap();
+        assert!(before.as_str().starts_with('.'), "{before:?}");
+        let mut poller = db.poller();
+        assert_eq!(poller.poll().unwrap().len(), 1);
+        assert_eq!(poller.version(), Some(&before));
+        drop(tx);
+        drop(lock);
+
+        // Another open upgrades it.
+        let other = Db::new(&path);
+        let upgraded = other.version().unwrap();
+        let id = upgraded.as_str().split('.').next().unwrap();
+        assert_eq!(id.len(), 22, "{upgraded:?}");
+
+        // The first open's next reads see the upgrade.
+        assert_eq!(db.version().unwrap(), upgraded);
+        assert_eq!(poller.poll().unwrap().len(), 1);
+        assert_eq!(poller.version(), Some(&upgraded));
+        assert!(matches!(
+            db.rows_since(Some(&upgraded)).unwrap(),
+            Changes::Unchanged { .. }
+        ));
+
+        // A case written and one deleted by the other open since are what
+        // changed, read from the log of removals.
+        let key = other.list().unwrap()[0].0;
+        let new = create(&other);
+        other.delete(&key, None).unwrap();
+        let Changes::Since { cases, removed, .. } = db.rows_since(Some(&upgraded)).unwrap() else {
+            panic!("not what changed");
+        };
+        let keys: Vec<_> = cases.iter().map(|(key, _)| *key).collect();
+        assert_eq!((keys, removed), (vec![new], vec![key]));
+        let polled: Vec<_> = poller.poll().unwrap().keys().copied().collect();
+        assert_eq!(polled, [new]);
+        assert_eq!(poller.version(), Some(&db.version().unwrap()));
+    }
 }
