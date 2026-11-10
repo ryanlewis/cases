@@ -135,6 +135,7 @@ export function Options({ dialog }: { dialog: Ref<HTMLDialogElement> }) {
         <legend>${group.legend}</legend>
         ${group.choices.map(([value, label]) => html`<label class="choice"><input type="radio" name=${group.name} value=${value} checked=${prefs.read(group.name) === value} autofocus=${group.name === first && prefs.read(group.name) === value} onChange=${() => choose(group.name, value)} /> ${label}</label>`)}
         ${group.name === "notify" && html`<p class="label" id="notify-status" role="status">${STATUS[allowed]}</p>
+        <p class="label" id="notify-android">notifications do not work on chrome for android.</p>
         <button type="button" id="notify-allow" hidden=${allowed !== "default"} onClick=${ask}>allow notifications</button>`}
       </fieldset>`)}
     </section>`)}
