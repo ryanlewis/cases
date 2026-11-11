@@ -297,6 +297,16 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen,
       reopened = false;
     };
     reopen.current = () => {
+      // The browser retries a stream that dropped by itself, but not one it
+      // gave up on, as when a reconnect is refused: left, this tab would hear
+      // no push until it was reloaded. This one is replaced, and the tick
+      // still reads the store, as the new one may not come up. `dropped`
+      // stays set, so its open reads what was missed and tells the other tabs.
+      if (stream && stream.readyState === EventSource.CLOSED) {
+        close();
+        open();
+        return false;
+      }
       if (!stream || dropped) return false;
       close();
       reopened = true;
@@ -344,7 +354,8 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen,
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Date.now());
-      if (failed.current || !(reopen.current && reopen.current())) refresh();
+      const up = reopen.current ? reopen.current() : false;
+      if (failed.current || !up) refresh();
       else
         void api.listeners().then((read) => {
           const listeners = heard(read);
@@ -412,7 +423,8 @@ function App({ build }: { build: string }) {
   const again = useRef(false);
   const reloading = useRef(false);
   // Opens this tab's stream again, from the version the page has, and says
-  // whether it did: only a tab whose stream is up does (the minute's tick).
+  // whether that spares the minute's tick its read of the store: only for a
+  // stream that was up.
   const reopen = useRef<(() => boolean) | null>(null);
   // Whether the last read of the store failed: the minute's tick reads it
   // again, as the stream has nothing more to say until the store moves.
