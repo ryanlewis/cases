@@ -4,6 +4,7 @@
 //! tests here never reach the real one.
 
 use std::env;
+use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::fs;
 use std::io;
@@ -132,34 +133,11 @@ impl Manager {
     /// On another system, when the directory cannot be found, or when the
     /// program is not on `$PATH`.
     pub(crate) fn for_this_machine() -> Result<Manager, Error> {
-        let home = env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from);
-        let (system, dir) = if cfg!(target_os = "macos") {
-            let home = home.ok_or_else(|| {
-                Error::new("cannot find ~/Library/LaunchAgents: $HOME is not set")
-            })?;
-            (System::Launchd, home.join("Library").join("LaunchAgents"))
-        } else if cfg!(target_os = "linux") {
-            let base = match env::var_os("XDG_CONFIG_HOME").filter(|base| !base.is_empty()) {
-                Some(base) => PathBuf::from(base),
-                None => home
-                    .ok_or_else(|| {
-                        Error::new(
-                            "cannot find the systemd user directory: neither $XDG_CONFIG_HOME \
-                             nor $HOME is set",
-                        )
-                    })?
-                    .join(".config"),
-            };
-            (System::Systemd, base.join("systemd").join("user"))
-        } else {
-            return Err(Error::new(format!(
-                "a cases serve service is not supported on {}; run cases serve under your own \
-                 supervisor",
-                env::consts::OS
-            )));
-        };
+        let (system, dir) = system_dir(
+            env::consts::OS,
+            env::var_os("HOME"),
+            env::var_os("XDG_CONFIG_HOME"),
+        )?;
         let program = program::find(system.program())?;
         let run: Runner = Box::new(move |_, args| {
             let output = Command::new(&program)
@@ -321,11 +299,9 @@ impl Manager {
         }
         let args = ["--user", "is-active", UNIT];
         let ran = (self.run)(self.system.program(), &args)?;
-        match (ran.code, ran.output.trim()) {
-            (Some(0), _) | (Some(_), "activating") => Ok(true),
-            (Some(_), "inactive" | "failed" | "deactivating" | "maintenance" | "unknown") => {
-                Ok(false)
-            }
+        match (self.exit_code(&args, &ran)?, ran.output.trim()) {
+            (0, _) | (_, "activating") => Ok(true),
+            (_, "inactive" | "failed" | "deactivating" | "maintenance" | "unknown") => Ok(false),
             _ => Err(self.failed(&args, &ran)),
         }
     }
@@ -370,9 +346,9 @@ impl Manager {
         let target = self.target();
         let args = ["print", target.as_str()];
         let ran = (self.run)(self.system.program(), &args)?;
-        match ran.code {
-            Some(0) => Ok(true),
-            Some(LAUNCHD_NO_SERVICE) => Ok(false),
+        match self.exit_code(&args, &ran)? {
+            0 => Ok(true),
+            LAUNCHD_NO_SERVICE => Ok(false),
             _ => Err(self.failed(&args, &ran)),
         }
     }
@@ -380,10 +356,16 @@ impl Manager {
     /// Runs the system's program with `args`, which must succeed.
     fn run(&self, args: &[&str]) -> Result<(), Error> {
         let ran = (self.run)(self.system.program(), args)?;
-        if ran.code == Some(0) {
+        if self.exit_code(args, &ran)? == 0 {
             return Ok(());
         }
         Err(self.failed(args, &ran))
+    }
+
+    /// The status a command exited with. One killed by a signal has none,
+    /// and is an error whatever it printed.
+    fn exit_code(&self, args: &[&str], ran: &Ran) -> Result<i32, Error> {
+        ran.code.ok_or_else(|| self.failed(args, ran))
     }
 
     /// The error for a command that failed: the command, its status and its
@@ -401,6 +383,44 @@ impl Manager {
             let _ = write!(message, ": {output}");
         }
         Error::new(message)
+    }
+}
+
+/// The service manager of the system `os` names, as in
+/// [`env::consts::OS`], and where its plist or unit file goes, given
+/// `$HOME` and `$XDG_CONFIG_HOME`. Empty counts as unset.
+///
+/// # Errors
+///
+/// On another system, or when the directory cannot be found.
+fn system_dir(
+    os: &str,
+    home: Option<OsString>,
+    xdg_config: Option<OsString>,
+) -> Result<(System, PathBuf), Error> {
+    let home = home.filter(|home| !home.is_empty()).map(PathBuf::from);
+    if os == "macos" {
+        let home =
+            home.ok_or_else(|| Error::new("cannot find ~/Library/LaunchAgents: $HOME is not set"))?;
+        Ok((System::Launchd, home.join("Library").join("LaunchAgents")))
+    } else if os == "linux" {
+        let base = match xdg_config.filter(|base| !base.is_empty()) {
+            Some(base) => PathBuf::from(base),
+            None => home
+                .ok_or_else(|| {
+                    Error::new(
+                        "cannot find the systemd user directory: neither $XDG_CONFIG_HOME \
+                         nor $HOME is set",
+                    )
+                })?
+                .join(".config"),
+        };
+        Ok((System::Systemd, base.join("systemd").join("user")))
+    } else {
+        Err(Error::new(format!(
+            "a cases serve service is not supported on {os}; run cases serve under your own \
+             supervisor"
+        )))
     }
 }
 
@@ -766,6 +786,77 @@ mod tests {
     /// The calls made since the last look.
     fn calls(calls: &Calls) -> Vec<String> {
         calls.borrow_mut().drain(..).collect()
+    }
+
+    /// A variable of the environment [`system_dir`] is given.
+    fn var(text: &str) -> OsString {
+        OsString::from(text)
+    }
+
+    #[test]
+    fn on_macos_the_plist_is_under_home_whatever_xdg_config_home_is() {
+        let want = (System::Launchd, PathBuf::from("/h/Library/LaunchAgents"));
+        for xdg in [None, Some(var("")), Some(var("/x"))] {
+            assert_eq!(system_dir("macos", Some(var("/h")), xdg).unwrap(), want);
+        }
+    }
+
+    /// `$HOME` unset or empty, and `$XDG_CONFIG_HOME` does not stand in.
+    #[test]
+    fn on_macos_without_home_there_is_no_plist_directory() {
+        for home in [None, Some(var(""))] {
+            let error = system_dir("macos", home, Some(var("/x"))).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "cannot find ~/Library/LaunchAgents: $HOME is not set"
+            );
+        }
+    }
+
+    #[test]
+    fn on_linux_the_unit_is_under_xdg_config_home_then_home() {
+        let xdg = (System::Systemd, PathBuf::from("/x/systemd/user"));
+        let home = (System::Systemd, PathBuf::from("/h/.config/systemd/user"));
+        assert_eq!(
+            system_dir("linux", Some(var("/h")), Some(var("/x"))).unwrap(),
+            xdg
+        );
+        assert_eq!(system_dir("linux", None, Some(var("/x"))).unwrap(), xdg);
+        assert_eq!(
+            system_dir("linux", Some(var("")), Some(var("/x"))).unwrap(),
+            xdg
+        );
+        assert_eq!(system_dir("linux", Some(var("/h")), None).unwrap(), home);
+        assert_eq!(
+            system_dir("linux", Some(var("/h")), Some(var(""))).unwrap(),
+            home
+        );
+    }
+
+    #[test]
+    fn on_linux_without_either_there_is_no_unit_directory() {
+        for (home, xdg) in [(None, None), (Some(var("")), Some(var("")))] {
+            let error = system_dir("linux", home, xdg).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "cannot find the systemd user directory: neither $XDG_CONFIG_HOME nor $HOME is set"
+            );
+        }
+    }
+
+    /// Any other system is refused by name, even with both directories.
+    #[test]
+    fn another_system_is_refused_by_name() {
+        for os in ["freebsd", "windows"] {
+            let error = system_dir(os, Some(var("/h")), Some(var("/x"))).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "a cases serve service is not supported on {os}; run cases serve under your \
+                     own supervisor"
+                )
+            );
+        }
     }
 
     #[test]
@@ -1136,6 +1227,30 @@ WantedBy=default.target
             let error = manager.active().unwrap_err().to_string();
             assert!(error.contains("killed by a signal"), "{state:?}: {error}");
         }
+    }
+
+    /// launchd's query, and a command that must succeed, killed by a signal
+    /// are errors that say so.
+    #[test]
+    fn a_command_killed_by_a_signal_is_an_error_that_says_so() {
+        let killed = || -> Runner {
+            Box::new(|_, _| {
+                Ok(Ran {
+                    code: None,
+                    output: String::new(),
+                })
+            })
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let launchd = Manager::new(System::Launchd, dir.path().join("a"), 501, killed());
+        let error = launchd.active().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            format!("launchctl print gui/501/{LABEL}: killed by a signal")
+        );
+        let systemd = Manager::new(System::Systemd, dir.path().join("b"), 501, killed());
+        let error = systemd.install(&spec(dir.path())).unwrap_err().to_string();
+        assert_eq!(error, "systemctl --user daemon-reload: killed by a signal");
     }
 
     #[test]

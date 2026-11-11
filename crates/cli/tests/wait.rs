@@ -2776,6 +2776,84 @@ fn a_message_taken_while_a_steady_wait_collects_is_in_the_same_print() {
     }
 }
 
+/// A steady wait with no case open collects messages through its quiet
+/// time: three sent a few seconds apart wake it once.
+#[test]
+fn a_burst_of_messages_wakes_a_steady_wait_with_no_case_open_once() {
+    let env = Env::new();
+    // Makes the store, with no case in it that the wait waits on.
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let mut sent = Vec::new();
+    for body in ["One.", "Two.", "Three."] {
+        sent.push(message(&env, &["--to", "w9", "--body", body]));
+        thread::sleep(Duration::from_secs(3));
+    }
+    let lines = woke(&waiting.finish());
+    assert_eq!(ids(&lines), sent);
+    for line in &lines {
+        assert_eq!(line["state"], "pickedup", "{line}");
+    }
+}
+
+/// A steady wait with no case open, killed in its quiet time, has taken
+/// nothing: the lone message it held is the next wait's.
+#[test]
+fn a_lone_message_held_by_a_steady_wait_with_no_case_open_survives_a_kill() {
+    for signal in ["TERM", "KILL"] {
+        let env = Env::new();
+        message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+        let marker = marker(&env);
+        let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+        let mut waiting = Waiting::after_first_read(&env, &marker, &args);
+        let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+        // A read of the store, every second, has found it.
+        thread::sleep(Duration::from_millis(2500));
+        assert_eq!(env.case(&sent).state().as_str(), "sent", "{signal}");
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), waiting.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{signal}");
+        waiting.child.wait().unwrap();
+        assert_eq!(waiting.stdout.join().unwrap(), "", "{signal}");
+
+        let lines = woke(&wait(&env, &listening("w9", &[])));
+        assert_eq!(ids(&lines), [sent.as_str()], "{signal}");
+        assert_eq!(lines[0]["state"], "pickedup", "{signal}");
+    }
+}
+
+/// A blocking message ends a steady wait at once: the agent should stop for
+/// it, not sit out the quiet time.
+#[test]
+fn a_blocking_message_ends_a_steady_wait_at_once() {
+    let env = Env::new();
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    // Held already when the blocking one comes.
+    let held = message(&env, &["--to", "w9", "--body", "When you can."]);
+    thread::sleep(Duration::from_millis(1500));
+    let start = Instant::now();
+    let sent = message(
+        &env,
+        &["--to", "w9", "--urgency", "blocking", "--body", "Stop."],
+    );
+    assert_eq!(
+        ids(&woke(&waiting.finish())),
+        [held.as_str(), sent.as_str()]
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
 // Pins of how a wait prints what it found (`print` in `commands/wait.rs`):
 // each line exactly, its order, and how a wait ends when a write or a read
 // fails part-way.
@@ -3059,6 +3137,111 @@ fn a_full_wait_whose_actors_cannot_be_read_prints_nothing_and_picks_up_nothing()
     assert_eq!(
         out.stdout,
         answered_line(&env, &id, "pickedup", 3, 1) + &tail(true, &event_at(&env, &id, 2)) + "\n"
+    );
+}
+
+/// A pickup that makes its actor, with the table of actors then unreadable,
+/// still prints each case, its new actor by id, and says so once on stderr
+/// however many cases need it, rather than leave the agent to wonder at the
+/// missing name.
+#[test]
+fn a_full_wait_that_cannot_read_the_actor_its_pickup_made_warns() {
+    let env = Env::new();
+    env.open_fyi("Makes the store");
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w9"}"#;
+    let id = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &id, &["--ack"]);
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w8"}"#;
+    let other = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &other, &["--ack"]);
+    // The table reads until it holds the actor the pickup makes.
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE actors RENAME TO actors_kept;
+         CREATE VIEW actors AS SELECT rowid AS rowid, id, kind,
+             CASE WHEN name IN ('w8', 'w9') THEN x'ff' ELSE name END AS name, created
+             FROM actors_kept;
+         CREATE TRIGGER actors_insert INSTEAD OF INSERT ON actors BEGIN
+             INSERT INTO actors_kept VALUES (NEW.id, NEW.kind, NEW.name, NEW.created);
+         END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let out = wait(
+        &env,
+        &[
+            "--full",
+            "--id",
+            &id,
+            "--id",
+            &other,
+            "--since",
+            "2000-01-01T00:00:00Z",
+            "--pickup",
+            "--by",
+            "me",
+        ],
+    );
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [id.as_str(), other.as_str()]);
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
+    assert_eq!(
+        lines[0]["events"][2]["actor"],
+        serde_json::json!({"id": actor_of(&env, &id, 3)})
+    );
+    let warnings = out
+        .stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with("warning: the actors cannot be read, so they are named by id: ")
+        })
+        .count();
+    assert_eq!(warnings, 1, "{out:?}");
+}
+
+/// A wait whose first read of the actors failed, and which goes on because
+/// it took a message, warns once even when a pickup then wants the actors
+/// again.
+#[test]
+fn a_full_wait_warns_once_when_its_first_read_of_the_actors_failed_and_a_pickup_follows() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Answered",
+        "--worker",
+        "w",
+    ]);
+    run(&env, "answer", &id, &["--ack"]);
+    let sent = message(&env, &["--to", "w"]);
+    spoil_actors(&env);
+
+    let args = [
+        "--pickup",
+        "--worker",
+        "w",
+        "--full",
+        "--since",
+        "2000-01-01T00:00:00Z",
+    ];
+    let out = wait(&env, &args);
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    let mut printed = ids(&lines);
+    printed.sort_unstable();
+    let mut want = vec![id.as_str(), sent.as_str()];
+    want.sort_unstable();
+    assert_eq!(printed, want, "{out:?}");
+    assert_eq!(
+        out.stderr.matches("the actors cannot be read").count(),
+        1,
+        "{out:?}"
     );
 }
 

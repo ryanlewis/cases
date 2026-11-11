@@ -104,11 +104,13 @@ pub(crate) struct Args {
     doing: Option<String>,
 
     /// How long to keep collecting after the first event, so that answers
-    /// given together are printed together. It stops early when no case it
-    /// waits on is still open, on the answer to a blocking case, on a
-    /// withdraw, and at --timeout, which then prints what it has and exits
-    /// 0, or exits 1 when all it held was messages it could not take.
-    /// Default: the config file's mood, then eager.
+    /// given together are printed together. It stops early when a human's
+    /// event on a case leaves no case it waits on still open, on the answer
+    /// to a blocking case, on a withdraw, and at --timeout, which then prints
+    /// what it has and exits 0, or exits 1 when all it held was messages it
+    /// could not take. Messages are collected through the quiet time, so a
+    /// burst of them wakes it once, until one is blocking. Default: the
+    /// config file's mood, then eager.
     #[arg(long, value_name = "MOOD", value_enum)]
     mood: Option<Mood>,
 }
@@ -555,9 +557,11 @@ impl First {
 /// prints, so that a wait killed while it collects leaves them sent for the
 /// next wait, however it is killed. It reads on after that first new event, and
 /// gives the cases once the first of these comes: its quiet time with no
-/// event new to it, its cap after the first, no case it waits on still open,
-/// the answer to a blocking case or a withdraw among the new events, or the
-/// timeout (AG-18).
+/// event new to it, its cap after the first, a human's event on a case that
+/// leaves no case it waits on still open, the answer to a blocking case or a
+/// withdraw among the new events, a blocking message it holds, or the
+/// timeout (AG-18). Other messages do not end it early: more can come
+/// whatever is open.
 ///
 /// An event is judged new by its appearing, not by its time alone, since a
 /// record can give a time well before it was stored.
@@ -964,8 +968,9 @@ impl Asked<'_> {
 
     /// Whether a wait that woke on what it `found` and `taken` gives its
     /// cases now: an eager one at once; one that lingers, which notes in
-    /// `collecting` what it saw, once its linger ends, nothing it waits on
-    /// is open, something urgent came, or the timeout passed (AG-18).
+    /// `collecting` what it saw, once its linger ends, an event on a case
+    /// left nothing it waits on open, something urgent came, or the timeout
+    /// passed (AG-18).
     fn done(&self, collecting: &mut Option<Collecting>, found: &Found, taken: &[Turn]) -> bool {
         let Some(linger) = self.mood.linger() else {
             return true;
@@ -993,7 +998,11 @@ impl Asked<'_> {
         // the print: that message is the wait's already, so it says so now.
         !taken.is_empty()
             || found.urgent()
-            || !found.open
+            || found
+                .pending
+                .iter()
+                .any(|&(_, case)| case.urgency() == Urgency::Blocking)
+            || found.finished()
             || collecting.until(linger) <= now
             || self.deadline.is_some_and(|deadline| deadline <= now)
     }
@@ -1051,6 +1060,13 @@ impl Found<'_> {
     /// Whether it wakes the wait: a message withdrawn, or a turn new to it.
     fn woke(&self) -> bool {
         !self.withdrawn.is_empty() || self.turns.iter().any(|&(.., fresh)| fresh)
+    }
+
+    /// Whether an event on a case new to the wait left none it waits on
+    /// open, so that no more answers can come. Messages alone are not: more
+    /// of them can come whatever is open.
+    fn finished(&self) -> bool {
+        !self.open && self.turns.iter().any(|&(.., fresh)| fresh)
     }
 
     /// Whether it ends a lingering wait at once: the agent cannot go on
@@ -1764,10 +1780,11 @@ fn actors_to_name(args: &Args, ctx: &Ctx, turns: &[Turn]) -> Result<Known, Error
     match read {
         Ok(actors) => Ok(actors),
         Err(error) if turns.iter().any(|turn| turn.taken) => {
-            ctx::warn(format_args!(
-                "the actors cannot be read, so they are named by id: {error}"
-            ));
-            Ok(Known::default())
+            warn_unnamed(&error);
+            Ok(Known {
+                unreadable: true,
+                ..Known::default()
+            })
         }
         Err(error) => Err(error),
     }
@@ -1799,13 +1816,27 @@ fn pick_up_under(ctx: &Ctx, by: &str, turn: &mut Turn, far: Option<&FarLocks>) -
 /// for a case opened by hand, so the table is read again then, and only
 /// then: the pickup's actor is the case's agent, its worker or a message's
 /// taker, whom the table has after the first pickup by it. A read that fails
-/// keeps the table read before, so that the case is still printed.
+/// keeps the table read before, so that the case is still printed, says so
+/// once, and is not tried again.
 fn learn_actor(ctx: &Ctx, turn: &Turn, actors: &mut Known) {
-    if !actors.has(turn.case.events().last().and_then(Event::actor))
-        && let Ok(now) = actors_of(ctx)
-    {
-        *actors = now;
+    if actors.unreadable || actors.has(turn.case.events().last().and_then(Event::actor)) {
+        return;
     }
+    match actors_of(ctx) {
+        Ok(now) => *actors = now,
+        Err(error) => {
+            warn_unnamed(&error);
+            actors.unreadable = true;
+        }
+    }
+}
+
+/// Says on stderr that the actors could not be read, for a wait that prints
+/// its cases all the same.
+fn warn_unnamed(error: &Error) {
+    ctx::warn(format_args!(
+        "the actors cannot be read, so they are named by id: {error}"
+    ));
 }
 
 /// Writes the line of `turn` to stdout. On failure, gives why, as the
@@ -1831,6 +1862,8 @@ fn write_line(
 struct Known {
     actors: Actors,
     ids: HashSet<String>,
+    /// Whether a read of the table failed and has been said.
+    unreadable: bool,
 }
 
 impl Known {
@@ -1852,6 +1885,7 @@ fn actors_of(ctx: &Ctx) -> Result<Known, Error> {
     Ok(Known {
         actors: Actors::new(rows),
         ids,
+        unreadable: false,
     })
 }
 

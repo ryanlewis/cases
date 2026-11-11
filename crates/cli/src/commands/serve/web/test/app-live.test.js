@@ -369,6 +369,92 @@ test("the 15 s poll reads the listeners alone, while the inbox-zero panel or the
   q.app.unmount();
 });
 
+test("a read of who is listening the 15 s poll has out does not overwrite a newer load's", async () => {
+  const p = await openApp({ server: { listeners: [] } });
+  let release;
+  p.server.routes[LISTENERS] = () => new Promise((r) => (release = r));
+  await p.tick(15000);
+  delete p.server.routes[LISTENERS];
+  p.server.listeners = [listener];
+  await event(p, "v2");
+  assert.deepEqual(p.page.props.data.listeners.map((l) => l.worker), ["w1"]);
+  release({ status: 200, body: { list: [] } });
+  await p.settle();
+  assert.deepEqual(p.page.props.data.listeners.map((l) => l.worker), ["w1"]);
+  p.app.unmount();
+});
+
+// A browser that shows notifications, the ones shown in `shownNotes`, for
+// openApp's `extra`, and how many /v1/notifications requests `p` has made.
+function notifying(t, shownNotes, stored) {
+  t.after(() => delete globalThis.Notification);
+  return (page) => {
+    page.window.Notification = true;
+    globalThis.Notification = class {
+      static permission = "granted";
+      constructor(title) {
+        shownNotes.push(title);
+      }
+      close() {}
+    };
+    if (stored) page.stored.set(CURSOR, JSON.stringify(stored));
+  };
+}
+const CURSOR = "cases.notify-cursor";
+const reads = (p) => p.requests.filter((r) => r.includes("/v1/notifications")).length;
+
+test("App's keys and its notifications stop when it goes", async (t) => {
+  const p = await openApp({ prefs: { notify: "all" }, server: { waiting: [a] }, extra: notifying(t, []) });
+  assert.equal(p.document.count("keydown"), 1);
+  await p.tick(5000);
+  assert.equal(reads(p), 2);
+  p.app.unmount();
+  assert.equal(p.document.count("keydown"), 0);
+  await p.tick(600000);
+  assert.equal(reads(p), 2);
+});
+
+test("a read of the notifications out when App goes shows nothing and leaves the cursor", async (t) => {
+  const shownNotes = [];
+  const was = { boot: "boot1", id: 0 };
+  let release;
+  const server = { waiting: [a], routes: { "GET /v1/notifications?after=0": () => new Promise((r) => (release = r)) } };
+  const p = await openApp({ prefs: { notify: "all" }, server, extra: notifying(t, shownNotes, was) });
+  p.app.unmount();
+  release({ status: 200, body: { boot: "boot1", latest: 1, items: [{ id: 1, title: "Late", body: "", tag: "x", url: "/" }] } });
+  await p.settle();
+  assert.deepEqual(shownNotes, []);
+  assert.deepEqual(JSON.parse(p.stored.get(CURSOR)), was);
+});
+
+test("a read of the list that lands while the back of a composer's close is out does not undo a refusal", async () => {
+  const p = await openApp({ server: { waiting: [a, b] } });
+  await p.click(link("/message?to=w1"));
+  let release;
+  p.server.routes[WAITING] = () => new Promise((r) => (release = r));
+  await event(p, "v2");
+  delete p.server.routes[WAITING];
+  p.composer.props.onClose();
+  p.page.props.refused({ ...a, revision: 7 });
+  release({ status: 200, body: { list: [b] } });
+  await p.settle();
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  assert.equal(shown(p), "aB3xQ");
+  p.app.unmount();
+});
+
+test("a refusal on the list while the back of a composer's close is out stays on the refused case", async () => {
+  const p = await openApp({ server: { waiting: [a, b] } });
+  await p.click(link("/message?to=w1"));
+  p.composer.props.onClose();
+  p.page.props.refused({ ...a, revision: 7 });
+  await p.settle();
+  assert.deepEqual(route(p), { page: "case", id: "aB3xQ", show: "inbox" });
+  // The composer's entry is left ahead, as any closed composer's is.
+  assert.deepEqual(p.entries(), [">/cases/aB3xQ-first-case", "/"]);
+  p.app.unmount();
+});
+
 // A page whose serve, once it is up, says it is build b2 from GET /v1,
 // with `forms` as what typed() finds; `options` go to openApp, `server`
 // over the two cases it lists.

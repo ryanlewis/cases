@@ -107,6 +107,7 @@ export function Options({ dialog }: { dialog: Ref<HTMLDialogElement> }) {
         <legend>${group.legend}</legend>
         ${group.choices.map(([value, label]) => html`<label class="choice"><input type="radio" name=${group.name} value=${value} checked=${prefs.read(group.name) === value} autofocus=${group.name === first && prefs.read(group.name) === value} onChange=${() => choose(group.name, value)} /> ${label}</label>`)}
         ${group.name === "notify" && html`<p class="label" id="notify-status" role="status">${STATUS[allowed]}</p>
+        <p class="label" id="notify-android">notifications do not work on chrome for android.</p>
         <button type="button" id="notify-allow" hidden=${allowed !== "default"} onClick=${ask}>allow notifications</button>`}
       </fieldset>`)}
     </section>`)}
@@ -198,8 +199,10 @@ function show(item: Item, open: (path: string) => void): void {
 // notifications are on and allowed, and shows each new one (IN-08). Nothing
 // is asked while they are off, and the kept number is dropped then, so
 // turning them on later does not replay what came in meanwhile.
-export function notify(open: (path: string) => void): void {
+export function notify(open: (path: string) => void): () => void {
+  let gone = false;
   const check = async () => {
+    if (gone) return;
     let again = false;
     try {
       if (prefs.read("notify") === "off" || permission() !== "granted") {
@@ -208,7 +211,7 @@ export function notify(open: (path: string) => void): void {
       }
       const have = readCursor();
       const response = await api.notifications(have ? have.id : null);
-      if (!response.ok) return;
+      if (gone || !response.ok) return;
       const page = response.body;
       // Read again: another tab may have shown these while this one waited.
       const c = readCursor();
@@ -240,4 +243,7 @@ export function notify(open: (path: string) => void): void {
     }
   };
   check();
+  return () => {
+    gone = true;
+  };
 }

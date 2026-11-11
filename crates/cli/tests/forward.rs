@@ -680,6 +680,69 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
     );
 }
 
+/// A far side whose `cases` stops being runnable (exit 126) is ridden out
+/// as one out of reach is, until the wait's timeout: a wait does not tell
+/// it from a connection lost. Its last try having failed, the wait then
+/// ends with that failure, exit 1, not as a timeout.
+#[test]
+fn a_forwarded_wait_rides_out_a_far_side_that_exits_126_until_its_timeout() {
+    // The stand-in ssh as ever, but exiting 126 once the file `.cut` is
+    // there; its relay copies what the wait sends to `.sent`, and writes
+    // the far side's pid to `.far`.
+    let script = SSH
+        .replacen(
+            "echo \"$*\" >> \"@LOG@\"\n",
+            "echo \"$*\" >> \"@LOG@\"\n[ -e \"@LOG@.cut\" ] && { echo 'cases: Permission denied' >&2; exit 126; }\n",
+            1,
+        )
+        .replacen("exec cat'", "exec tee -a \"@LOG@.sent\"'", 1)
+        .replacen(
+            "perl -e 'setpgrp; ",
+            "perl -e 'setpgrp; open my $f, \">\", \"@LOG@.far\"; print $f $$; close $f; ",
+            1,
+        );
+    let f = Forwarding::with_ssh(&script);
+    let id = f.open_decision();
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let start = Instant::now();
+    let wait = spawn(
+        f.env
+            .command(["wait", "--id", &id, "--timeout", "8s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let sent = f.env.path("ssh.log.sent");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read_to_string(&sent).is_ok_and(|sent| sent.contains("/store/changes?after=")) {
+        assert!(Instant::now() < until, "the wait held no poll");
+        thread::sleep(Duration::from_millis(50));
+    }
+    fs::write(f.env.path("ssh.log.cut"), "").unwrap();
+    for name in ["ssh.log.far", "relay.pid"] {
+        let pid: u32 = fs::read_to_string(f.env.path(name))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        signal("KILL", pid);
+    }
+    let waited: Output = wait.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 1, "{waited:?}");
+    assert_eq!(waited.stdout, "", "{waited:?}");
+    assert!(
+        waited
+            .stderr
+            .ends_with("(exit 126): cases: Permission denied\n"),
+        "{waited:?}"
+    );
+    assert!(
+        waited.stderr.contains("trying again until the timeout"),
+        "{waited:?}"
+    );
+    // It went on to its timeout, and did not end at the first failure.
+    assert!(start.elapsed() >= Duration::from_secs(8), "{waited:?}");
+}
+
 /// A steady wait with no timeout that holds an answer, and whose connection
 /// then drops with the far side out of reach, prints the answer at the end
 /// of its quiet time, exit 0, rather than wait on it for ever (AG-18).
@@ -1187,6 +1250,10 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
         .trim()
         .parse()
         .unwrap();
+    // The relayed far side is out of the near side's reach: it is killed if
+    // the test fails, or it would last until the wait's timeout.
+    let far: u32 = holder.split_whitespace().next().unwrap().parse().unwrap();
+    let _far = Kill(far);
     // The relay is what carries the connection to the far side's
     // dial-stdio, which sees it end.
     // Renewed a second at most before the kill, the lease runs out two
@@ -1220,9 +1287,41 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
 /// machine is not, so that does not let them go either.
 #[test]
 fn a_pickup_wait_that_ends_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("TERM", 15)));
+}
+
+/// So does one stopped by SIGINT, as a Ctrl-C sends it.
+#[test]
+fn a_pickup_wait_interrupted_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("INT", 2)));
+}
+
+/// So does one stopped by SIGHUP, as a closed terminal sends it, on Linux:
+/// elsewhere SIGHUP is not caught.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_pickup_wait_hung_up_on_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("HUP", 1)));
+}
+
+/// So does one that comes to its timeout, with no signal.
+#[test]
+fn a_pickup_wait_that_times_out_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("5s", None);
+}
+
+/// Starts a pickup wait with a timeout of `timeout`, whose locks are held
+/// on a long lease over a relayed connection; ends it by `signalled`, a name
+/// and number, or else lets it reach its timeout; and checks the locks are
+/// let go at once.
+fn releases_on_a_far_side_out_of_reach(timeout: &str, signalled: Option<(&str, i32)>) {
     let f = leasing(60_000);
     fs::write(f.env.path("relay"), "1").unwrap();
-    let first = picking_up(&f);
+    let first = picking_up_by(
+        &f,
+        f.env
+            .command(["wait", "--pickup", "--worker", "lead", "--timeout", timeout]),
+    );
     let (lock, holder) = taken(&f, "worker-lead-");
     // The far side holding them is the relayed one, which the ssh stand-in
     // starts, not the wait itself as it does with no relay. It is killed if
@@ -1239,13 +1338,18 @@ fn a_pickup_wait_that_ends_releases_its_locks_on_a_far_side_out_of_reach() {
         "the locks are not on the relayed connection: {parent:?}"
     );
     let _far = Kill(far);
-    signal("TERM", first.id());
+    if let Some((name, _)) = signalled {
+        signal(name, first.id());
+    }
     let waited = first.wait_with_output().unwrap();
     assert_eq!(
         std::os::unix::process::ExitStatusExt::signal(&waited.status),
-        Some(15),
+        signalled.map(|(_, number)| number),
         "{waited:?}"
     );
+    if signalled.is_none() {
+        assert_eq!(waited.status.code(), Some(2), "{waited:?}");
+    }
     // Read off the lock, as a second wait is started some time before it
     // takes it.
     let ended = Instant::now();
@@ -1794,6 +1898,10 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         .trim()
         .parse()
         .unwrap();
+    // The relayed far side is out of the near side's reach: it is killed if
+    // the test fails, or it would last until the wait's timeout.
+    let far: u32 = holder.split_whitespace().next().unwrap().parse().unwrap();
+    let _far = Kill(far);
     signal("STOP", relay);
     // Read off the lock, as a second wait is started some time before it
     // takes it.
