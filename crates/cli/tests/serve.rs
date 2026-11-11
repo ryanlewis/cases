@@ -149,20 +149,8 @@ fn serve_stops_on_ctrl_c_and_removes_its_record() {
 #[test]
 fn a_second_ctrl_c_ends_a_slow_stop_at_once() {
     let env = Env::new();
-    let id = env.open_fyi("Heads up");
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A write whose body stops a few bytes in holds the stop for its whole
-    // grace period.
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(
-        stalled,
-        "POST /v1/cases/{id}/answer HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"revision\"",
-        serve.addr
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     std::thread::sleep(Duration::from_millis(300));
     let second = Instant::now();
@@ -321,22 +309,11 @@ fn a_second_serve_on_the_same_store_is_refused() {
 /// counts as no serve, and a new serve replaces it.
 #[test]
 fn a_stale_record_is_replaced() {
-    // Port 0 takes no connection, ever: a port freed for the test could be
-    // taken by another before serve dials it.
-    let closed_addr = "127.0.0.1:0";
     let mut gone = common::spawn(&mut std::process::Command::new("true"));
     gone.wait().unwrap();
     for pid in [gone.id(), std::process::id()] {
         let env = Env::new();
-        let stale = serde_json::json!({
-            "pid": pid,
-            "url": format!("http://{closed_addr}/"),
-            "addr": closed_addr,
-            "store": std::path::absolute(&env.store).unwrap(),
-            "started_at": "2026-09-25T12:00:00Z",
-            "version": "0.0.0",
-        });
-        write_file(&env.instance_file(), &stale.to_string());
+        env.stale_instance(pid);
         let serve = env.serve(&[]);
         let info = json(&fs::read_to_string(env.instance_file()).unwrap());
         assert_eq!(info["pid"], serve.pid(), "pid {pid}");
@@ -890,10 +867,7 @@ fn serve_on_ipv6_brackets_its_address() {
 fn a_stop_closes_what_is_still_open_after_its_grace() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(stalled, "{}", stalled_send(&serve.addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The grace is 5 s.
     let out = serve.exit_within(Duration::from_secs(15));
@@ -904,15 +878,6 @@ fn a_stop_closes_what_is_still_open_after_its_grace() {
         "{out:?}"
     );
     drop(stalled);
-}
-
-/// A message whose body stops a few bytes in, which holds a stop for its
-/// whole grace.
-fn stalled_send(addr: &str, token: &str) -> String {
-    format!(
-        "POST /v1/cases HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"kind\""
-    )
 }
 
 /// The address and pid of the serve that `env`'s instance file records,
@@ -1022,10 +987,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
     let _reap = Reap(pid);
-    let token = csrf(&addr);
-    let mut stalled = common::serve::connect(&addr);
-    write!(stalled, "{}", stalled_send(&addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&addr, &csrf(&addr));
     // Sent until it lands, as two that come closer than serve takes the
     // first are one signal. The stalled write holds the stop for its 5 s
     // grace, so an exit before then is a forced one.
@@ -1056,27 +1018,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
 fn a_second_ctrl_c_straight_after_the_first_ends_serve() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A message whose body serve is reading, which it says with `100
-    // Continue`, and never gets: it holds the stop for its 5 s grace.
-    let mut stalled = common::serve::connect(&serve.addr);
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    write!(
-        stalled,
-        "POST /v1/cases HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n",
-        serve.addr
-    )
-    .unwrap();
-    let mut continued = [0; 25];
-    std::io::Read::read_exact(&mut stalled, &mut continued).unwrap();
-    assert!(
-        continued.starts_with(b"HTTP/1.1 100 Continue"),
-        "{:?}",
-        String::from_utf8_lossy(&continued)
-    );
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The stop has begun once serve takes no new connection, and the second
     // comes straight after. (Two that come closer than serve can take the
@@ -1456,6 +1398,24 @@ fn a_second_sigterm_ends_a_slow_stop_with_143() {
     drop(stalled);
 }
 
+/// A stop forced by a second signal removes serve's record, as one that
+/// runs its course does (SV-02).
+#[test]
+fn a_forced_stop_removes_the_record() {
+    let env = Env::new();
+    let serve = env.serve(&[]);
+    let file = env.instance_file();
+    assert!(file.exists(), "serve recorded nothing");
+    let stalled = held(&serve.addr, &serve.csrf());
+    serve.raise(Signal::INT);
+    stop_begun(&serve.addr);
+    serve.raise(Signal::INT);
+    let out = serve.exit_within(Duration::from_secs(4));
+    assert_eq!(out.code, 130, "{out:?}");
+    assert!(!file.exists(), "the record outlived serve");
+    drop(stalled);
+}
+
 /// On a terminal, the status screen's last frame comes after the stop, so
 /// that it shows what the stop logged: the connections it closed, which
 /// the screen alone shows when stderr is the terminal too.
@@ -1526,6 +1486,11 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     assert!(
         ends_within(pid, Duration::from_secs(3)),
         "serve did not end on a stopped terminal"
+    );
+    // The held write puts the terminal back, and does not hold this up.
+    assert!(
+        !env.instance_file().exists(),
+        "the record outlived a forced stop"
     );
     // Ctrl-Q lets the terminal show what was held.
     terminal.type_keys("\x11");
