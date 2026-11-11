@@ -4,6 +4,7 @@
 //! while it runs (AG-16, ST-16). A steady or patient wait keeps collecting
 //! after the first event, so a burst of answers wakes the agent once (AG-18).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::mem;
@@ -625,15 +626,9 @@ fn wait(
             Ok(None) => continue,
             Err(error) => {
                 let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
-                let collecting_now = collecting.is_some();
-                if let Some(turns) = asked.give_up(
-                    error,
-                    collecting_now,
-                    had,
-                    &messages,
-                    listening.as_ref(),
-                    &mut warned,
-                )? {
+                if let Some(turns) =
+                    asked.give_up(error, had, &messages, listening.as_ref(), &mut warned)?
+                {
                     return Ok(turns);
                 }
                 collecting = None;
@@ -689,15 +684,9 @@ fn wait(
         };
         if let Err(error) = asked.rest(&poller, collecting.as_ref(), &mut offline) {
             let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
-            let collecting_now = collecting.is_some();
-            if let Some(turns) = asked.give_up(
-                error,
-                collecting_now,
-                had,
-                &messages,
-                listening.as_ref(),
-                &mut warned,
-            )? {
+            if let Some(turns) =
+                asked.give_up(error, had, &messages, listening.as_ref(), &mut warned)?
+            {
                 return Ok(turns);
             }
             collecting = None;
@@ -805,6 +794,16 @@ impl Asked<'_> {
             // whom it is sent to or who took it, not by the filters.
             if case.kind() == Kind::Message {
                 if let Some(listening) = listening {
+                    if listening.is_unknown(*key) {
+                        let writing = self.far.map(FarLocks::write).transpose()?;
+                        if let Some(turn) = listening.recovered(*key, case) {
+                            if let Some(writing) = &writing {
+                                writing.owe(turn.key);
+                            }
+                            taken.push(turn);
+                            continue;
+                        }
+                    }
                     if self.mood.linger().is_some()
                         && case.state() == State::Sent
                         && listening.is_for(case)
@@ -884,9 +883,9 @@ impl Asked<'_> {
     }
 
     /// The end of a wait whose read of the store, or held poll, failed with
-    /// `error`. A timeout that passed while it was `collecting` gives what
-    /// it `collected` at its last read, and what it can take of the
-    /// `messages` it held (AG-18). With nothing to give, it goes on waiting,
+    /// `error`. A timeout gives what the wait `collected` at its last read,
+    /// and what it can take of the `messages` it held, both empty unless it
+    /// was collecting (AG-18). With nothing to give, it goes on waiting,
     /// `None`, while it has time left: its messages are still sent. At the
     /// timeout it ends with why it could not take them, or with `error`.
     /// Any other failure is `error`: a wait collecting has taken nothing, so
@@ -894,13 +893,12 @@ impl Asked<'_> {
     fn give_up(
         &self,
         error: Error,
-        collecting: bool,
         collected: Vec<Turn>,
         messages: &[(Key, Case)],
         listening: Option<&Listening>,
         warned: &mut HashSet<String>,
     ) -> Result<Option<Vec<Turn>>, Error> {
-        if !(collecting && error.status() == Status::Timeout) {
+        if error.status() != Status::Timeout {
             return Err(error);
         }
         let mut taken = Vec::new();
@@ -967,7 +965,10 @@ impl Asked<'_> {
                 })),
             now,
         );
-        found.urgent()
+        // Only a pickup whose lost answer it found stored is taken before
+        // the print: that message is the wait's already, so it says so now.
+        !taken.is_empty()
+            || found.urgent()
             || !found.open
             || collecting.until(linger) <= now
             || self.deadline.is_some_and(|deadline| deadline <= now)
@@ -1312,6 +1313,21 @@ struct Listening<'a> {
     doing: Option<&'a str>,
     given: HashSet<&'a str>,
     due: Option<Instant>,
+    /// The messages whose pickup got no answer, and whose read back failed
+    /// too: by key, the revision it was written at and why. The next read
+    /// says whether they are this wait's. Those still here when it ends are
+    /// named on stderr.
+    unknown: RefCell<HashMap<Key, (u64, String)>>,
+}
+
+impl Drop for Listening<'_> {
+    fn drop(&mut self) {
+        for (key, (_, why)) in self.unknown.borrow().iter() {
+            ctx::warn(format_args!(
+                "{key}: may be picked up, but not printed: {why}"
+            ));
+        }
+    }
 }
 
 impl<'a> Listening<'a> {
@@ -1338,6 +1354,7 @@ impl<'a> Listening<'a> {
             doing: args.doing.as_deref(),
             given: HashSet::new(),
             due: None,
+            unknown: RefCell::new(HashMap::new()),
         })
     }
 
@@ -1465,6 +1482,34 @@ impl<'a> Listening<'a> {
         })
     }
 
+    /// Whether `now`, a message this wait wrote a pickup for at `revision`,
+    /// is picked up by that write: picked up by this wait's name, in the
+    /// very next event.
+    fn own_pickup(&self, revision: u64, now: &Case) -> bool {
+        now.state() == State::PickedUp && now.revision() == revision + 1 && self.took(now)
+    }
+
+    /// Whether the outcome of this wait's pickup of the message `key` is
+    /// still unknown.
+    fn is_unknown(&self, key: Key) -> bool {
+        self.unknown.borrow().contains_key(&key)
+    }
+
+    /// Settles the unknown pickup of the message `key` by `case`, as a read
+    /// found it: the turn of the message when the pickup was stored, or
+    /// none, the message being as any other, when it was not.
+    fn recovered(&self, key: Key, case: &Case) -> Option<Turn> {
+        let (revision, _) = self.unknown.borrow_mut().remove(&key)?;
+        self.own_pickup(revision, case).then(|| Turn {
+            key,
+            case: case.clone(),
+            // The event before the pickup, as for a take that was answered.
+            at: case.events().iter().rev().nth(1).and_then(Event::at),
+            fresh: true,
+            taken: true,
+        })
+    }
+
     /// Takes the sent message `case`: picks it up at the revision wait read
     /// it at, as this wait's name, and gives the turn of the message as it
     /// is after, or `None` when another session took it first or the human
@@ -1504,18 +1549,22 @@ impl<'a> Listening<'a> {
             Err(error) => {
                 // A pickup stored whose answer was lost is this wait's, and
                 // no later wait takes the message again.
-                if let Ok(now) = ctx.case(key)
-                    && now.state() == State::PickedUp
-                    && now.revision() == case.revision() + 1
-                    && self.took(&now)
-                {
-                    return Ok(Some(Turn {
-                        key,
-                        case: now,
-                        at,
-                        fresh: true,
-                        taken: true,
-                    }));
+                match ctx.case(key) {
+                    Ok(now) if self.own_pickup(case.revision(), &now) => {
+                        return Ok(Some(Turn {
+                            key,
+                            case: now,
+                            at,
+                            fresh: true,
+                            taken: true,
+                        }));
+                    }
+                    Err(_) if error.outcome_unknown() => {
+                        let unknown = (case.revision(), error.to_string());
+                        self.unknown.borrow_mut().insert(key, unknown);
+                        return Err(error);
+                    }
+                    _ => {}
                 }
                 let message = format!("{key}: not taken: {error}");
                 if warned.insert(message.clone()) {
@@ -1832,12 +1881,97 @@ mod tests {
 
     /// A wait with nothing given, as `cases wait --timeout 1s` parses.
     fn timed_args() -> Args {
+        args_of(&["wait", "--timeout", "1s"])
+    }
+
+    /// The `cases wait` arguments `line` parses to.
+    fn args_of(line: &[&str]) -> Args {
         #[derive(clap::Parser)]
         struct Wait {
             #[command(flatten)]
             args: Args,
         }
-        <Wait as clap::Parser>::parse_from(["wait", "--timeout", "1s"]).args
+        <Wait as clap::Parser>::parse_from(line).args
+    }
+
+    /// A message sent to the worker `w9`, at revision 1.
+    fn message_to_w9() -> Case {
+        let mut open = cases_core::Open::default();
+        open.kind = "message".into();
+        open.urgency = "today".into();
+        open.title = "Rebase".into();
+        open.worker = "w9".into();
+        let open = cases_core::Append::new(Author::Human, &Record::Open(open));
+        Case::open(&open, Time::from_unix(1_790_000_000, 0).unwrap(), None)
+            .unwrap()
+            .0
+    }
+
+    /// Writes `record` as `author`.
+    fn write(case: &mut Case, author: Author, record: &Record) {
+        let append = cases_core::Append::new(author, record);
+        case.append(
+            &append,
+            Time::from_unix(1_790_000_100, 0).unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    /// A pickup of a message by `by`.
+    fn pickup_by(by: &str) -> Record {
+        let mut pickup = Pickup::default();
+        pickup.by = by.into();
+        Record::Pickup(pickup)
+    }
+
+    #[test]
+    fn only_the_wait_s_own_next_write_counts_as_its_pickup() {
+        let args = args_of(&["wait", "--pickup", "--worker", "w9", "--by", "w9"]);
+        let listening = Listening::of(&args).unwrap();
+        let mut mine = message_to_w9();
+        write(&mut mine, Author::Agent, &pickup_by("w9"));
+        assert_eq!(mine.revision(), 2);
+        assert!(listening.own_pickup(1, &mine));
+        // Not the next write after the one it made.
+        assert!(!listening.own_pickup(0, &mine));
+        // Picked up by another name.
+        let mut theirs = message_to_w9();
+        write(&mut theirs, Author::Agent, &pickup_by("w8"));
+        assert!(!listening.own_pickup(1, &theirs));
+        // Its next write, but a withdraw, not its pickup.
+        let mut withdrawn = mine.clone();
+        write(
+            &mut withdrawn,
+            Author::Human,
+            &Record::Withdraw(Withdraw::default()),
+        );
+        assert_eq!(withdrawn.revision(), 3);
+        assert!(listening.took(&withdrawn), "{withdrawn:?}");
+        assert!(!listening.own_pickup(2, &withdrawn));
+    }
+
+    #[test]
+    fn a_read_settles_an_unknown_pickup() {
+        let args = args_of(&["wait", "--pickup", "--worker", "w9", "--by", "w9"]);
+        let listening = Listening::of(&args).unwrap();
+        let key = Key::new(7).unwrap();
+        let unknown = |revision: u64| {
+            let why = String::new();
+            listening.unknown.borrow_mut().insert(key, (revision, why));
+        };
+        // Still sent at the revision it wrote at: not stored.
+        unknown(1);
+        assert!(listening.recovered(key, &message_to_w9()).is_none());
+        assert!(!listening.is_unknown(key));
+        // Picked up by it: its own, taken.
+        unknown(1);
+        let mut mine = message_to_w9();
+        write(&mut mine, Author::Agent, &pickup_by("w9"));
+        let turn = listening.recovered(key, &mine).unwrap();
+        assert!(turn.taken && turn.fresh && turn.key == key);
+        assert!(!listening.is_unknown(key));
     }
 
     /// A failure of a forwarded store.
@@ -1971,6 +2105,7 @@ mod tests {
             doing,
             given: HashSet::new(),
             due: None,
+            unknown: RefCell::default(),
         }
     }
 

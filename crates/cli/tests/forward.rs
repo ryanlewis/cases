@@ -1899,6 +1899,87 @@ fn a_pickup_wait_whose_locks_lapse_prints_the_messages_it_took() {
     assert_eq!(lines[1]["state"], "pickedup", "{waited:?}");
 }
 
+/// A pickup wait whose locks lapse while it takes its messages at the print
+/// stops taking, says why, and prints those it took. The rest are still sent
+/// for the next wait (AG-16).
+#[test]
+fn a_pickup_wait_whose_locks_lapse_during_its_takes_prints_those_it_took_and_says_so() {
+    let f = leasing(3000);
+    let ids: Vec<String> = (0..8)
+        .map(|_| {
+            f.ok(&[
+                "message", "--as", "Ryan", "--title", "Rebase", "--to", "lead",
+            ])
+            .trim()
+            .to_owned()
+        })
+        .collect();
+    // Each pickup takes the far side a while, so that the lease lapses
+    // between two of them.
+    rusqlite::Connection::open(&f.far)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER slow_pickup BEFORE INSERT ON events WHEN NEW.event = 'pickup' BEGIN
+                 SELECT (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c
+                     WHERE x < 6000000) SELECT count(*) FROM c);
+             END;",
+        )
+        .unwrap();
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let waiting = spawn(
+        f.env
+            .command([
+                "wait",
+                "--pickup",
+                "--worker",
+                "lead",
+                "--by",
+                "lead",
+                "--mood",
+                "steady",
+                "--timeout",
+                "120s",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let picked = |id: &str| {
+        f.far(&["show", id, "--json"])
+            .contains(r#""state": "pickedup""#)
+    };
+    let until = Instant::now() + Duration::from_secs(30);
+    while !picked(&ids[0]) {
+        assert!(Instant::now() < until, "the wait took no message");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let relay: u32 = fs::read_to_string(f.env.path("relay.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    signal("STOP", relay);
+    let waited: Output = waiting.wait_with_output().unwrap().into();
+    resume(relay);
+    assert_eq!(waited.code, 0, "{waited:?}");
+    assert_eq!(
+        waited
+            .stderr
+            .matches("this wait's locks on the far side may have been let go (")
+            .count(),
+        1,
+        "{waited:?}"
+    );
+    let lines: Vec<_> = waited.stdout.lines().map(json).collect();
+    assert!(!lines.is_empty() && lines.len() < ids.len(), "{waited:?}");
+    for line in &lines {
+        assert_eq!(line["state"], "pickedup", "{waited:?}");
+    }
+    let printed: Vec<&str> = lines.iter().map(|l| l["id"].as_str().unwrap()).collect();
+    for id in ids.iter().filter(|id| !printed.contains(&id.as_str())) {
+        assert!(!picked(id), "{id} picked up and not printed: {waited:?}");
+    }
+}
+
 /// Whether a lock file in `dir` whose name starts with `prefix` names its
 /// holder, as it does once a wait has taken it.
 fn held(dir: &std::path::Path, prefix: &str) -> bool {
