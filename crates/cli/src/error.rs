@@ -15,7 +15,7 @@ pub(crate) enum Status {
     /// Anything else: bad input, an unknown case, a store that fails or is
     /// locked. Exit 1.
     Failure,
-    /// `wait` gave up with nothing to report. Exit 2.
+    /// `wait` gave up because nothing came. Exit 2.
     Timeout,
     /// The case's state does not allow the event, and nothing was written.
     /// Exit 3.
