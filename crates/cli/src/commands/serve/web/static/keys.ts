@@ -108,13 +108,15 @@ function step(by: number): void {
   if (next >= 0 && next < cards.length && next !== at) cards[next]!.click();
 }
 
-export function keys(dialog: () => HTMLDialogElement | null): void {
-  document.addEventListener("keydown", (e) => {
+export function keys(dialog: () => HTMLDialogElement | null): () => void {
+  const listener = (e: KeyboardEvent) => {
     if (e.defaultPrevented || e.isComposing) return;
     const open = document.querySelector("dialog[open]");
     if (sending(e)) send(e, open);
     else if (!(e.metaKey || e.ctrlKey || e.altKey || typing(e.target as HTMLElement | null) || open)) plain(e, dialog);
-  });
+  };
+  document.addEventListener("keydown", listener);
+  return () => document.removeEventListener("keydown", listener);
 }
 
 // Whether `e` is Cmd or Ctrl+Enter, with neither Alt nor Shift.
