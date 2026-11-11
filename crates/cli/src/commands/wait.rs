@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::mem;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -547,7 +548,9 @@ impl First {
 /// after it, is. A wait that listens also records itself as listening, and
 /// wakes on each message it takes.
 ///
-/// A steady or patient `mood` reads on after that first new event, and
+/// A steady or patient `mood` takes the messages sent to it only when it
+/// prints, so that a wait killed while it collects leaves them sent for the
+/// next wait, however it is killed. It reads on after that first new event, and
 /// gives the cases once the first of these comes: its quiet time with no
 /// event new to it, its cap after the first, no case it waits on still open,
 /// the answer to a blocking case or a withdraw among the new events, or the
@@ -597,10 +600,11 @@ fn wait(
     // they are kept here until the wait gives its cases.
     let mut taken: Vec<Turn> = Vec::new();
     let mut collecting: Option<Collecting> = None;
-    // What a lingering wait collected at its last read, beside the
-    // messages it took: what it has, should its timeout pass while the
-    // store cannot be read.
+    // What a lingering wait collected at its last read, and the messages
+    // it means to take when it prints: what it has, should its timeout pass
+    // while the store cannot be read.
     let mut collected: Vec<Turn> = Vec::new();
+    let mut held: Vec<(Key, Case)> = Vec::new();
     loop {
         if let Some(error) = lapsed(far) {
             return stop(taken, error);
@@ -615,7 +619,22 @@ fn wait(
         let cases = match read {
             Ok(Some(cases)) => cases,
             Ok(None) => continue,
-            Err(error) => return failed(error, collecting.is_some(), collected, taken),
+            Err(error) => {
+                let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
+                let collecting_now = collecting.is_some();
+                if let Some(turns) = asked.give_up(
+                    error,
+                    collecting_now,
+                    had,
+                    &messages,
+                    listening.as_ref(),
+                    &mut warned,
+                )? {
+                    return Ok(turns);
+                }
+                collecting = None;
+                continue;
+            }
         };
         warn_once(db, cases, &mut warned, &mut unfolded);
         if let Some(listening) = &mut listening {
@@ -626,22 +645,54 @@ fn wait(
             Ok(found) => found,
             Err(error) => return stop(taken, error),
         };
-        let woke = !taken.is_empty() || found.woke();
+        let woke = !taken.is_empty() || found.woke() || !found.pending.is_empty();
+        let mut gone = !woke;
         if woke && asked.done(&mut collecting, &found, &taken) {
-            return Ok(found.give(taken));
+            let failure = asked.take_pending(
+                listening.as_ref(),
+                found.pending.iter().copied(),
+                &mut taken,
+                &mut warned,
+            );
+            if !taken.is_empty() || found.woke() {
+                return Ok(found.give(taken));
+            }
+            if let Some(error) = failure.filter(|_| asked.past_deadline()) {
+                return Err(error);
+            }
+            gone = true;
         }
         // What it was collecting has gone, such as a case another wait
-        // picked up: it waits as it did before the first event.
-        if !woke {
+        // picked up or a message another session took first: it waits as it
+        // did before the first event.
+        if gone {
             collecting = None;
         }
+        held = if collecting.is_some() {
+            let pending = found.pending.iter();
+            pending.map(|&(key, case)| (key, case.clone())).collect()
+        } else {
+            Vec::new()
+        };
         collected = if collecting.is_some() {
             found.give(Vec::new())
         } else {
             Vec::new()
         };
         if let Err(error) = asked.rest(&poller, collecting.as_ref(), &mut offline) {
-            return failed(error, collecting.is_some(), collected, taken);
+            let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
+            let collecting_now = collecting.is_some();
+            if let Some(turns) = asked.give_up(
+                error,
+                collecting_now,
+                had,
+                &messages,
+                listening.as_ref(),
+                &mut warned,
+            )? {
+                return Ok(turns);
+            }
+            collecting = None;
         }
     }
 }
@@ -675,6 +726,9 @@ struct Found<'c> {
     /// The messages it took that the human has withdrawn since, while the
     /// withdraw is new (AG-04).
     withdrawn: Vec<Turn>,
+    /// The sent messages for a lingering wait, which it takes only when it
+    /// prints, so that one killed while it collects has taken nothing.
+    pending: Vec<(Key, &'c Case)>,
     /// Whether a case this wait waits on is still open, so that another
     /// answer can come.
     open: bool,
@@ -733,6 +787,7 @@ impl Asked<'_> {
         let mut found = Found {
             turns: Vec::new(),
             withdrawn: Vec::new(),
+            pending: Vec::new(),
             open: false,
         };
         for (key, case) in cases {
@@ -741,6 +796,13 @@ impl Asked<'_> {
             // whom it is sent to or who took it, not by the filters.
             if case.kind() == Kind::Message {
                 if let Some(listening) = listening {
+                    if self.mood.linger().is_some()
+                        && case.state() == State::Sent
+                        && listening.is_for(case)
+                    {
+                        found.pending.push((*key, case));
+                        continue;
+                    }
                     let writing = self.far.map(FarLocks::write).transpose()?;
                     if let Some(turn) =
                         listening.message(self.ctx, first, self.since, *key, case, warned)
@@ -766,6 +828,77 @@ impl Asked<'_> {
             }
         }
         Ok(found)
+    }
+
+    /// Takes the messages `pending` for a lingering wait that is printing,
+    /// each at the revision it was read at, adding those it took to `taken`.
+    /// One another session took first, or the human edited or withdrew since
+    /// the read, is passed over. Gives why a message could not be taken,
+    /// when the store or the far side's locks would not have it, for the
+    /// message to stay sent for the next wait.
+    fn take_pending<'c>(
+        &self,
+        listening: Option<&Listening>,
+        pending: impl IntoIterator<Item = (Key, &'c Case)>,
+        taken: &mut Vec<Turn>,
+        warned: &mut HashSet<String>,
+    ) -> Option<Error> {
+        let listening = listening?;
+        let mut failure = None;
+        for (key, case) in pending {
+            let writing = match self.far.map(FarLocks::write).transpose() {
+                Ok(writing) => writing,
+                Err(error) => return Some(error.into()),
+            };
+            match listening.take(self.ctx, key, case, warned) {
+                Ok(Some(turn)) => {
+                    if let Some(writing) = &writing {
+                        writing.owe(turn.key);
+                    }
+                    taken.push(turn);
+                }
+                Ok(None) => {}
+                Err(error) => failure = Some(error),
+            }
+        }
+        failure
+    }
+
+    /// Whether the timeout has passed, if there is one.
+    fn past_deadline(&self) -> bool {
+        left(self.deadline).is_some_and(|left| left.is_zero())
+    }
+
+    /// The end of a wait whose read of the store, or held poll, failed with
+    /// `error`. A timeout that passed while it was `collecting` gives what
+    /// it `collected` at its last read, and what it can take of the
+    /// `messages` it held (AG-18). With nothing to give, it goes on waiting,
+    /// `None`, while it has time left: its messages are still sent. At the
+    /// timeout it ends with why it could not take them, or with `error`.
+    /// Any other failure is `error`: a wait collecting has taken nothing, so
+    /// nothing is lost, and the next wait finds the same cases.
+    fn give_up(
+        &self,
+        error: Error,
+        collecting: bool,
+        collected: Vec<Turn>,
+        messages: &[(Key, Case)],
+        listening: Option<&Listening>,
+        warned: &mut HashSet<String>,
+    ) -> Result<Option<Vec<Turn>>, Error> {
+        if !(collecting && error.status() == Status::Timeout) {
+            return Err(error);
+        }
+        let mut taken = Vec::new();
+        let pending = messages.iter().map(|(key, case)| (*key, case));
+        let failure = self.take_pending(listening, pending, &mut taken, warned);
+        if !collected.is_empty() || !taken.is_empty() {
+            return Ok(Some(collected.into_iter().chain(taken).collect()));
+        }
+        if self.past_deadline() {
+            return Err(failure.unwrap_or(error));
+        }
+        Ok(None)
     }
 
     /// Whether `case`, by its `key`, is one this wait waits on: one its
@@ -813,7 +946,11 @@ impl Asked<'_> {
                 .iter()
                 .filter(|&&(.., fresh)| fresh)
                 .map(|&(key, case, event, _)| ((key, case.opened_at()), event.seq))
-                .chain(taken.iter().chain(&found.withdrawn).map(seen)),
+                .chain(taken.iter().chain(&found.withdrawn).map(seen))
+                .chain(found.pending.iter().map(|&(key, case)| {
+                    let seq = case.events().last().map_or(0, |event| event.seq);
+                    ((key, case.opened_at()), seq)
+                })),
             now,
         );
         found.urgent()
@@ -953,30 +1090,6 @@ fn stop(taken: Vec<Turn>, error: Failure) -> Result<Vec<Turn>, Error> {
     }
     ctx::warn(format_args!("{error}"));
     Ok(taken)
-}
-
-/// The end of a wait whose read of the store, or held poll, failed with
-/// `error`. A timeout that passed while it was `collecting` gives what it
-/// `collected` at its last read, with the messages it `taken` (AG-18). Any
-/// other failure after it took messages, which no later wait takes again,
-/// gives them, with what it collected so that its `next_since` passes no
-/// event it has not printed, and says the failure on stderr (AG-16), as
-/// [`stop`] does; with none taken, it is `error`.
-fn failed(
-    error: Error,
-    collecting: bool,
-    collected: Vec<Turn>,
-    taken: Vec<Turn>,
-) -> Result<Vec<Turn>, Error> {
-    if !(collecting && error.status() == Status::Timeout) {
-        if taken.is_empty() {
-            return Err(error);
-        }
-        ctx::warn(format_args!("{error}"));
-    }
-    // What it collected holds no message it took: a withdraw of one is
-    // urgent, and ended the wait at that read.
-    Ok(collected.into_iter().chain(taken).collect())
 }
 
 /// The error of a wait whose timeout passed with nothing to report.
@@ -1271,7 +1384,7 @@ impl<'a> Listening<'a> {
         warned: &mut HashSet<String>,
     ) -> Option<Turn> {
         match case.state() {
-            State::Sent if self.is_for(case) => self.take(ctx, key, case, warned),
+            State::Sent if self.is_for(case) => self.take(ctx, key, case, warned).unwrap_or(None),
             State::Withdrawn if self.took(case) => {
                 let event = agent_turn(case)?;
                 let fresh = !first.events.contains(&((key, case.opened_at()), event.seq))
@@ -1320,7 +1433,17 @@ impl<'a> Listening<'a> {
     /// is said, on stderr, and once in the wait, in `warned`: a store that
     /// cannot be written would otherwise say it at every read. An edited
     /// message is taken at its new revision on the next read.
-    fn take(&self, ctx: &Ctx, key: Key, case: &Case, warned: &mut HashSet<String>) -> Option<Turn> {
+    ///
+    /// # Errors
+    ///
+    /// That failure of another sort, the message still being sent.
+    fn take(
+        &self,
+        ctx: &Ctx,
+        key: Key,
+        case: &Case,
+        warned: &mut HashSet<String>,
+    ) -> Result<Option<Turn>, Error> {
         let at = case.events().last().and_then(Event::at);
         let mut pickup = Pickup::default();
         self.by.clone_into(&mut pickup.by);
@@ -1330,21 +1453,20 @@ impl<'a> Listening<'a> {
         let taken = write::append(ctx, key, Author::Agent, &record, &writer, revision);
         thread::sleep(WRITE_PAUSE);
         match taken {
-            Ok(after) => Some(Turn {
+            Ok(after) => Ok(Some(Turn {
                 key,
                 case: after,
                 at,
                 fresh: true,
                 taken: true,
-            }),
+            })),
+            Err(error) if matches!(error.status(), Status::Stale | Status::Transition) => Ok(None),
             Err(error) => {
                 let message = format!("{key}: not taken: {error}");
-                if !matches!(error.status(), Status::Stale | Status::Transition)
-                    && warned.insert(message.clone())
-                {
+                if warned.insert(message.clone()) {
                     ctx::warn(message);
                 }
-                None
+                Err(error)
             }
         }
     }

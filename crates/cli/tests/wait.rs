@@ -1891,55 +1891,48 @@ fn a_listening_wait_that_cannot_print_names_each_message_it_took() {
     assert_eq!(out.stderr.lines().count(), 2, "{out:?}");
 }
 
-/// Waits until the case `id` is picked up, as a wait that takes it does.
-fn until_picked_up(env: &Env, id: &str) {
-    let deadline = Instant::now() + PATIENCE;
-    while env.case(id).state().as_str() != "pickedup" {
-        assert!(Instant::now() < deadline, "{id} was not picked up");
-        thread::sleep(Duration::from_millis(50));
+/// A steady wait killed during its quiet time, however it is killed, has
+/// taken nothing: the message is still sent, and the next wait takes it.
+#[test]
+fn a_wait_killed_while_it_collects_leaves_its_message_for_the_next_wait() {
+    for signal in ["TERM", "KILL"] {
+        let env = Env::new();
+        // A case it waits on still open, so that it lingers on the message.
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Left open",
+            "--worker",
+            "w9",
+        ]);
+        let marker = marker(&env);
+        let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+        let mut waiting = Waiting::after_first_read(&env, &marker, &args);
+        let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+        // A read of the store, every second, has found it.
+        thread::sleep(Duration::from_millis(2500));
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), waiting.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{signal}");
+        waiting.child.wait().unwrap();
+        assert_eq!(waiting.stdout.join().unwrap(), "", "{signal}");
+
+        let lines = woke(&wait(&env, &listening("w9", &[])));
+        assert_eq!(ids(&lines), [sent.as_str()], "{signal}");
+        assert_eq!(lines[0]["state"], "pickedup", "{signal}");
     }
 }
 
-/// A steady wait that took a message and then fails to read the store, as
-/// it collects, still prints the message it took, and says the failure on
-/// stderr: no later wait takes it again (AG-16).
+/// A steady wait that fails to read the store as it collects has taken
+/// nothing: it ends with the failure, exit 1, and prints nothing, so no
+/// `next_since` passes what it held.
 #[test]
-fn a_steady_wait_that_fails_after_taking_a_message_prints_it() {
-    let env = Env::new();
-    // A case it waits on still open, so that it lingers after the message.
-    env.open(&[
-        "--kind",
-        "fyi",
-        "--urgency",
-        "today",
-        "--title",
-        "Left open",
-        "--worker",
-        "w9",
-    ]);
-    let marker = marker(&env);
-    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
-    let waiting = Waiting::after_first_read(&env, &marker, &args);
-    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
-    until_picked_up(&env, &sent);
-
-    spoil_store(&env);
-    let out = waiting.finish();
-    let lines = woke(&out);
-    assert_eq!(ids(&lines), [sent.as_str()], "{out:?}");
-    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
-    assert_eq!(
-        without(&out.stderr, &marker),
-        "warning: file is not a database\n",
-        "{out:?}"
-    );
-}
-
-/// A steady wait that collected an answer, took a message and then fails
-/// to read the store prints both: printing the message alone would move
-/// its `next_since` past the answer, which a later wait would then miss.
-#[test]
-fn a_steady_wait_that_fails_after_taking_a_message_prints_what_it_collected() {
+fn a_steady_wait_that_cannot_read_the_store_as_it_collects_takes_nothing() {
     let env = Env::new();
     let open = |title: &str| {
         env.open(&[
@@ -1959,21 +1952,43 @@ fn a_steady_wait_that_fails_after_taking_a_message_prints_what_it_collected() {
     let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
     let waiting = Waiting::after_first_read(&env, &marker, &args);
     run(&env, "answer", &answered, &["--ack"]);
-    thread::sleep(Duration::from_millis(1500));
     let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
-    until_picked_up(&env, &sent);
+    thread::sleep(Duration::from_millis(2500));
+    assert_eq!(env.case(&sent).state().as_str(), "sent");
 
     spoil_store(&env);
     let out = waiting.finish();
-    let lines = woke(&out);
-    assert_eq!(ids(&lines), [answered.as_str(), sent.as_str()], "{out:?}");
-    // The store cannot take the answer's pickup: it is printed as read.
-    assert_eq!(lines[0]["state"], "answered", "{out:?}");
-    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
-    assert!(
-        without(&out.stderr, &marker).starts_with("warning: file is not a database\n"),
-        "{out:?}"
-    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(out.stderr.contains("file is not a database"), "{out:?}");
+}
+
+/// A message another session takes while a steady wait holds it is that
+/// session's: the wait does not print it, and goes on to its timeout.
+#[test]
+fn a_message_taken_by_another_session_while_a_steady_wait_collects_is_not_printed() {
+    let env = Env::new();
+    env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "5s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+    thread::sleep(Duration::from_millis(1500));
+    assert_eq!(env.case(&sent).state().as_str(), "sent");
+    run(&env, "pickup", &sent, &["--by", "someone-else"]);
+
+    let out = waiting.finish();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
 }
 
 /// A message waits until a wait takes it: one sent before the wait began is

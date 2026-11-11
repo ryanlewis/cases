@@ -1282,11 +1282,11 @@ fn a_steady_remote_wait_that_cannot_read_at_its_timeout_prints_what_it_has() {
     assert_eq!(lines[0]["id"], answered.as_str());
 }
 
-/// A steady wait that took a message, and whose server then fails until its
-/// timeout, still prints the message it took, exit 0: no later wait takes
-/// it again (AG-16, AG-18).
+/// A steady wait that holds a message, and whose server then fails until its
+/// timeout, cannot take it: it ends with the failure, exit 1, and the message
+/// is still sent for the next wait (AG-16, AG-18).
 #[test]
-fn a_steady_remote_wait_that_took_a_message_prints_it_when_it_cannot_read_at_its_timeout() {
+fn a_steady_remote_wait_that_cannot_take_its_message_at_its_timeout_leaves_it_sent() {
     let r = Remote::new(&["me"]);
     let store = r.ids[0].as_str();
     // A case it waits on still open, so that it lingers after the message.
@@ -1329,22 +1329,16 @@ fn a_steady_remote_wait_that_took_a_message_prints_it_when_it_cannot_read_at_its
         "Then run the tests.",
     ]);
     let sent = sent.trim();
-    // Its send, then the wait's pickup.
-    let taken = || {
-        let rows = r.fake.db(store).rows(&common::key(sent)).unwrap();
-        rows.is_some_and(|rows| rows.len() == 2)
-    };
-    assert!(soon(Duration::from_secs(10), taken));
-    // Every request from here on fails, until well past its timeout.
+    // Time for the read it wakes to; every request after that fails.
+    thread::sleep(Duration::from_secs(2));
     for _ in 0..50 {
         r.fake.fault(Fault::Status(503));
     }
     let out = Output::from(wait.wait_with_output().unwrap());
-    assert_eq!(out.code, 0, "{out:?}");
-    let lines: Vec<_> = out.stdout.lines().map(json).collect();
-    assert_eq!(lines.len(), 1, "{out:?}");
-    assert_eq!(lines[0]["id"], sent, "{out:?}");
-    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    let rows = r.fake.db(store).rows(&common::key(sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
 }
 
 /// A steady wait on a remote store holds the poll while it collects, and
