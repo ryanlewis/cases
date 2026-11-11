@@ -853,7 +853,14 @@ impl Asked<'_> {
         warned: &mut HashSet<String>,
     ) -> Option<Error> {
         let listening = listening?;
+        let mut unsettled = None;
         for (key, case) in pending {
+            // Its pickup may be stored: taking it again would call it not
+            // taken. The next read settles it.
+            if let Some((_, why)) = listening.unknown.borrow().get(&key) {
+                unsettled = Some(Error::new(why.clone()));
+                continue;
+            }
             let writing = match self.far.map(FarLocks::write).transpose() {
                 Ok(writing) => writing,
                 Err(error) => {
@@ -874,7 +881,7 @@ impl Asked<'_> {
                 Err(error) => return Some(error),
             }
         }
-        None
+        unsettled
     }
 
     /// Whether the timeout has passed, if there is one.
