@@ -682,7 +682,8 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
 
 /// A far side whose `cases` stops being runnable (exit 126) is ridden out
 /// as one out of reach is, until the wait's timeout: a wait does not tell
-/// it from a connection lost.
+/// it from a connection lost. Its last try having failed, the wait then
+/// ends with that failure, exit 1, not as a timeout.
 #[test]
 fn a_forwarded_wait_rides_out_a_far_side_that_exits_126_until_its_timeout() {
     // The stand-in ssh as ever, but exiting 126 once the file `.cut` is
@@ -726,8 +727,14 @@ fn a_forwarded_wait_rides_out_a_far_side_that_exits_126_until_its_timeout() {
         signal("KILL", pid);
     }
     let waited: Output = wait.wait_with_output().unwrap().into();
-    assert_eq!(waited.code, 2, "{waited:?}");
-    assert!(waited.stderr.contains("exit 126"), "{waited:?}");
+    assert_eq!(waited.code, 1, "{waited:?}");
+    assert_eq!(waited.stdout, "", "{waited:?}");
+    assert!(
+        waited
+            .stderr
+            .ends_with("(exit 126): cases: Permission denied\n"),
+        "{waited:?}"
+    );
     assert!(
         waited.stderr.contains("trying again until the timeout"),
         "{waited:?}"
