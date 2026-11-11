@@ -157,6 +157,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         started,
         terminal,
         open: terminal && !no_open,
+        recorded: recorded.then(|| (store.clone(), pid)),
         // The binary as it is now, before serve says it is up: a test that
         // replaces it once serve is up must find it watched.
         binary: super::service::executable().ok().and_then(Binary::new),
@@ -324,6 +325,9 @@ struct Serving<'a> {
     open: bool,
     /// The binary serve runs, watched for an upgrade.
     binary: Option<Binary>,
+    /// The store and process of the instance file, when serve wrote one:
+    /// what a stop forced by a signal removes as it exits.
+    recorded: Option<(PathBuf, i32)>,
 }
 
 impl Serving<'_> {
@@ -379,7 +383,7 @@ impl Serving<'_> {
         let (quit, mut quits) = mpsc::unbounded_channel();
         let begun = Arc::new(AtomicBool::new(false));
         let forced: Restore = Arc::default();
-        let signals = signals(Arc::clone(&begun), Arc::clone(&forced))?;
+        let signals = signals(Arc::clone(&begun), Arc::clone(&forced), self.recorded)?;
         if self.terminal {
             if self.open
                 && let Err(error) = browser::open(&self.url)
@@ -518,13 +522,17 @@ type Restore = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 /// Once serve is stopping (`begun`), a second Ctrl-C or SIGTERM ends it at
 /// once, as the default would, rather than wait out the stop, which waits
 /// for the writes in flight, each of which can wait 5 s on the store's
-/// lock. `restore` puts the terminal back first. The signals are caught on
-/// a thread and a runtime of their own from now until serve exits, so that
-/// a second signal counts however soon it follows the first, and while
-/// serve's runtime, as it drops, waits for those writes and runs nothing
-/// else.
+/// lock. It removes the instance file that `recorded` names, and `restore`
+/// puts the terminal back, first. The signals are caught on a thread and a
+/// runtime of their own from now until serve exits, so that a second signal
+/// counts however soon it follows the first, and while serve's runtime, as
+/// it drops, waits for those writes and runs nothing else.
 #[cfg(unix)]
-fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Output = ()>, Error> {
+fn signals(
+    begun: Arc<AtomicBool>,
+    restore: Restore,
+    recorded: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     let (first, stop) = tokio::sync::oneshot::channel();
     let (ready, caught) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -544,7 +552,7 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
                 if begins_stop(&begun, &mut first) {
                     continue;
                 }
-                force_exit(code, &restore);
+                force_exit(code, recorded.as_ref(), &restore);
             }
         });
     });
@@ -587,15 +595,19 @@ fn begins_stop(begun: &AtomicBool, first: &mut Option<tokio::sync::oneshot::Send
     !begun.swap(true, Ordering::SeqCst) && first.take().is_some_and(|first| first.send(()).is_ok())
 }
 
-/// Ends serve at once with `code`, after `restore` puts the terminal back.
-/// A terminal whose output is stopped (Ctrl-S) holds the write that puts
-/// it back: serve exits after a moment whatever it does.
+/// Ends serve at once with `code`, after it removes the instance file that
+/// `recorded` names and `restore` puts the terminal back. A terminal whose
+/// output is stopped (Ctrl-S) holds the write that puts it back, so the
+/// file goes first: serve exits after a moment whatever the write does.
 #[cfg(unix)]
-fn force_exit(code: i32, restore: &Restore) -> ! {
+fn force_exit(code: i32, recorded: Option<&(PathBuf, i32)>, restore: &Restore) -> ! {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
         std::process::exit(code);
     });
+    if let Some((store, pid)) = recorded {
+        let _ = instance::remove(store, *pid);
+    }
     let restore = restore
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -607,7 +619,11 @@ fn force_exit(code: i32, restore: &Restore) -> ! {
 }
 
 #[cfg(not(unix))]
-fn signals(_: Arc<AtomicBool>, _: Restore) -> Result<impl Future<Output = ()>, Error> {
+fn signals(
+    _: Arc<AtomicBool>,
+    _: Restore,
+    _: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     Ok(async {
         let _ = tokio::signal::ctrl_c().await;
     })
