@@ -91,6 +91,9 @@ pub(crate) enum Fault {
     /// The connection closes with no answer, and the request is applied
     /// just before the next write of an event.
     Deferred,
+    /// The request is applied, and its answer is that of applying it again:
+    /// a write that some other session with the same name got in first.
+    Twice,
     /// 200, with a body that is not the API's.
     Garbage,
     /// 200, with this body.
@@ -623,6 +626,10 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
             thread::sleep(wait);
             handle(state, addr, &request);
             return;
+        }
+        Some(Fault::Twice) => {
+            handle(state, addr, &request);
+            handle(state, addr, &request)
         }
         Some(Fault::Deferred) => {
             *lock(&state.deferred) = Some(request);

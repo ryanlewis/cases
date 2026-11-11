@@ -2272,3 +2272,84 @@ fn an_unknown_pickup_of_a_message_deleted_since_ends_at_the_timeout() {
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stderr.contains("may be picked up"), "{out:?}");
 }
+
+fn event_posts(r: &Remote) -> usize {
+    let lines = r.fake.lines();
+    let posts = lines
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"));
+    posts.count()
+}
+
+/// Another session with the same `--by` stores the pickup just before this
+/// wait's, which is refused as stale, with no unknown pickup before it: this
+/// wait does not print the message.
+#[test]
+fn a_stale_refusal_with_no_unknown_before_it_prints_nothing() {
+    let (r, sent, wait) = holding_messages("14s", &["One"]);
+    r.fake.fault_event(Fault::Twice);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent[0])).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "{out:?}");
+    assert_eq!(event_posts(&r), 1, "{out:?}");
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "printed twice: {out:?}");
+}
+
+/// A pickup really not stored, whose read back answers `sent`: taken again
+/// and printed once.
+#[test]
+fn a_steady_pickup_not_stored_with_a_read_back_that_works_is_printed_once() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Hangup);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent[0])).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// The same, with the read back failing too.
+#[test]
+fn a_steady_pickup_not_stored_with_a_read_back_that_fails_is_printed_once() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Hangup);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
+}
+
+/// The same on a default-mood wait.
+#[test]
+fn an_eager_pickup_not_stored_with_a_read_back_that_works_is_printed_once() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "20s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Hangup);
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "One", "--to", "w9",
+    ]);
+    let sent = sent.trim();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(sent), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
+}
