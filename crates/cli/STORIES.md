@@ -411,7 +411,7 @@ Tally: 434 criteria, 368 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 
 ## ST-01 Keep every event as written (keep)
 
-- Each event has case id, seq, author, event, at, data as given: `crates/store-sqlite/tests/write.rs::a_written_record_has_its_events_fields_and_time`, `appends_number_events_in_order`, `the_at_column_is_the_record_s_time_in_utc`, `crates/store-sqlite/tests/store.rs::the_schema`, `crates/store-sqlite/tests/vectors.rs`
+- Each event has case id, seq, author, event, at, data as given: `crates/store-sqlite/tests/write.rs::a_written_record_has_its_events_fields_and_time`, `a_row_reads_back_as_it_was_written`, `appends_number_events_in_order`, `the_at_column_is_the_record_s_time_in_utc`, `crates/store-sqlite/tests/store.rs::the_schema`, `crates/store-sqlite/tests/vectors.rs`
 - Seq from 1 per case, no gaps or repeats from the writer: `crates/store-sqlite/tests/write.rs::concurrent_appends_take_distinct_seqs`, `two_writers_on_one_file_take_turns`, `two_processes_on_one_file_take_turns`
 - The store-wide change counter only goes up, even after prune: `crates/store-sqlite/tests/archive.rs::the_change_only_goes_up`, `crates/store-sqlite/tests/list.rs::the_poller_sees_a_case_archived_and_another_put_back`
 - State is never stored; it is the fold of the events: `crates/store-sqlite/tests/store.rs::the_store_contract`
