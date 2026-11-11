@@ -321,14 +321,11 @@ impl Manager {
         }
         let args = ["--user", "is-active", UNIT];
         let ran = (self.run)(self.system.program(), &args)?;
-        match ran.code {
-            Some(0) => return Ok(true),
-            None => return Err(self.failed(&args, &ran)),
-            Some(_) => {}
-        }
-        match ran.output.trim() {
-            "activating" => Ok(true),
-            "inactive" | "failed" | "deactivating" | "maintenance" | "unknown" => Ok(false),
+        match (ran.code, ran.output.trim()) {
+            (Some(0), _) | (Some(_), "activating") => Ok(true),
+            (Some(_), "inactive" | "failed" | "deactivating" | "maintenance" | "unknown") => {
+                Ok(false)
+            }
             _ => Err(self.failed(&args, &ran)),
         }
     }
@@ -1062,6 +1059,23 @@ WantedBy=default.target
             &[("systemctl --user is-active", 3, "activating\n")],
         );
         assert!(manager.active().unwrap());
+    }
+
+    /// Each state `systemctl is-active` gives for a unit not running, with
+    /// the status it gives then.
+    #[test]
+    fn a_unit_in_a_stopped_state_is_not_active() {
+        for state in [
+            "inactive\n",
+            "failed\n",
+            "deactivating\n",
+            "maintenance\n",
+            "unknown\n",
+        ] {
+            let (manager, _, _dir) =
+                fake_manager(System::Systemd, &[("systemctl --user is-active", 3, state)]);
+            assert!(!manager.active().unwrap(), "{state:?}");
+        }
     }
 
     /// Ways the query can fail without saying whether the service is there:

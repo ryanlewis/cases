@@ -300,21 +300,11 @@ export interface Sending {
   onCase: (current: Case) => void;
 }
 
-// Sends `what` of `body`, once: a send while one is out does nothing,
-// until it is answered or 10 s have passed (IN-09). `sending` holds the
-// send that is out, and only that send lets it go: one slower than 10 s
-// does not, when it comes back, let go of the send that went after it.
-export async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase }: Sending): Promise<void> {
-  if (sending.current) return;
-  const self = {};
-  sending.current = self;
-  const done = () => {
-    if (sending.current === self) sending.current = null;
-  };
-  const release = setTimeout(done, 10000);
-  const sent: Write = { revision: drawn.revision, ...body };
-  if (what === "answer") sent.answer = { ...body.answer, amend_seq: drawn.amendSeq };
-  try {
+// Sends `what` of `body`, once (api.once, IN-09).
+export function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, sending, onSent, onCase }: Sending): Promise<void> {
+  return api.once(sending, async () => {
+    const sent: Write = { revision: drawn.revision, ...body };
+    if (what === "answer") sent.answer = { ...body.answer, amend_seq: drawn.amendSeq };
     const { after, refusal, current } = await api.send(id, what, sent);
     if (after) {
       setRefusal("");
@@ -334,10 +324,7 @@ export async function sendOnce({ id, what, body, drawn, setDrawn, setRefusal, se
       setDrawn((was) => (current.revision >= was.revision ? drawnFrom(current) : was));
       onCase(current);
     }
-  } finally {
-    clearTimeout(release);
-    done();
-  }
+  });
 }
 
 // The head of case `c` under its title: a briefing's landing, a message's addressee, what

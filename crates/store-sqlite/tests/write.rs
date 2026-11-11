@@ -279,7 +279,9 @@ fn appending_to_a_missing_case() {
 }
 
 /// A case whose last row has the highest seq SQLite holds has no seq left
-/// for another: the append is refused as damage, and stores nothing.
+/// for another: the append is refused as damage, and stores nothing. The core
+/// would take that row, as its own limit is `u64::MAX`, past which it refuses
+/// the append as a transition; so the two limits fail differently.
 #[test]
 fn a_case_with_no_seq_left_for_another_row_is_damaged() {
     let (_dir, db) = scratch();
@@ -298,6 +300,42 @@ fn a_case_with_no_seq_left_for_another_row_is_damaged() {
         "{outcome:?}"
     );
     assert_eq!(stored(&db, key), before);
+}
+
+/// The insert's encoding and the read's decoding agree: `data` goes in as
+/// the bytes of the record, in a BLOB, `author` and `event` as text, and each
+/// comes back as it was held, with non-ASCII and escaped characters in the
+/// record.
+#[test]
+fn a_row_reads_back_as_it_was_written() {
+    let (_dir, db) = scratch();
+    let (key, _) = create(&db, "fyi");
+    let note = agent_event("note", r#"{"body": "café 🦀 \"quoted\" \\ ﷽"}"#);
+    let rows = db.append_rows(&key, &note, &unnamed(), None).unwrap();
+    assert_eq!(rows, db.rows(&key).unwrap().unwrap());
+    let written = rows.last().unwrap();
+    assert!(
+        written.data.contains(r#""body":"café 🦀 \"quoted\" \\ ﷽""#),
+        "{}",
+        written.data
+    );
+    let stored: (String, String, String, Vec<u8>) = sql(&db)
+        .query_row(
+            "SELECT typeof(data), author, event, data FROM events
+             WHERE case_key = ?1 AND seq = 2",
+            [common::key_sql(key)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stored,
+        (
+            "blob".to_owned(),
+            written.author.clone(),
+            written.event.clone(),
+            written.data.clone().into_bytes(),
+        )
+    );
 }
 
 /// Checks that the case's rows are numbered 1 to `n` with no gap and none
