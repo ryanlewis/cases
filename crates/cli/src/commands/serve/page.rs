@@ -84,6 +84,11 @@ const FILES: &[File] = &[
         bytes: include_bytes!(concat!(env!("OUT_DIR"), "/static/code.js")),
     },
     File {
+        path: "backdrop.js",
+        kind: JS,
+        bytes: include_bytes!(concat!(env!("OUT_DIR"), "/static/backdrop.js")),
+    },
+    File {
         path: "compose.js",
         kind: JS,
         bytes: include_bytes!(concat!(env!("OUT_DIR"), "/static/compose.js")),
