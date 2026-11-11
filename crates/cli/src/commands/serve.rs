@@ -473,11 +473,13 @@ fn take_keys(terminal: bool, quit: mpsc::UnboundedSender<()>) -> Option<Arc<term
 /// and the keys it took (`raw`).
 fn forced_restore(screen: bool, raw: Option<Arc<term::Keys>>) -> Box<dyn FnOnce() + Send> {
     Box::new(move || {
-        if screen {
-            show(Screen::END);
-        }
+        // The keys first: a terminal whose output is stopped (Ctrl-S) holds
+        // the write of the screen's end, and serve exits while it waits.
         if let Some(raw) = &raw {
             raw.restore();
+        }
+        if screen {
+            show(Screen::END);
         }
     })
 }
@@ -597,7 +599,7 @@ fn begins_stop(begun: &AtomicBool, first: &mut Option<tokio::sync::oneshot::Send
 
 /// Ends serve at once with `code`, after it removes the instance file that
 /// `recorded` names and `restore` puts the terminal back. A terminal whose
-/// output is stopped (Ctrl-S) holds the write that puts it back, so the
+/// output is stopped (Ctrl-S) holds the write that shows the cursor, so the
 /// file goes first: serve exits after a moment whatever the write does.
 #[cfg(unix)]
 fn force_exit(code: i32, recorded: Option<&(PathBuf, i32)>, restore: &Restore) -> ! {
