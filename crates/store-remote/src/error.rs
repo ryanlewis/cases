@@ -48,10 +48,11 @@ pub enum Error {
         /// What the far side said, naming the wait that holds it.
         message: String,
     },
-    /// What a forwarded store's far side held on a lease for a
+    /// What a forwarded store's far side held for a
     /// [`Hold`](crate::Hold), such as a pickup wait's locks, may have been
-    /// let go: a renewal failed or was not answered in time, or the far side
-    /// said the lease had run out (409 `lapsed`).
+    /// let go: a renewal failed or was not answered in time, the far side
+    /// said the lease had run out (409 `lapsed`), or the connection it was
+    /// held over ended.
     Lapsed {
         /// Why.
         reason: String,

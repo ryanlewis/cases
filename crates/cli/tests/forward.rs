@@ -221,7 +221,10 @@ fn a_case_goes_round_over_ssh() {
     let runs = f.ssh_runs();
     assert!(!runs.is_empty());
     for run in &runs {
-        assert_eq!(run, "-T -o BatchMode=yes -- devbox cases dial-stdio");
+        assert_eq!(
+            run,
+            "-T -o BatchMode=yes -o ConnectTimeout=10 -- devbox cases dial-stdio"
+        );
     }
 }
 
@@ -447,7 +450,7 @@ fn a_user_and_a_port_go_to_ssh() {
     f.ok(&["list"]);
     assert_eq!(
         f.ssh_runs(),
-        ["-T -o BatchMode=yes -p 2222 -- ryan@devbox cases dial-stdio"]
+        ["-T -o BatchMode=yes -o ConnectTimeout=10 -p 2222 -- ryan@devbox cases dial-stdio"]
     );
 }
 
@@ -675,6 +678,69 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
         "warning: could not reach the store on ssh://devbox: ssh failed (exit 255); the wait \
          goes on, trying again until the timeout\n"
     );
+}
+
+/// A far side whose `cases` stops being runnable (exit 126) is ridden out
+/// as one out of reach is, until the wait's timeout: a wait does not tell
+/// it from a connection lost. Its last try having failed, the wait then
+/// ends with that failure, exit 1, not as a timeout.
+#[test]
+fn a_forwarded_wait_rides_out_a_far_side_that_exits_126_until_its_timeout() {
+    // The stand-in ssh as ever, but exiting 126 once the file `.cut` is
+    // there; its relay copies what the wait sends to `.sent`, and writes
+    // the far side's pid to `.far`.
+    let script = SSH
+        .replacen(
+            "echo \"$*\" >> \"@LOG@\"\n",
+            "echo \"$*\" >> \"@LOG@\"\n[ -e \"@LOG@.cut\" ] && { echo 'cases: Permission denied' >&2; exit 126; }\n",
+            1,
+        )
+        .replacen("exec cat'", "exec tee -a \"@LOG@.sent\"'", 1)
+        .replacen(
+            "perl -e 'setpgrp; ",
+            "perl -e 'setpgrp; open my $f, \">\", \"@LOG@.far\"; print $f $$; close $f; ",
+            1,
+        );
+    let f = Forwarding::with_ssh(&script);
+    let id = f.open_decision();
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let start = Instant::now();
+    let wait = spawn(
+        f.env
+            .command(["wait", "--id", &id, "--timeout", "8s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let sent = f.env.path("ssh.log.sent");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read_to_string(&sent).is_ok_and(|sent| sent.contains("/store/changes?after=")) {
+        assert!(Instant::now() < until, "the wait held no poll");
+        thread::sleep(Duration::from_millis(50));
+    }
+    fs::write(f.env.path("ssh.log.cut"), "").unwrap();
+    for name in ["ssh.log.far", "relay.pid"] {
+        let pid: u32 = fs::read_to_string(f.env.path(name))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        signal("KILL", pid);
+    }
+    let waited: Output = wait.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 1, "{waited:?}");
+    assert_eq!(waited.stdout, "", "{waited:?}");
+    assert!(
+        waited
+            .stderr
+            .ends_with("(exit 126): cases: Permission denied\n"),
+        "{waited:?}"
+    );
+    assert!(
+        waited.stderr.contains("trying again until the timeout"),
+        "{waited:?}"
+    );
+    // It went on to its timeout, and did not end at the first failure.
+    assert!(start.elapsed() >= Duration::from_secs(8), "{waited:?}");
 }
 
 /// A steady wait with no timeout that holds an answer, and whose connection
@@ -1125,7 +1191,11 @@ fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_ea
             .stderr(Stdio::piped()),
     );
     let until = Instant::now() + Duration::from_secs(10);
-    while holder(&locks, "worker-lead-") == before {
+    // A holder writes its line after it takes the lock, in parts: until the
+    // whole of a new one is there, a refusal could not name it.
+    while holder(&locks, "worker-lead-")
+        .is_none_or(|now| Some(&now) == before.as_ref() || !now.ends_with('\n'))
+    {
         assert!(Instant::now() < until, "the forwarded wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
@@ -1459,45 +1529,51 @@ fn a_ctrl_c_to_a_script_around_a_pickup_wait_stops_the_script() {
     assert!(!again.stderr.contains("already picking up"), "{again:?}");
 }
 
-/// A pickup wait stopped by a signal after it took a message, and before it
-/// printed it, names it on stderr as it dies: the message is picked up, and
-/// no later wait takes it again (AG-16).
+/// A pickup wait stopped by a signal while it collects has taken nothing:
+/// the message is still sent, and nothing is named. One stopped after the
+/// quiet time, with its messages picked up and the last line waiting on a
+/// stdout nobody reads, names that message as it dies, as no later wait
+/// takes it again (AG-16).
 #[test]
 fn a_pickup_wait_stopped_by_a_signal_names_the_messages_it_took() {
+    use std::io::Read as _;
     let f = Forwarding::new();
     f.open_decision();
-    let id = f
-        .ok(&[
-            "message", "--as", "Ryan", "--title", "Rebase", "--to", "lead",
+    let body = "A long body. ".repeat(3500);
+    let send = |title: &str| {
+        f.ok(&[
+            "message", "--as", "Ryan", "--title", title, "--to", "lead", "--body", &body,
         ])
         .trim()
-        .to_owned();
+        .to_owned()
+    };
+    let first_sent = send("First");
+    let second_sent = send("Second");
+    let args = [
+        "wait",
+        "--pickup",
+        "--worker",
+        "lead",
+        "--by",
+        "lead",
+        "--mood",
+        "steady",
+        "--timeout",
+        "60s",
+    ];
+    let state = |id: &str| {
+        let shown = f.far(&["show", id, "--json"]);
+        shown.contains(r#""state": "pickedup""#)
+    };
+
     let first = spawn(
         f.env
-            .command([
-                "wait",
-                "--pickup",
-                "--worker",
-                "lead",
-                "--by",
-                "lead",
-                "--mood",
-                "steady",
-                "--timeout",
-                "60s",
-            ])
+            .command(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
     );
-    // It takes the message at its first read, then lingers.
-    let until = Instant::now() + Duration::from_secs(10);
-    while !f
-        .far(&["show", &id, "--json"])
-        .contains(r#""state": "pickedup""#)
-    {
-        assert!(Instant::now() < until, "the wait took no message");
-        thread::sleep(Duration::from_millis(50));
-    }
+    // Its first read has found the messages, and it holds them.
+    thread::sleep(Duration::from_secs(2));
     signal("INT", first.id());
     let waited = first.wait_with_output().unwrap();
     assert_eq!(
@@ -1505,11 +1581,43 @@ fn a_pickup_wait_stopped_by_a_signal_names_the_messages_it_took() {
         Some(2),
         "{waited:?}"
     );
-    let stderr = String::from_utf8_lossy(&waited.stderr);
+    assert_eq!(String::from_utf8_lossy(&waited.stderr), "", "{waited:?}");
+    assert!(!state(&first_sent) && !state(&second_sent), "{waited:?}");
+
+    // Past its quiet time both are picked up; the first line fits the pipe
+    // and the second does not.
+    let mut printing = spawn(
+        f.env
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let until = Instant::now() + Duration::from_secs(30);
+    while !state(&second_sent) {
+        assert!(Instant::now() < until, "the wait took no message");
+        assert!(printing.try_wait().unwrap().is_none(), "the wait ended");
+        thread::sleep(Duration::from_millis(50));
+    }
+    thread::sleep(Duration::from_millis(500));
+    signal("INT", printing.id());
+    // Nothing reads stdout until the wait has ended, so that the second
+    // line is not printed while the signal is handled.
+    let status = printing.wait().unwrap();
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2),
+        "{status:?}"
+    );
+    let mut stderr = String::new();
+    printing
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
     assert_eq!(
         stderr,
-        format!("warning: {id}: picked up, but not printed: a signal ended the wait\n"),
-        "{waited:?}"
+        format!("warning: {second_sent}: picked up, but not printed: a signal ended the wait\n"),
     );
     let again = f.run(&["wait", "--pickup", "--worker", "lead", "--timeout", "1s"]);
     assert!(!again.stderr.contains("already picking up"), "{again:?}");
@@ -1806,20 +1914,126 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
     resume(relay);
 }
 
-/// A pickup wait whose locks may have gone while it lingers over a message
-/// it took prints that message rather than lose it: it was taken while the
-/// locks were held, and no later wait takes it again (AG-16).
+/// A pickup wait whose locks may have gone while it holds a message has
+/// taken nothing: it ends with that failure, exit 1, and the message is
+/// still sent. One whose locks lapse once it has picked its messages up at
+/// the print still prints them, as no later wait takes them again (AG-16).
 #[test]
 fn a_pickup_wait_whose_locks_lapse_prints_the_messages_it_took() {
     let f = leasing(3000);
-    let id = f
-        .ok(&[
-            "message", "--as", "Ryan", "--title", "Rebase", "--to", "lead",
+    let body = "A long body. ".repeat(3500);
+    let send = |title: &str| {
+        f.ok(&[
+            "message", "--as", "Ryan", "--title", title, "--to", "lead", "--body", &body,
         ])
         .trim()
-        .to_owned();
+        .to_owned()
+    };
+    let first_sent = send("First");
+    let second_sent = send("Second");
+    let args = [
+        "wait",
+        "--pickup",
+        "--worker",
+        "lead",
+        "--by",
+        "lead",
+        "--mood",
+        "steady",
+        "--timeout",
+        "60s",
+    ];
+    let state = |id: &str| {
+        let shown = f.far(&["show", id, "--json"]);
+        shown.contains(r#""state": "pickedup""#)
+    };
+    let relay_pid = || -> u32 {
+        fs::read_to_string(f.env.path("relay.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+
     fs::write(f.env.path("relay"), "1").unwrap();
     let first = spawn(
+        f.env
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // Its first read has found the messages, and it holds them.
+    thread::sleep(Duration::from_secs(2));
+    let relay = relay_pid();
+    signal("STOP", relay);
+    let waited: Output = first.wait_with_output().unwrap().into();
+    resume(relay);
+    assert_eq!(waited.code, 1, "{waited:?}");
+    assert_eq!(waited.stdout, "", "{waited:?}");
+    assert!(
+        waited
+            .stderr
+            .contains("this wait's locks on the far side may have been let go ("),
+        "{waited:?}"
+    );
+    assert!(!state(&first_sent) && !state(&second_sent), "{waited:?}");
+    // The far side lets go of the locks once their lease has run out.
+    thread::sleep(Duration::from_millis(3500));
+
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let printing = spawn(
+        f.env
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let until = Instant::now() + Duration::from_secs(30);
+    while !state(&second_sent) {
+        assert!(Instant::now() < until, "the wait took no message");
+        thread::sleep(Duration::from_millis(50));
+    }
+    // Its second line waits on a stdout nobody reads while the locks lapse.
+    let relay = relay_pid();
+    signal("STOP", relay);
+    thread::sleep(Duration::from_secs(4));
+    resume(relay);
+    let waited: Output = printing.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 0, "{waited:?}");
+    let lines: Vec<_> = waited.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{waited:?}");
+    assert_eq!(lines[0]["id"], first_sent.as_str(), "{waited:?}");
+    assert_eq!(lines[1]["id"], second_sent.as_str(), "{waited:?}");
+    assert_eq!(lines[1]["state"], "pickedup", "{waited:?}");
+}
+
+/// A pickup wait whose locks lapse while it takes its messages at the print
+/// stops taking, says why, and prints those it took. The rest are still sent
+/// for the next wait (AG-16).
+#[test]
+fn a_pickup_wait_whose_locks_lapse_during_its_takes_prints_those_it_took_and_says_so() {
+    let f = leasing(3000);
+    let ids: Vec<String> = (0..8)
+        .map(|_| {
+            f.ok(&[
+                "message", "--as", "Ryan", "--title", "Rebase", "--to", "lead",
+            ])
+            .trim()
+            .to_owned()
+        })
+        .collect();
+    // Each pickup takes the far side a while, so that the lease lapses
+    // between two of them.
+    rusqlite::Connection::open(&f.far)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER slow_pickup BEFORE INSERT ON events WHEN NEW.event = 'pickup' BEGIN
+                 SELECT (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c
+                     WHERE x < 6000000) SELECT count(*) FROM c);
+             END;",
+        )
+        .unwrap();
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let waiting = spawn(
         f.env
             .command([
                 "wait",
@@ -1831,17 +2045,17 @@ fn a_pickup_wait_whose_locks_lapse_prints_the_messages_it_took() {
                 "--mood",
                 "steady",
                 "--timeout",
-                "60s",
+                "120s",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
     );
-    // It takes the message at its first read, then lingers.
-    let until = Instant::now() + Duration::from_secs(10);
-    while !f
-        .far(&["show", &id, "--json"])
-        .contains(r#""state": "pickedup""#)
-    {
+    let picked = |id: &str| {
+        f.far(&["show", id, "--json"])
+            .contains(r#""state": "pickedup""#)
+    };
+    let until = Instant::now() + Duration::from_secs(30);
+    while !picked(&ids[0]) {
         assert!(Instant::now() < until, "the wait took no message");
         thread::sleep(Duration::from_millis(50));
     }
@@ -1851,17 +2065,26 @@ fn a_pickup_wait_whose_locks_lapse_prints_the_messages_it_took() {
         .parse()
         .unwrap();
     signal("STOP", relay);
-    let waited: Output = first.wait_with_output().unwrap().into();
+    let waited: Output = waiting.wait_with_output().unwrap().into();
     resume(relay);
     assert_eq!(waited.code, 0, "{waited:?}");
-    assert!(waited.stdout.contains(&id), "{waited:?}");
-    // It stopped for its locks, before its linger's end.
-    assert!(
+    assert_eq!(
         waited
             .stderr
-            .starts_with("warning: this wait's locks on the far side may have been let go ("),
+            .matches("this wait's locks on the far side may have been let go (")
+            .count(),
+        1,
         "{waited:?}"
     );
+    let lines: Vec<_> = waited.stdout.lines().map(json).collect();
+    assert!(!lines.is_empty() && lines.len() < ids.len(), "{waited:?}");
+    for line in &lines {
+        assert_eq!(line["state"], "pickedup", "{waited:?}");
+    }
+    let printed: Vec<&str> = lines.iter().map(|l| l["id"].as_str().unwrap()).collect();
+    for id in ids.iter().filter(|id| !printed.contains(&id.as_str())) {
+        assert!(!picked(id), "{id} picked up and not printed: {waited:?}");
+    }
 }
 
 /// Whether a lock file in `dir` whose name starts with `prefix` names its
@@ -1870,7 +2093,7 @@ fn held(dir: &std::path::Path, prefix: &str) -> bool {
     fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry.file_name().to_string_lossy().starts_with(prefix)
-                && fs::read_to_string(entry.path()).is_ok_and(|text| !text.trim().is_empty())
+                && fs::read_to_string(entry.path()).is_ok_and(|text| text.ends_with('\n'))
         })
     })
 }
