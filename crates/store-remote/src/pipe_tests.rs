@@ -378,6 +378,43 @@ fn a_lost_connection_is_tried_again_for_a_read_and_not_a_write() {
     assert_eq!(starts(dir.path()), 4);
 }
 
+/// A far side whose `cases` cannot be run (exit 126) is a connection lost
+/// as any other: only one that is not there, or too old, is a dial that
+/// will not do better.
+#[test]
+fn a_far_side_whose_cases_cannot_be_run_is_tried_again_as_a_lost_connection() {
+    let (dir, store) = over(&failing("cases: Permission denied", 126), &[], quick());
+    let error = store.version().unwrap_err();
+    assert_eq!(
+        error,
+        Error::Transport {
+            server: "ssh://far".into(),
+            reason: "the connection closed (exit 126): cases: Permission denied".into()
+        }
+    );
+    assert!(error.is_transient());
+    assert_eq!(starts(dir.path()), 3);
+}
+
+/// A child whose stdout is not HTTP, such as a banner from a shell's
+/// startup files, is a connection lost as any other.
+#[test]
+fn a_child_whose_stdout_is_not_http_is_tried_again_as_a_lost_connection() {
+    for script in [
+        "echo start >> \"$LOG\"; echo 'Welcome to devbox'; exit 0",
+        "echo start >> \"$LOG\"; printf 'Welcome to devbox\\r\\n\\r\\n'; exec cat > /dev/null",
+    ] {
+        let (dir, store) = over(script, &[], quick());
+        let error = store.version().unwrap_err();
+        assert!(
+            matches!(error, Error::Transport { .. }),
+            "{script}: {error:?}"
+        );
+        assert!(error.is_transient(), "{script}");
+        assert_eq!(starts(dir.path()), 3, "{script}");
+    }
+}
+
 #[test]
 fn a_read_that_was_lost_once_is_answered_by_a_new_child() {
     // The first child closes on the request; the next answers.
