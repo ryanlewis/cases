@@ -463,6 +463,7 @@ Tally: 434 criteria, 368 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 - Schema version recorded (1); a higher one refused by every command, advising an update: `crates/store-sqlite/tests/store.rs::the_schema`, `a_store_refuses_what_is_not_this_store`, `a_running_store_refuses_a_newer_schema`, `crates/cli/tests/serve.rs::a_request_that_fails_logs_why`
 - The tables of listening came at version 1, created on demand; an older cases never reads them, and a store an older cases made gets them at its first listening write: `crates/store-sqlite/src/listen.rs::tests::a_store_an_older_cases_made_gets_the_tables_from_its_first_listener`, `crates/store-sqlite/tests/store.rs::the_schema`
 - A file that is not a cases store is refused, not overwritten: `crates/store-sqlite/tests/store.rs::a_store_refuses_what_is_not_this_store`, `a_damaged_store_is_refused`
+- A row another writer stored that is not UTF-8: `data` reads with U+FFFD and the case folds; an `author` or `event` fails the read of its case and of the list: `crates/store-sqlite/src/read.rs::tests::data_that_is_not_utf8_reads_with_the_replacement_character`, `an_author_or_event_that_is_not_utf8_fails_the_read`
 
 ## ST-08 Only an open creates the store (keep)
 
