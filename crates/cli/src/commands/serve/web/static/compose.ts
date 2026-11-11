@@ -10,6 +10,7 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as api from "./api.js";
+import { backdrop } from "./backdrop.js";
 import { Text } from "./case.js";
 import { html } from "./html.js";
 import { Hint, SEND, SEND_SHORTCUTS } from "./keys.js";
@@ -443,25 +444,15 @@ async function submit(s: Sending, e: Event): Promise<void> {
   }
 }
 
-// The dialog's own events: Escape, and a click on the dialog itself, which
-// is on the backdrop: the composer fills it, on a phone too (style.css). A
-// press that starts inside and ends outside, as a drag does, is not, nor
-// one that starts outside and ends inside: the browser sends that click to
-// the dialog, the nearest element both were in, so the release is noted.
-function dialogEvents(c: Leaving, down: { current: boolean }) {
+// The dialog's own events: Escape, and a click on its backdrop (backdrop.ts):
+// the composer fills the dialog, on a phone too (style.css).
+function dialogEvents(c: Leaving) {
   return {
     onCancel: (e: Event) => {
       e.preventDefault();
       leave(c);
     },
-    onPointerDown: (e: PointerEvent) => (down.current = e.target === e.currentTarget),
-    onPointerUp: (e: PointerEvent) => {
-      if (e.target !== e.currentTarget) down.current = false;
-    },
-    onClick: (e: MouseEvent) => {
-      if (e.target === e.currentTarget && down.current) leave(c);
-      down.current = false;
-    },
+    ...backdrop(() => leave(c)),
   };
 }
 
@@ -666,14 +657,12 @@ export function Composer({
   usePickerFocus(pickerRef, picking, to);
   useKeepFocus(dialog, leaving);
   useSeen(dialog);
-  // Whether a press on the dialog started on its backdrop (dialogEvents).
-  const down = useRef(false);
   const c: Leaving = { f, leaving, setLeaving, dialog };
   back.current = () => backed(c);
   const send: Sending = { f, choices, re, sending, dialog, setRefusal, onSent };
 
   return html`<dialog class="options compose-dialog" id="compose-dialog" aria-labelledby="compose-title" ref=${dialog}
-    ...${dialogEvents(c, down)}
+    ...${dialogEvents(c)}
     onClose=${onClose}><div id="compose">
 <header class="case-head">
   <h1 id="compose-title">message an agent</h1>

@@ -162,6 +162,50 @@ test("a stream the tick opened again that drops before it opens reads again as a
   p.app.unmount();
 });
 
+test("a stream the browser gave up on is replaced on the tick, from the version the page has, and reads again when it opens", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  // A refused reconnect, such as a proxy's 502: the browser will not retry.
+  const giveUp = () => {
+    p.stream.readyState = EventSource.CLOSED;
+    p.stream.onerror();
+  };
+  giveUp();
+  p.taken();
+  p.server.waiting = [a, b];
+  // The tick still reads the store: the new stream may not come up.
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.deepEqual(p.streams.map((s) => [s.url, s.closed]), [["/v1/changes", true], ["/v1/changes?after=v1", false]]);
+  // Given up on again: replaced again, one stream each tick.
+  giveUp();
+  await p.tick(60000);
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS, INDEX]);
+  assert.equal(p.streams.length, 3);
+  assert.equal(p.streams.filter((s) => !s.closed).length, 1);
+  // Back: a drop's open, which checks the build and reads what it missed.
+  p.stream.onopen();
+  await p.settle();
+  assert.deepEqual(p.taken(), [INDEX, WAITING, OTHERS, LISTENERS]);
+  // And pushes reach the page again.
+  await event(p, "v2");
+  assert.deepEqual(p.taken(), [WAITING, OTHERS, LISTENERS]);
+  p.app.unmount();
+});
+
+test("a stream the browser gave up on is replaced on the tick while reads of the store are failing too", async () => {
+  const p = await openApp({ server: { waiting: [a] } });
+  await event(p, "v1");
+  p.server.routes[OTHERS] = () => ({ status: 500, body: { error: { category: "store", message: "the store is busy" } } });
+  await event(p, "v2");
+  assert.ok(p.html.includes('role="alert">the store is busy</p>'), p.html);
+  p.stream.readyState = EventSource.CLOSED;
+  p.stream.onerror();
+  await p.tick(60000);
+  assert.deepEqual(p.streams.map((s) => [s.url, s.closed]), [["/v1/changes", true], ["/v1/changes?after=v2", false]]);
+  p.app.unmount();
+});
+
 test("the tick, with the stream up, still reads who is listening, which moves no version", async () => {
   const p = await openApp({ url: "/cases/aB3xQ", server: { waiting: [a], listeners: [] } });
   await event(p, "v1");
