@@ -188,12 +188,12 @@ fn upgrade_or_wait(conn: &mut Connection, path: &Path) -> Result<(), Error> {
 /// transaction, and leaves the store as it was when it fails. An older
 /// cases goes on reading and writing the store after, as before.
 fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
-    if upgraded(conn)?.is_some() {
+    if upgraded_store_id(conn)?.is_some() {
         return Ok(());
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another cases may have upgraded it while this one waited.
-    if upgraded(&tx)?.is_none() {
+    if upgraded_store_id(&tx)?.is_none() {
         check_version(&tx, path)?;
         if !has_store_id(&tx)? {
             tx.execute_batch("ALTER TABLE meta ADD COLUMN store_id TEXT")?;
@@ -211,7 +211,7 @@ fn upgrade(conn: &mut Connection, path: &Path) -> Result<(), Error> {
 /// The store's id, when the store has its id and the log of removals, as
 /// it does once upgraded; `None` otherwise. It is read each time, never
 /// kept: another cases can upgrade the store at any time.
-pub(crate) fn upgraded(conn: &Connection) -> Result<Option<String>, Error> {
+pub(crate) fn upgraded_store_id(conn: &Connection) -> Result<Option<String>, Error> {
     // The tables and triggers of the log, and the id's column, are looked
     // up first, in the catalog: a statement that names the column does not
     // prepare in a store without it.
