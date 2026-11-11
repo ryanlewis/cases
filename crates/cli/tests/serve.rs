@@ -339,6 +339,30 @@ fn serve_runs_without_a_state_directory_it_can_write() {
     );
 }
 
+/// With neither `$XDG_STATE_HOME` nor `$HOME` there is no state directory
+/// to find: serve is not refused for it, serves, and says it could not
+/// record itself, and status says why it cannot look.
+#[test]
+fn serve_runs_with_no_state_directory_to_find() {
+    let mut env = Env::new();
+    env.unset("XDG_STATE_HOME");
+    env.unset("HOME");
+    let want = "cannot find the state directory";
+    let serve = env.serve(&[]);
+    assert_eq!(serve.get("/v1").status, 200);
+    let out = serve.stop();
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "could not record the instance for cases status: {want}"
+        )),
+        "{out:?}"
+    );
+    let status = env.cases(&["status"]);
+    assert_eq!(status.code, 1, "{status:?}");
+    assert!(status.stderr.contains(want), "{status:?}");
+}
+
 #[test]
 fn the_config_file_gives_the_address_and_the_flag_wins() {
     let env = Env::new();
@@ -1074,6 +1098,86 @@ fn serve_closes_a_stale_briefing_when_it_starts() {
     );
     assert!(case.close().unwrap().expired);
     assert_eq!(env.case(&young).state(), cases_core::State::PickedUp);
+}
+
+/// A stop waits for a pass over the briefings that is under way, longer
+/// than the 1 s it gives what is left on blocking threads, so that the
+/// close the pass is making is made and logged (AG-19).
+#[test]
+fn a_stop_waits_for_the_briefing_pass_under_way() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "briefing",
+        "--urgency",
+        "today",
+        "--title",
+        "Old",
+        "--body",
+        "Done.",
+    ]);
+    env.write(&id, "human", "answer", r#"{"briefing": "accept"}"#);
+    let at = format!(
+        r#"{{"picked_up_at": "{}"}}"#,
+        common::from_now(-8 * 24 * 3600)
+    );
+    env.write(&id, "agent", "pickup", &at);
+
+    // Holding the store's write lock holds the pass in its close, for up to
+    // the store's 5 s wait on the lock.
+    let lock = rusqlite::Connection::open(&env.store).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let serve = env.serve(&[]);
+    // A stop that came before the pass began could skip it.
+    store_held(&serve.addr);
+    let pid = i32::try_from(serve.pid()).unwrap();
+    serve.raise(Signal::TERM);
+    assert!(
+        !ends_within(pid, Duration::from_millis(1_500)),
+        "serve left the pass under way"
+    );
+    lock.execute_batch("COMMIT").unwrap();
+    let out = serve.exit_within(Duration::from_secs(10));
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("closed briefing {id}: closed after 7 days")),
+        "{out:?}"
+    );
+    assert_eq!(env.case(&id).state(), cases_core::State::Closed);
+}
+
+/// Waits until a write by serve at `addr` is held on the store's lock: a
+/// read of the store then queues behind it, and takes no answer. Reads made
+/// before the write begins are answered, and made again.
+fn store_held(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut stream = common::serve::connect(addr);
+        stream
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /v1/cases HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut text = Vec::new();
+        match std::io::Read::read_to_end(&mut stream, &mut text) {
+            Err(error)
+                if text.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return;
+            }
+            read => assert!(read.is_ok(), "{read:?}"),
+        }
+        assert!(Instant::now() < deadline, "no write held the store");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// With briefing-close-after off, serve leaves the briefings alone; with a
