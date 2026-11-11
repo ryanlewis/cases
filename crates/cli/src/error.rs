@@ -42,6 +42,8 @@ impl Status {
 pub(crate) struct Error {
     status: Status,
     message: String,
+    /// Whether it is a write that got no answer, which may have been stored.
+    outcome_unknown: bool,
 }
 
 impl Error {
@@ -55,7 +57,13 @@ impl Error {
         Error {
             status,
             message: message.into(),
+            outcome_unknown: false,
         }
+    }
+
+    /// Whether it is a write that got no answer, which may have been stored.
+    pub(crate) fn outcome_unknown(&self) -> bool {
+        self.outcome_unknown
     }
 
     /// The error's status.
@@ -111,9 +119,12 @@ impl From<StoreError<Failure>> for Error {
     fn from(error: StoreError<Failure>) -> Error {
         match error {
             StoreError::Refused(error) => error.into(),
-            StoreError::Store(error) if error.no_answer() => Error::new(format!(
-                "{error}; the write may or may not have been stored: check with cases show"
-            )),
+            StoreError::Store(error) if error.no_answer() => Error {
+                outcome_unknown: true,
+                ..Error::new(format!(
+                    "{error}; the write may or may not have been stored: check with cases show"
+                ))
+            },
             StoreError::Store(error) => error.into(),
             other => Error::new(other.to_string()),
         }
