@@ -2,7 +2,7 @@
 
 Every keep and change user story, one line per acceptance criterion, in the stories' order. Each line names the tests that prove it: `file::name` for a test, `file::tests::name` for a unit test, `spec/vectors/x.json "description"` for a vector (run by `crates/core/tests/vectors.rs` and `crates/store-sqlite/tests/vectors.rs`), `crates/cli/src/commands/serve/web/test/x.test.js "name"` for a test of the inbox's modules (run in node by `npm test` in `crates/cli/src/commands/serve/web`). A line is marked **gap** when no test proves it, with why; **by hand** for what only the page draws, or what needs a real terminal or service manager, which was checked by hand (for the web inbox, in headless Chromium against a running serve, by scripts kept out of the repository); **question** where the story needs Ryan's decision; **n/a** for what is v2 or not behaviour. A line counts as covered only when tests prove all of it; otherwise it counts once, by the first of question, gap, by hand, n/a that it carries. The drop stories, HU-05 and ST-15, are left out. The tests of remote stores, `login`, `logout` and `stores` are built only with the cli's `remote` feature, which CI turns on in a second run (`cargo test --workspace --features cases/remote`); a release is built without it.
 
-Tally: 434 criteria, 368 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
+Tally: 453 criteria, 387 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 
 ## AG-01 Open a case (change)
 
