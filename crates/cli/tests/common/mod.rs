@@ -423,6 +423,22 @@ impl Env {
         write_file(&self.instance_file_of(store), &info.to_string());
         (listener, url)
     }
+
+    /// Records a serve of process `pid` on this store whose address takes no
+    /// connection, as a serve that stopped without removing its file leaves.
+    /// It is at port 0, which takes no connection, ever: a port freed for
+    /// the test could be taken by another before cases dials it.
+    pub(crate) fn stale_instance(&self, pid: u32) {
+        let info = serde_json::json!({
+            "pid": pid,
+            "url": "http://127.0.0.1:0/",
+            "addr": "127.0.0.1:0",
+            "store": std::path::absolute(&self.store).expect("an absolute path"),
+            "started_at": "2026-09-25T12:00:00Z",
+            "version": "0.0.0",
+        });
+        write_file(&self.instance_file(), &info.to_string());
+    }
 }
 
 /// The key the id `id` names.
