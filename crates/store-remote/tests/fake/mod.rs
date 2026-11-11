@@ -153,6 +153,8 @@ struct Entry {
 struct State {
     stores: Mutex<BTreeMap<String, Entry>>,
     faults: Mutex<VecDeque<Fault>>,
+    /// Faults for the next writes of an event, ahead of `faults`.
+    event_faults: Mutex<VecDeque<Fault>>,
     requests: Mutex<Vec<String>>,
     tokens: Mutex<Vec<Minted>>,
     grants: Mutex<BTreeMap<String, Grant>>,
@@ -292,6 +294,12 @@ impl Fake {
     /// Removes the store `id`: every route of it answers 410 after.
     pub(crate) fn remove(&self, id: &str) {
         lock(&self.state.stores).get_mut(id).unwrap().gone = true;
+    }
+
+    /// Adds a fault for the next write of an event, whatever is sent
+    /// before it.
+    pub(crate) fn fault_event(&self, fault: Fault) {
+        lock(&self.state.event_faults).push_back(fault);
     }
 
     /// Answers the next request with `fault`, after any queued before it.
@@ -535,8 +543,15 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
     let Some((request, raw)) = read(&stream) else {
         return;
     };
+    let event = raw
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("POST ") && line.contains("/events"));
+    let event_fault = event
+        .then(|| lock(&state.event_faults).pop_front())
+        .flatten();
+    let fault = event_fault.or_else(|| lock(&state.faults).pop_front());
     lock(&state.requests).push(raw);
-    let fault = lock(&state.faults).pop_front();
     let answer = match fault {
         Some(Fault::Status(status)) => Answer::refuse(status, "store", "the fake failed"),
         Some(Fault::Unavailable) => Answer::refuse(

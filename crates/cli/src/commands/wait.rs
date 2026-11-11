@@ -105,7 +105,8 @@ pub(crate) struct Args {
     /// given together are printed together. It stops early when no case it
     /// waits on is still open, on the answer to a blocking case, on a
     /// withdraw, and at --timeout, which then prints what it has and exits
-    /// 0. Default: the config file's mood, then eager.
+    /// 0, or exits 1 when all it held was messages it could not take.
+    /// Default: the config file's mood, then eager.
     #[arg(long, value_name = "MOOD", value_enum)]
     mood: Option<Mood>,
 }
@@ -646,7 +647,6 @@ fn wait(
             Err(error) => return stop(taken, error),
         };
         let woke = !taken.is_empty() || found.woke() || !found.pending.is_empty();
-        let mut gone = !woke;
         if woke && asked.done(&mut collecting, &found, &taken) {
             let failure = asked.take_pending(
                 listening.as_ref(),
@@ -660,12 +660,17 @@ fn wait(
             if let Some(error) = failure.filter(|_| asked.past_deadline()) {
                 return Err(error);
             }
-            gone = true;
+            // It took none of the messages it held: one was edited since the
+            // read, or the store failed. A failed write leaves the version
+            // as it was, so a held poll would not wake on it: it reads again
+            // soon, still at the end of its quiet time.
+            thread::sleep(held_for(far).map_or(POLL, |held| held.min(POLL)));
+            continue;
         }
         // What it was collecting has gone, such as a case another wait
         // picked up or a message another session took first: it waits as it
         // did before the first event.
-        if gone {
+        if !woke {
             collecting = None;
         }
         held = if collecting.is_some() {
@@ -833,9 +838,10 @@ impl Asked<'_> {
     /// Takes the messages `pending` for a lingering wait that is printing,
     /// each at the revision it was read at, adding those it took to `taken`.
     /// One another session took first, or the human edited or withdrew since
-    /// the read, is passed over. Gives why a message could not be taken,
-    /// when the store or the far side's locks would not have it, for the
-    /// message to stay sent for the next wait.
+    /// the read, is passed over. At the first that the store or the far
+    /// side's locks would not have, it stops, as the next would meet the
+    /// same, and gives why: the rest stay sent for the next wait. A lapse of
+    /// the locks is said on stderr when messages it took will be printed.
     fn take_pending<'c>(
         &self,
         listening: Option<&Listening>,
@@ -844,11 +850,15 @@ impl Asked<'_> {
         warned: &mut HashSet<String>,
     ) -> Option<Error> {
         let listening = listening?;
-        let mut failure = None;
         for (key, case) in pending {
             let writing = match self.far.map(FarLocks::write).transpose() {
                 Ok(writing) => writing,
-                Err(error) => return Some(error.into()),
+                Err(error) => {
+                    if !taken.is_empty() {
+                        ctx::warn(format_args!("{error}"));
+                    }
+                    return Some(error.into());
+                }
             };
             match listening.take(self.ctx, key, case, warned) {
                 Ok(Some(turn)) => {
@@ -858,10 +868,10 @@ impl Asked<'_> {
                     taken.push(turn);
                 }
                 Ok(None) => {}
-                Err(error) => failure = Some(error),
+                Err(error) => return Some(error),
             }
         }
-        failure
+        None
     }
 
     /// Whether the timeout has passed, if there is one.
@@ -1436,7 +1446,8 @@ impl<'a> Listening<'a> {
     ///
     /// # Errors
     ///
-    /// That failure of another sort, the message still being sent.
+    /// That failure of another sort, the message still being sent, as far
+    /// as a read of it after the failure can say.
     fn take(
         &self,
         ctx: &Ctx,
@@ -1462,6 +1473,21 @@ impl<'a> Listening<'a> {
             })),
             Err(error) if matches!(error.status(), Status::Stale | Status::Transition) => Ok(None),
             Err(error) => {
+                // A pickup stored whose answer was lost is this wait's, and
+                // no later wait takes the message again.
+                if let Ok(now) = ctx.case(key)
+                    && now.state() == State::PickedUp
+                    && now.revision() == case.revision() + 1
+                    && self.took(&now)
+                {
+                    return Ok(Some(Turn {
+                        key,
+                        case: now,
+                        at,
+                        fresh: true,
+                        taken: true,
+                    }));
+                }
                 let message = format!("{key}: not taken: {error}");
                 if warned.insert(message.clone()) {
                     ctx::warn(message);

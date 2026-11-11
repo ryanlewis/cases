@@ -1341,6 +1341,89 @@ fn a_steady_remote_wait_that_cannot_take_its_message_at_its_timeout_leaves_it_se
     assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
 }
 
+/// A steady wait holding one message, on a remote store, with its take at
+/// the end of the quiet time to be met by `fault`. Gives the store, the
+/// message and the wait.
+fn holding_a_message(fault: Fault) -> (Remote, String, Child) {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    r.ok(&[
+        "--store",
+        &store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        "30s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = r.ok(&[
+        "--store",
+        &store,
+        "message",
+        "--as",
+        "Ryan",
+        "--title",
+        "Rebase onto main",
+        "--to",
+        "w9",
+        "--body",
+        "Then run the tests.",
+    ]);
+    r.fake.fault_event(fault);
+    (r, sent.trim().to_owned(), wait)
+}
+
+/// A pickup that was stored but whose answer was lost is this wait's: it is
+/// read back and printed, for no later wait takes the message again
+/// (AG-16).
+#[test]
+fn a_steady_wait_whose_pickup_answer_is_lost_still_prints_the_message() {
+    let (_r, sent, wait) = holding_a_message(Fault::Lost);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], sent.as_str(), "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+}
+
+/// A take that fails at the end of the quiet time is tried again at the next
+/// read, not when something else changes the store.
+#[test]
+fn a_steady_wait_tries_a_failed_take_again_at_once() {
+    let start = Instant::now();
+    let (r, sent, wait) = holding_a_message(Fault::Status(503));
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(&sent), "{out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        start.elapsed()
+    );
+    let posts = r.fake.lines();
+    let posts = posts
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"));
+    assert_eq!(posts.count(), 2);
+}
+
 /// A steady wait on a remote store holds the poll while it collects, and
 /// prints what it has at its timeout, exit 0 (AG-18).
 #[test]
