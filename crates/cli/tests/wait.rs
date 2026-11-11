@@ -2776,6 +2776,84 @@ fn a_message_taken_while_a_steady_wait_collects_is_in_the_same_print() {
     }
 }
 
+/// A steady wait with no case open collects messages through its quiet
+/// time: three sent a few seconds apart wake it once.
+#[test]
+fn a_burst_of_messages_wakes_a_steady_wait_with_no_case_open_once() {
+    let env = Env::new();
+    // Makes the store, with no case in it that the wait waits on.
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let mut sent = Vec::new();
+    for body in ["One.", "Two.", "Three."] {
+        sent.push(message(&env, &["--to", "w9", "--body", body]));
+        thread::sleep(Duration::from_secs(3));
+    }
+    let lines = woke(&waiting.finish());
+    assert_eq!(ids(&lines), sent);
+    for line in &lines {
+        assert_eq!(line["state"], "pickedup", "{line}");
+    }
+}
+
+/// A steady wait with no case open, killed in its quiet time, has taken
+/// nothing: the lone message it held is the next wait's.
+#[test]
+fn a_lone_message_held_by_a_steady_wait_with_no_case_open_survives_a_kill() {
+    for signal in ["TERM", "KILL"] {
+        let env = Env::new();
+        message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+        let marker = marker(&env);
+        let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+        let mut waiting = Waiting::after_first_read(&env, &marker, &args);
+        let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+        // A read of the store, every second, has found it.
+        thread::sleep(Duration::from_millis(2500));
+        assert_eq!(env.case(&sent).state().as_str(), "sent", "{signal}");
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), waiting.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{signal}");
+        waiting.child.wait().unwrap();
+        assert_eq!(waiting.stdout.join().unwrap(), "", "{signal}");
+
+        let lines = woke(&wait(&env, &listening("w9", &[])));
+        assert_eq!(ids(&lines), [sent.as_str()], "{signal}");
+        assert_eq!(lines[0]["state"], "pickedup", "{signal}");
+    }
+}
+
+/// A blocking message ends a steady wait at once: the agent should stop for
+/// it, not sit out the quiet time.
+#[test]
+fn a_blocking_message_ends_a_steady_wait_at_once() {
+    let env = Env::new();
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    // Held already when the blocking one comes.
+    let held = message(&env, &["--to", "w9", "--body", "When you can."]);
+    thread::sleep(Duration::from_millis(1500));
+    let start = Instant::now();
+    let sent = message(
+        &env,
+        &["--to", "w9", "--urgency", "blocking", "--body", "Stop."],
+    );
+    assert_eq!(
+        ids(&woke(&waiting.finish())),
+        [held.as_str(), sent.as_str()]
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
 // Pins of how a wait prints what it found (`print` in `commands/wait.rs`):
 // each line exactly, its order, and how a wait ends when a write or a read
 // fails part-way.

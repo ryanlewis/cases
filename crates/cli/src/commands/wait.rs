@@ -104,11 +104,13 @@ pub(crate) struct Args {
     doing: Option<String>,
 
     /// How long to keep collecting after the first event, so that answers
-    /// given together are printed together. It stops early when no case it
-    /// waits on is still open, on the answer to a blocking case, on a
-    /// withdraw, and at --timeout, which then prints what it has and exits
-    /// 0, or exits 1 when all it held was messages it could not take.
-    /// Default: the config file's mood, then eager.
+    /// given together are printed together. It stops early when a human's
+    /// event on a case leaves no case it waits on still open, on the answer
+    /// to a blocking case, on a withdraw, and at --timeout, which then prints
+    /// what it has and exits 0, or exits 1 when all it held was messages it
+    /// could not take. Messages are collected through the quiet time, so a
+    /// burst of them wakes it once, until one is blocking. Default: the
+    /// config file's mood, then eager.
     #[arg(long, value_name = "MOOD", value_enum)]
     mood: Option<Mood>,
 }
@@ -555,9 +557,11 @@ impl First {
 /// prints, so that a wait killed while it collects leaves them sent for the
 /// next wait, however it is killed. It reads on after that first new event, and
 /// gives the cases once the first of these comes: its quiet time with no
-/// event new to it, its cap after the first, no case it waits on still open,
-/// the answer to a blocking case or a withdraw among the new events, or the
-/// timeout (AG-18).
+/// event new to it, its cap after the first, a human's event on a case that
+/// leaves no case it waits on still open, the answer to a blocking case or a
+/// withdraw among the new events, a blocking message it holds, or the
+/// timeout (AG-18). Other messages do not end it early: more can come
+/// whatever is open.
 ///
 /// An event is judged new by its appearing, not by its time alone, since a
 /// record can give a time well before it was stored.
@@ -964,8 +968,9 @@ impl Asked<'_> {
 
     /// Whether a wait that woke on what it `found` and `taken` gives its
     /// cases now: an eager one at once; one that lingers, which notes in
-    /// `collecting` what it saw, once its linger ends, nothing it waits on
-    /// is open, something urgent came, or the timeout passed (AG-18).
+    /// `collecting` what it saw, once its linger ends, an event on a case
+    /// left nothing it waits on open, something urgent came, or the timeout
+    /// passed (AG-18).
     fn done(&self, collecting: &mut Option<Collecting>, found: &Found, taken: &[Turn]) -> bool {
         let Some(linger) = self.mood.linger() else {
             return true;
@@ -993,7 +998,11 @@ impl Asked<'_> {
         // the print: that message is the wait's already, so it says so now.
         !taken.is_empty()
             || found.urgent()
-            || !found.open
+            || found
+                .pending
+                .iter()
+                .any(|&(_, case)| case.urgency() == Urgency::Blocking)
+            || found.finished()
             || collecting.until(linger) <= now
             || self.deadline.is_some_and(|deadline| deadline <= now)
     }
@@ -1051,6 +1060,13 @@ impl Found<'_> {
     /// Whether it wakes the wait: a message withdrawn, or a turn new to it.
     fn woke(&self) -> bool {
         !self.withdrawn.is_empty() || self.turns.iter().any(|&(.., fresh)| fresh)
+    }
+
+    /// Whether an event on a case new to the wait left none it waits on
+    /// open, so that no more answers can come. Messages alone are not: more
+    /// of them can come whatever is open.
+    fn finished(&self) -> bool {
+        !self.open && self.turns.iter().any(|&(.., fresh)| fresh)
     }
 
     /// Whether it ends a lingering wait at once: the agent cannot go on
