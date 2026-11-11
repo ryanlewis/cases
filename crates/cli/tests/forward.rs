@@ -1213,9 +1213,41 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
 /// machine is not, so that does not let them go either.
 #[test]
 fn a_pickup_wait_that_ends_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("TERM", 15)));
+}
+
+/// So does one stopped by SIGINT, as a Ctrl-C sends it.
+#[test]
+fn a_pickup_wait_interrupted_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("INT", 2)));
+}
+
+/// So does one stopped by SIGHUP, as a closed terminal sends it, on Linux:
+/// elsewhere SIGHUP is not caught.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_pickup_wait_hung_up_on_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("60s", Some(("HUP", 1)));
+}
+
+/// So does one that comes to its timeout, with no signal.
+#[test]
+fn a_pickup_wait_that_times_out_releases_its_locks_on_a_far_side_out_of_reach() {
+    releases_on_a_far_side_out_of_reach("5s", None);
+}
+
+/// Starts a pickup wait with a timeout of `timeout`, whose locks are held
+/// on a long lease over a relayed connection; ends it by `signalled`, a name
+/// and number, or else lets it reach its timeout; and checks the locks are
+/// let go at once.
+fn releases_on_a_far_side_out_of_reach(timeout: &str, signalled: Option<(&str, i32)>) {
     let f = leasing(60_000);
     fs::write(f.env.path("relay"), "1").unwrap();
-    let first = picking_up(&f);
+    let first = picking_up_by(
+        &f,
+        f.env
+            .command(["wait", "--pickup", "--worker", "lead", "--timeout", timeout]),
+    );
     let (lock, holder) = taken(&f, "worker-lead-");
     // The far side holding them is the relayed one, which the ssh stand-in
     // starts, not the wait itself as it does with no relay. It is killed if
@@ -1232,13 +1264,18 @@ fn a_pickup_wait_that_ends_releases_its_locks_on_a_far_side_out_of_reach() {
         "the locks are not on the relayed connection: {parent:?}"
     );
     let _far = Kill(far);
-    signal("TERM", first.id());
+    if let Some((name, _)) = signalled {
+        signal(name, first.id());
+    }
     let waited = first.wait_with_output().unwrap();
     assert_eq!(
         std::os::unix::process::ExitStatusExt::signal(&waited.status),
-        Some(15),
+        signalled.map(|(_, number)| number),
         "{waited:?}"
     );
+    if signalled.is_none() {
+        assert_eq!(waited.status.code(), Some(2), "{waited:?}");
+    }
     // Read off the lock, as a second wait is started some time before it
     // takes it.
     let ended = Instant::now();
