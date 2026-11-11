@@ -109,6 +109,31 @@ pub(crate) struct Args {
     mood: Option<Mood>,
 }
 
+impl Args {
+    /// The wait of `cases open --wait` on the case `id` it opened: as `cases
+    /// wait --id ID --since ID --pickup --by BY --timeout TIMEOUT` waits,
+    /// with `by` the case's worker, or none for a case opened with none, as
+    /// the skill chains the two commands.
+    pub(crate) fn opened(id: String, by: Option<String>, timeout: Duration) -> Args {
+        Args {
+            for_: Side::Agent,
+            since: Some(id.clone()),
+            timeout,
+            ids: vec![id],
+            filter: Filter {
+                kinds: Vec::new(),
+                labels: Vec::new(),
+                workers: Vec::new(),
+            },
+            pickup: true,
+            by,
+            full: false,
+            doing: None,
+            mood: None,
+        }
+    }
+}
+
 /// How long a wait keeps collecting after the first event that would wake it
 /// (AG-18). The numbers may change; the order will not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -130,6 +155,19 @@ impl Mood {
             Mood::Steady => Some((Duration::from_secs(10), Duration::from_secs(60))),
             Mood::Patient => Some((Duration::from_secs(30), Duration::from_secs(300))),
         }
+    }
+}
+
+/// A wait's mood: `given` with `--mood`, else the config file's, else eager.
+///
+/// # Errors
+///
+/// When the config file's mood is not a mood.
+pub(crate) fn chosen(given: Option<Mood>, ctx: &Ctx) -> Result<Mood, Error> {
+    match (given, ctx.config.get("mood")) {
+        (Some(mood), _) => Ok(mood),
+        (None, Some(text)) => mood(text),
+        (None, None) => Ok(Mood::Eager),
     }
 }
 
@@ -375,11 +413,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         Some(text) => since(ctx, text)?,
         None => None,
     };
-    let mood = match (args.mood, ctx.config.get("mood")) {
-        (Some(mood), _) => mood,
-        (None, Some(text)) => mood(text)?,
-        (None, None) => Mood::Eager,
-    };
+    let mood = chosen(args.mood, ctx)?;
     // Held until wait has printed what it picked up. A store not there yet
     // gets no directory of locks either, as a wait makes nothing (ST-08), so
     // a pickup wait started before the store's first open takes none.
