@@ -3140,6 +3140,111 @@ fn a_full_wait_whose_actors_cannot_be_read_prints_nothing_and_picks_up_nothing()
     );
 }
 
+/// A pickup that makes its actor, with the table of actors then unreadable,
+/// still prints each case, its new actor by id, and says so once on stderr
+/// however many cases need it, rather than leave the agent to wonder at the
+/// missing name.
+#[test]
+fn a_full_wait_that_cannot_read_the_actor_its_pickup_made_warns() {
+    let env = Env::new();
+    env.open_fyi("Makes the store");
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w9"}"#;
+    let id = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &id, &["--ack"]);
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w8"}"#;
+    let other = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &other, &["--ack"]);
+    // The table reads until it holds the actor the pickup makes.
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE actors RENAME TO actors_kept;
+         CREATE VIEW actors AS SELECT rowid AS rowid, id, kind,
+             CASE WHEN name IN ('w8', 'w9') THEN x'ff' ELSE name END AS name, created
+             FROM actors_kept;
+         CREATE TRIGGER actors_insert INSTEAD OF INSERT ON actors BEGIN
+             INSERT INTO actors_kept VALUES (NEW.id, NEW.kind, NEW.name, NEW.created);
+         END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let out = wait(
+        &env,
+        &[
+            "--full",
+            "--id",
+            &id,
+            "--id",
+            &other,
+            "--since",
+            "2000-01-01T00:00:00Z",
+            "--pickup",
+            "--by",
+            "me",
+        ],
+    );
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [id.as_str(), other.as_str()]);
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
+    assert_eq!(
+        lines[0]["events"][2]["actor"],
+        serde_json::json!({"id": actor_of(&env, &id, 3)})
+    );
+    let warnings = out
+        .stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with("warning: the actors cannot be read, so they are named by id: ")
+        })
+        .count();
+    assert_eq!(warnings, 1, "{out:?}");
+}
+
+/// A wait whose first read of the actors failed, and which goes on because
+/// it took a message, warns once even when a pickup then wants the actors
+/// again.
+#[test]
+fn a_full_wait_warns_once_when_its_first_read_of_the_actors_failed_and_a_pickup_follows() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Answered",
+        "--worker",
+        "w",
+    ]);
+    run(&env, "answer", &id, &["--ack"]);
+    let sent = message(&env, &["--to", "w"]);
+    spoil_actors(&env);
+
+    let args = [
+        "--pickup",
+        "--worker",
+        "w",
+        "--full",
+        "--since",
+        "2000-01-01T00:00:00Z",
+    ];
+    let out = wait(&env, &args);
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    let mut printed = ids(&lines);
+    printed.sort_unstable();
+    let mut want = vec![id.as_str(), sent.as_str()];
+    want.sort_unstable();
+    assert_eq!(printed, want, "{out:?}");
+    assert_eq!(
+        out.stderr.matches("the actors cannot be read").count(),
+        1,
+        "{out:?}"
+    );
+}
+
 /// A message a listening `--full` wait took is picked up already, so a
 /// read of the actors that fails does not lose it: it is printed with each
 /// actor named by id alone, after one warning, and the wait ends with exit
