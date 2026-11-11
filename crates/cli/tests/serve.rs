@@ -1448,7 +1448,7 @@ fn on_a_terminal_the_last_frame_shows_what_the_stop_closed() {
 #[test]
 fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     let env = Env::new();
-    let run = format!(r#"{SERVE}; echo "exit=$?""#);
+    let run = format!(r#"{SERVE}; echo "exit=$?"; stty -a; echo "stty done""#);
     let mut terminal = Terminal::start(&env, &run);
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
@@ -1487,7 +1487,7 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
         ends_within(pid, Duration::from_secs(3)),
         "serve did not end on a stopped terminal"
     );
-    // The held write puts the terminal back, and does not hold this up.
+    // The held write shows the cursor, and does not hold this up.
     assert!(
         !env.instance_file().exists(),
         "the record outlived a forced stop"
@@ -1495,6 +1495,12 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     // Ctrl-Q lets the terminal show what was held.
     terminal.type_keys("\x11");
     terminal.wait_for("exit=130");
+    // The keys are put back though the write that shows the cursor is held.
+    let modes = terminal.wait_for("stty done");
+    let modes: Vec<&str> = modes.split_whitespace().collect();
+    for mode in ["icanon", "echo"] {
+        assert!(modes.contains(&mode), "{mode} is off: {modes:?}");
+    }
     // It has ended: no SIGKILL for whatever has its pid next.
     std::mem::forget(reap);
     drop(stalled);
