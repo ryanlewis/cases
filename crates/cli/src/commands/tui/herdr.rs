@@ -301,6 +301,16 @@ mod tests {
             let bin = dir.path().join("herdr");
             std::fs::write(&bin, script).unwrap();
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // A child forked by another test during the write holds the
+            // script open for writing until it execs, and running the script
+            // fails as busy until then. No later fork can hold it, so once
+            // one run starts, every run will.
+            while matches!(
+                Command::new(&bin).arg("--version").output(),
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+            ) {
+                thread::yield_now();
+            }
             Fake { dir, _guard: guard }
         }
 
