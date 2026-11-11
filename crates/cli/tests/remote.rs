@@ -1987,6 +1987,97 @@ fn a_take_that_fails_for_ever_neither_spins_nor_passes_the_timeout() {
     assert!((5..=25).contains(&posts), "{posts} tries");
 }
 
+/// A pickup that never gets an answer, with reads that say the message is
+/// still sent, stays of unknown outcome at every read: the wait tries it
+/// about once a second, and ends at its timeout, exit 1, for it cannot say
+/// that nothing came.
+#[test]
+fn a_pickup_that_never_gets_an_answer_neither_spins_nor_passes_the_timeout() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "4s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    for _ in 0..30 {
+        r.fake.fault_event(Fault::Hangup);
+    }
+    let start = Instant::now();
+    r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let posts = event_posts(&r);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!((2..=8).contains(&posts), "{posts} tries: {out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// A steady wait that can neither read nor take its message at the end of
+/// its quiet time waits as it did before the first event: it pauses longer
+/// between the reads that fail, and ends at its timeout with the failure,
+/// exit 1, the message still sent.
+#[test]
+fn a_steady_wait_that_can_neither_read_nor_take_at_the_end_of_its_quiet_time_waits_on() {
+    let (r, sent, wait) = steady_holding("16s");
+    thread::sleep(Duration::from_secs(2));
+    for _ in 0..40 {
+        r.fake.fault_event(Fault::Status(503));
+    }
+    r.fake.fail_reads();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let lines = r.fake.lines();
+    let reads = lines.iter().filter(|line| line.starts_with("GET ")).count();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(rows_of(&r, &sent), Some(1), "{out:?}");
+    assert!(reads <= 50, "{reads} reads: {out:?}");
+}
+
+/// An eager wait takes each message as it reads it: one it cannot take does
+/// not stop it taking the next, which it prints at once. The first stays
+/// sent for a later read.
+#[test]
+fn an_eager_wait_that_cannot_take_one_message_takes_the_next() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let message = |title: &str| {
+        let sent = r.ok(&[
+            "--store", &store, "message", "--as", "Ryan", "--title", title, "--to", "w9",
+        ]);
+        sent.trim().to_owned()
+    };
+    let (one, two) = (message("One"), message("Two"));
+    r.fake.fault_event(Fault::Status(503));
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "10s",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], two.as_str(), "{out:?}");
+    assert_eq!(rows_of(&r, &one), Some(1), "{out:?}");
+    assert!(out.stderr.contains(&format!("{one}: not taken")), "{out:?}");
+}
+
 /// A wait holding an answer and a message whose store fails to its
 /// timeout prints the answer, exit 0, and leaves the message sent; the next
 /// wait, from that `next_since`, takes the message.
