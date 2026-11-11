@@ -801,13 +801,15 @@ impl Asked<'_> {
             if case.kind() == Kind::Message {
                 if let Some(listening) = listening {
                     if listening.is_unknown(*key) {
-                        let writing = self.far.map(FarLocks::write).transpose()?;
+                        // Its key is owed already, since the pickup went
+                        // unknown; the far side's locks are checked first.
+                        let _writing = self.far.map(FarLocks::write).transpose()?;
                         if let Some(turn) = listening.recovered(*key, case) {
-                            if let Some(writing) = &writing {
-                                writing.owe(turn.key);
-                            }
                             taken.push(turn);
                             continue;
+                        }
+                        if let Some(far) = self.far {
+                            far.owed().retain(|owed| owed != key);
                         }
                     }
                     if self.mood.linger().is_some()
@@ -829,6 +831,11 @@ impl Asked<'_> {
                         } else {
                             found.withdrawn.push(turn);
                         }
+                    }
+                    if let Some(writing) = &writing
+                        && listening.is_unknown(*key)
+                    {
+                        writing.owe(*key);
                     }
                 }
                 continue;
@@ -878,13 +885,14 @@ impl Asked<'_> {
                     return Some(error.into());
                 }
             };
-            match listening.take(self.ctx, key, case, warned) {
-                Ok(Some(turn)) => {
-                    if let Some(writing) = &writing {
-                        writing.owe(turn.key);
-                    }
-                    taken.push(turn);
-                }
+            let result = listening.take(self.ctx, key, case, warned);
+            if let Some(writing) = &writing
+                && (listening.is_unknown(key) || matches!(result, Ok(Some(_))))
+            {
+                writing.owe(key);
+            }
+            match result {
+                Ok(Some(turn)) => taken.push(turn),
                 Ok(None) => {}
                 Err(error) => return Some(error),
             }
@@ -1334,6 +1342,9 @@ struct Listening<'a> {
     /// says whether they are this wait's. Those still here when it ends are
     /// named on stderr.
     unknown: RefCell<HashMap<Key, (u64, String)>>,
+    /// The messages a read found still sent after an unknown pickup, which
+    /// the write may yet land on: a retake refused as stale reads back.
+    retrying: RefCell<HashSet<Key>>,
 }
 
 impl Drop for Listening<'_> {
@@ -1376,6 +1387,7 @@ impl<'a> Listening<'a> {
             given: HashSet::new(),
             due: None,
             unknown: RefCell::new(HashMap::new()),
+            retrying: RefCell::new(HashSet::new()),
         })
     }
 
@@ -1523,7 +1535,9 @@ impl<'a> Listening<'a> {
     fn recovered(&self, key: Key, case: &Case) -> Option<Turn> {
         let (revision, why) = self.unknown.borrow_mut().remove(&key)?;
         if !self.own_pickup(revision, case) {
-            if case.state() != State::Sent {
+            if case.state() == State::Sent {
+                self.retrying.borrow_mut().insert(key);
+            } else {
                 warn_unsettled(key, &why);
             }
             return None;
@@ -1577,29 +1591,41 @@ impl<'a> Listening<'a> {
         let revision = Some(case.revision());
         let taken = write::append(ctx, key, Author::Agent, &record, &writer, revision);
         thread::sleep(WRITE_PAUSE);
+        let turn = |now: Case| Turn {
+            key,
+            case: now,
+            at,
+            fresh: true,
+            taken: true,
+        };
         match taken {
-            Ok(after) => Ok(Some(Turn {
-                key,
-                case: after,
-                at,
-                fresh: true,
-                taken: true,
-            })),
-            Err(error) if matches!(error.status(), Status::Stale | Status::Transition) => Ok(None),
+            Ok(after) => Ok(Some(turn(after))),
+            Err(error) if matches!(error.status(), Status::Stale | Status::Transition) => {
+                // Refused because the earlier pickup, of unknown outcome,
+                // landed after a read found the message still sent.
+                if self.retrying.borrow_mut().remove(&key) {
+                    match ctx.case(key) {
+                        Ok(now) if self.own_pickup(case.revision(), &now) => {
+                            return Ok(Some(turn(now)));
+                        }
+                        Err(_) => {
+                            let unknown = (case.revision(), error.to_string());
+                            self.unknown.borrow_mut().insert(key, unknown);
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                Ok(None)
+            }
             Err(error) => {
                 // A pickup stored whose answer was lost is this wait's, and
                 // no later wait takes the message again.
                 match ctx.case(key) {
                     Ok(now) if self.own_pickup(case.revision(), &now) => {
-                        return Ok(Some(Turn {
-                            key,
-                            case: now,
-                            at,
-                            fresh: true,
-                            taken: true,
-                        }));
+                        return Ok(Some(turn(now)));
                     }
-                    Err(_) if error.outcome_unknown() => {
+                    // It may land yet, even when a read back says sent.
+                    _ if error.outcome_unknown() => {
                         let unknown = (case.revision(), error.to_string());
                         self.unknown.borrow_mut().insert(key, unknown);
                         return Err(error);
@@ -2146,6 +2172,7 @@ mod tests {
             given: HashSet::new(),
             due: None,
             unknown: RefCell::default(),
+            retrying: RefCell::default(),
         }
     }
 

@@ -85,6 +85,12 @@ pub(crate) enum Fault {
     Gone,
     /// The connection closes with no answer.
     Hangup,
+    /// The connection closes with no answer, and the request is applied
+    /// after this wait.
+    Late(Duration),
+    /// The connection closes with no answer, and the request is applied
+    /// just before the next write of an event.
+    Deferred,
     /// 200, with a body that is not the API's.
     Garbage,
     /// 200, with this body.
@@ -160,6 +166,8 @@ struct State {
     /// Faults for the requests straight after a write of an event that met
     /// a fault of `event_faults`, ahead of `faults`.
     after_event: Mutex<VecDeque<Fault>>,
+    /// A request of [`Fault::Deferred`], not applied yet.
+    deferred: Mutex<Option<Request>>,
     requests: Mutex<Vec<String>>,
     tokens: Mutex<Vec<Minted>>,
     grants: Mutex<BTreeMap<String, Grant>>,
@@ -583,6 +591,9 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
     let event_fault = event
         .then(|| lock(&state.event_faults).pop_front())
         .flatten();
+    if event && let Some(deferred) = lock(&state.deferred).take() {
+        handle(state, addr, &deferred);
+    }
     if event_fault.is_some() {
         let mut after = lock(&state.after_event);
         let mut faults = lock(&state.faults);
@@ -606,6 +617,16 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
         ),
         Some(Fault::Refuse(status, category)) => {
             Answer::refuse(status, category, "the fake refused")
+        }
+        Some(Fault::Late(wait)) => {
+            drop(stream);
+            thread::sleep(wait);
+            handle(state, addr, &request);
+            return;
+        }
+        Some(Fault::Deferred) => {
+            *lock(&state.deferred) = Some(request);
+            return;
         }
         Some(Fault::Lost) => {
             handle(state, addr, &request);
