@@ -1891,55 +1891,48 @@ fn a_listening_wait_that_cannot_print_names_each_message_it_took() {
     assert_eq!(out.stderr.lines().count(), 2, "{out:?}");
 }
 
-/// Waits until the case `id` is picked up, as a wait that takes it does.
-fn until_picked_up(env: &Env, id: &str) {
-    let deadline = Instant::now() + PATIENCE;
-    while env.case(id).state().as_str() != "pickedup" {
-        assert!(Instant::now() < deadline, "{id} was not picked up");
-        thread::sleep(Duration::from_millis(50));
+/// A steady wait killed during its quiet time, however it is killed, has
+/// taken nothing: the message is still sent, and the next wait takes it.
+#[test]
+fn a_wait_killed_while_it_collects_leaves_its_message_for_the_next_wait() {
+    for signal in ["TERM", "KILL"] {
+        let env = Env::new();
+        // A case it waits on still open, so that it lingers on the message.
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Left open",
+            "--worker",
+            "w9",
+        ]);
+        let marker = marker(&env);
+        let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+        let mut waiting = Waiting::after_first_read(&env, &marker, &args);
+        let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+        // A read of the store, every second, has found it.
+        thread::sleep(Duration::from_millis(2500));
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), waiting.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{signal}");
+        waiting.child.wait().unwrap();
+        assert_eq!(waiting.stdout.join().unwrap(), "", "{signal}");
+
+        let lines = woke(&wait(&env, &listening("w9", &[])));
+        assert_eq!(ids(&lines), [sent.as_str()], "{signal}");
+        assert_eq!(lines[0]["state"], "pickedup", "{signal}");
     }
 }
 
-/// A steady wait that took a message and then fails to read the store, as
-/// it collects, still prints the message it took, and says the failure on
-/// stderr: no later wait takes it again (AG-16).
+/// A steady wait that fails to read the store as it collects has taken
+/// nothing: it ends with the failure, exit 1, and prints nothing, so no
+/// `next_since` passes what it held.
 #[test]
-fn a_steady_wait_that_fails_after_taking_a_message_prints_it() {
-    let env = Env::new();
-    // A case it waits on still open, so that it lingers after the message.
-    env.open(&[
-        "--kind",
-        "fyi",
-        "--urgency",
-        "today",
-        "--title",
-        "Left open",
-        "--worker",
-        "w9",
-    ]);
-    let marker = marker(&env);
-    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
-    let waiting = Waiting::after_first_read(&env, &marker, &args);
-    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
-    until_picked_up(&env, &sent);
-
-    spoil_store(&env);
-    let out = waiting.finish();
-    let lines = woke(&out);
-    assert_eq!(ids(&lines), [sent.as_str()], "{out:?}");
-    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
-    assert_eq!(
-        without(&out.stderr, &marker),
-        "warning: file is not a database\n",
-        "{out:?}"
-    );
-}
-
-/// A steady wait that collected an answer, took a message and then fails
-/// to read the store prints both: printing the message alone would move
-/// its `next_since` past the answer, which a later wait would then miss.
-#[test]
-fn a_steady_wait_that_fails_after_taking_a_message_prints_what_it_collected() {
+fn a_steady_wait_that_cannot_read_the_store_as_it_collects_takes_nothing() {
     let env = Env::new();
     let open = |title: &str| {
         env.open(&[
@@ -1959,21 +1952,43 @@ fn a_steady_wait_that_fails_after_taking_a_message_prints_what_it_collected() {
     let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
     let waiting = Waiting::after_first_read(&env, &marker, &args);
     run(&env, "answer", &answered, &["--ack"]);
-    thread::sleep(Duration::from_millis(1500));
     let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
-    until_picked_up(&env, &sent);
+    thread::sleep(Duration::from_millis(2500));
+    assert_eq!(env.case(&sent).state().as_str(), "sent");
 
     spoil_store(&env);
     let out = waiting.finish();
-    let lines = woke(&out);
-    assert_eq!(ids(&lines), [answered.as_str(), sent.as_str()], "{out:?}");
-    // The store cannot take the answer's pickup: it is printed as read.
-    assert_eq!(lines[0]["state"], "answered", "{out:?}");
-    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
-    assert!(
-        without(&out.stderr, &marker).starts_with("warning: file is not a database\n"),
-        "{out:?}"
-    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(out.stderr.contains("file is not a database"), "{out:?}");
+}
+
+/// A message another session takes while a steady wait holds it is that
+/// session's: the wait does not print it, and goes on to its timeout.
+#[test]
+fn a_message_taken_by_another_session_while_a_steady_wait_collects_is_not_printed() {
+    let env = Env::new();
+    env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "5s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+    thread::sleep(Duration::from_millis(1500));
+    assert_eq!(env.case(&sent).state().as_str(), "sent");
+    run(&env, "pickup", &sent, &["--by", "someone-else"]);
+
+    let out = waiting.finish();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
 }
 
 /// A message waits until a wait takes it: one sent before the wait began is
@@ -2761,6 +2776,84 @@ fn a_message_taken_while_a_steady_wait_collects_is_in_the_same_print() {
     }
 }
 
+/// A steady wait with no case open collects messages through its quiet
+/// time: three sent a few seconds apart wake it once.
+#[test]
+fn a_burst_of_messages_wakes_a_steady_wait_with_no_case_open_once() {
+    let env = Env::new();
+    // Makes the store, with no case in it that the wait waits on.
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let mut sent = Vec::new();
+    for body in ["One.", "Two.", "Three."] {
+        sent.push(message(&env, &["--to", "w9", "--body", body]));
+        thread::sleep(Duration::from_secs(3));
+    }
+    let lines = woke(&waiting.finish());
+    assert_eq!(ids(&lines), sent);
+    for line in &lines {
+        assert_eq!(line["state"], "pickedup", "{line}");
+    }
+}
+
+/// A steady wait with no case open, killed in its quiet time, has taken
+/// nothing: the lone message it held is the next wait's.
+#[test]
+fn a_lone_message_held_by_a_steady_wait_with_no_case_open_survives_a_kill() {
+    for signal in ["TERM", "KILL"] {
+        let env = Env::new();
+        message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+        let marker = marker(&env);
+        let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+        let mut waiting = Waiting::after_first_read(&env, &marker, &args);
+        let sent = message(&env, &["--to", "w9", "--body", "Then run the tests."]);
+        // A read of the store, every second, has found it.
+        thread::sleep(Duration::from_millis(2500));
+        assert_eq!(env.case(&sent).state().as_str(), "sent", "{signal}");
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), waiting.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{signal}");
+        waiting.child.wait().unwrap();
+        assert_eq!(waiting.stdout.join().unwrap(), "", "{signal}");
+
+        let lines = woke(&wait(&env, &listening("w9", &[])));
+        assert_eq!(ids(&lines), [sent.as_str()], "{signal}");
+        assert_eq!(lines[0]["state"], "pickedup", "{signal}");
+    }
+}
+
+/// A blocking message ends a steady wait at once: the agent should stop for
+/// it, not sit out the quiet time.
+#[test]
+fn a_blocking_message_ends_a_steady_wait_at_once() {
+    let env = Env::new();
+    message(&env, &["--to", "someone-else", "--body", "Not for w9."]);
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    // Held already when the blocking one comes.
+    let held = message(&env, &["--to", "w9", "--body", "When you can."]);
+    thread::sleep(Duration::from_millis(1500));
+    let start = Instant::now();
+    let sent = message(
+        &env,
+        &["--to", "w9", "--urgency", "blocking", "--body", "Stop."],
+    );
+    assert_eq!(
+        ids(&woke(&waiting.finish())),
+        [held.as_str(), sent.as_str()]
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
 // Pins of how a wait prints what it found (`print` in `commands/wait.rs`):
 // each line exactly, its order, and how a wait ends when a write or a read
 // fails part-way.
@@ -3047,6 +3140,111 @@ fn a_full_wait_whose_actors_cannot_be_read_prints_nothing_and_picks_up_nothing()
     );
 }
 
+/// A pickup that makes its actor, with the table of actors then unreadable,
+/// still prints each case, its new actor by id, and says so once on stderr
+/// however many cases need it, rather than leave the agent to wonder at the
+/// missing name.
+#[test]
+fn a_full_wait_that_cannot_read_the_actor_its_pickup_made_warns() {
+    let env = Env::new();
+    env.open_fyi("Makes the store");
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w9"}"#;
+    let id = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &id, &["--ack"]);
+    let open = r#"{"kind": "fyi", "urgency": "today", "title": "By hand", "worker": "w8"}"#;
+    let other = env.insert(None, 1, "agent", "open", open);
+    run(&env, "answer", &other, &["--ack"]);
+    // The table reads until it holds the actor the pickup makes.
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE actors RENAME TO actors_kept;
+         CREATE VIEW actors AS SELECT rowid AS rowid, id, kind,
+             CASE WHEN name IN ('w8', 'w9') THEN x'ff' ELSE name END AS name, created
+             FROM actors_kept;
+         CREATE TRIGGER actors_insert INSTEAD OF INSERT ON actors BEGIN
+             INSERT INTO actors_kept VALUES (NEW.id, NEW.kind, NEW.name, NEW.created);
+         END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let out = wait(
+        &env,
+        &[
+            "--full",
+            "--id",
+            &id,
+            "--id",
+            &other,
+            "--since",
+            "2000-01-01T00:00:00Z",
+            "--pickup",
+            "--by",
+            "me",
+        ],
+    );
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    assert_eq!(ids(&lines), [id.as_str(), other.as_str()]);
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert_eq!(lines[1]["state"], "pickedup", "{out:?}");
+    assert_eq!(
+        lines[0]["events"][2]["actor"],
+        serde_json::json!({"id": actor_of(&env, &id, 3)})
+    );
+    let warnings = out
+        .stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with("warning: the actors cannot be read, so they are named by id: ")
+        })
+        .count();
+    assert_eq!(warnings, 1, "{out:?}");
+}
+
+/// A wait whose first read of the actors failed, and which goes on because
+/// it took a message, warns once even when a pickup then wants the actors
+/// again.
+#[test]
+fn a_full_wait_warns_once_when_its_first_read_of_the_actors_failed_and_a_pickup_follows() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Answered",
+        "--worker",
+        "w",
+    ]);
+    run(&env, "answer", &id, &["--ack"]);
+    let sent = message(&env, &["--to", "w"]);
+    spoil_actors(&env);
+
+    let args = [
+        "--pickup",
+        "--worker",
+        "w",
+        "--full",
+        "--since",
+        "2000-01-01T00:00:00Z",
+    ];
+    let out = wait(&env, &args);
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines = woke(&out);
+    let mut printed = ids(&lines);
+    printed.sort_unstable();
+    let mut want = vec![id.as_str(), sent.as_str()];
+    want.sort_unstable();
+    assert_eq!(printed, want, "{out:?}");
+    assert_eq!(
+        out.stderr.matches("the actors cannot be read").count(),
+        1,
+        "{out:?}"
+    );
+}
+
 /// A message a listening `--full` wait took is picked up already, so a
 /// read of the actors that fails does not lose it: it is printed with each
 /// actor named by id alone, after one warning, and the wait ends with exit
@@ -3329,4 +3527,177 @@ fn a_forwarded_pickup_wait_stopped_while_it_prints_names_only_the_cases_not_prin
         format!("warning: {second}: picked up, but not printed: a signal ended the wait\n"),
     );
     assert_eq!(env.case(&first).state().as_str(), "pickedup");
+}
+
+/// A store with a case left open for the worker `w9`, and its marker.
+fn one_left_open(env: &Env) -> String {
+    env.open(&[
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    marker(env)
+}
+
+/// A message the human edits during the quiet time is taken as
+/// edited, at its new revision.
+#[test]
+fn a_message_edited_while_a_steady_wait_collects_is_taken_as_edited() {
+    let env = Env::new();
+    let marker = one_left_open(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "30s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let id = message(&env, &["--to", "w9", "--body", "Rebase."]);
+    thread::sleep(Duration::from_millis(2500));
+    assert_eq!(env.case(&id).state().as_str(), "sent");
+    let lock = lock(&env);
+    human_event(&lock, &id, 2, "amend", r#"{"body": "Rebase, then test."}"#);
+    let lines = woke(&waiting.finish());
+    assert_eq!(ids(&lines), [id.as_str()]);
+    assert_eq!(lines[0]["body"], "Rebase, then test.");
+    assert_eq!(lines[0]["revision"], 3);
+}
+
+/// A message the human withdraws during the quiet time is not
+/// printed, and the wait goes on waiting, to its timeout.
+#[test]
+fn a_message_withdrawn_while_a_steady_wait_collects_is_not_printed() {
+    let env = Env::new();
+    let marker = one_left_open(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "5s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let id = message(&env, &["--to", "w9"]);
+    thread::sleep(Duration::from_millis(2500));
+    let lock = lock(&env);
+    human_event(&lock, &id, 2, "withdraw", r#"{"reason": "done by hand"}"#);
+    let out = waiting.finish();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(
+        files(&env, &id),
+        ["0001-human-open.json", "0002-human-withdraw.json"]
+    );
+}
+
+/// Of two steady waits on one shared label, one prints the message
+/// and the other goes on waiting.
+#[test]
+fn two_steady_waits_on_a_shared_label_print_a_message_once() {
+    let env = Env::new();
+    for worker in ["w1", "w2"] {
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Left open",
+            "--worker",
+            worker,
+            "--label",
+            "release",
+        ]);
+    }
+    let marker = marker(&env);
+    let more = ["--label", "release", "--mood", "steady", "--timeout", "14s"];
+    let (one, two) = (listening("w1", &more), listening("w2", &more));
+    let waits = [
+        Waiting::after_first_read(&env, &marker, &one),
+        Waiting::after_first_read(&env, &marker, &two),
+    ];
+    let id = message(&env, &["--label", "release"]);
+    let outs: Vec<Output> = waits.into_iter().map(Waiting::finish).collect();
+    let printed: Vec<&Output> = outs.iter().filter(|out| out.stdout.contains(&id)).collect();
+    assert_eq!(printed.len(), 1, "{outs:?}");
+    let codes: Vec<i32> = outs.iter().map(|out| out.code).collect();
+    assert!(codes.contains(&0) && codes.contains(&2), "{outs:?}");
+    assert_eq!(files(&env, &id).len(), 2, "{outs:?}");
+}
+
+/// A local store that reads but refuses the pickup, at a timeout
+/// after the quiet time: exit 1 with why, once, the message still sent.
+#[test]
+fn a_steady_wait_on_a_store_that_refuses_the_take_exits_1_at_its_timeout() {
+    let env = Env::new();
+    let marker = one_left_open(&env);
+    let conn = Connection::open(&env.store).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER no_pickup BEFORE INSERT ON events WHEN NEW.event = 'pickup'
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .unwrap();
+    let start = Instant::now();
+    let args = listening("w9", &["--mood", "steady", "--timeout", "13s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let id = message(&env, &["--to", "w9"]);
+    let out = waiting.finish();
+    assert!(
+        start.elapsed() < Duration::from_secs(16),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(out.stderr.contains("refused by the test"), "{out:?}");
+    assert_eq!(out.stderr.matches("not taken").count(), 1, "{out:?}");
+    assert_eq!(env.case(&id).state().as_str(), "sent");
+}
+
+/// The `next_since` of a steady wait that printed an answer and a
+/// message: a later wait from it repeats neither and wakes on what is new.
+#[test]
+fn a_later_wait_from_a_steady_wait_s_next_since_repeats_and_misses_nothing() {
+    let env = Env::new();
+    let open = |title: &str| {
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            title,
+            "--worker",
+            "w9",
+        ])
+    };
+    let answered = open("Answered");
+    let later = open("Later");
+    let _left = open("Left open");
+    let marker = marker(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "4s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    run(&env, "answer", &answered, &["--ack"]);
+    let sent = message(&env, &["--to", "w9"]);
+    let lines = woke(&waiting.finish());
+    assert_eq!(ids(&lines), [answered.as_str(), sent.as_str()]);
+    let since = lines[0]["next_since"].as_str().unwrap().to_owned();
+
+    let quiet = wait(
+        &env,
+        &listening("w9", &["--since", &since, "--timeout", "2s"]),
+    );
+    assert_eq!((quiet.code, quiet.stdout.as_str()), (2, ""), "{quiet:?}");
+    run(&env, "answer", &later, &["--ack"]);
+    let lines = woke(&wait(&env, &listening("w9", &["--since", &since])));
+    assert_eq!(ids(&lines), [later.as_str()]);
+}
+
+/// A steady wait holds only the messages sent to it: a message to
+/// another worker is left alone.
+#[test]
+fn a_steady_wait_leaves_a_message_to_another_worker() {
+    let env = Env::new();
+    let marker = one_left_open(&env);
+    let args = listening("w9", &["--mood", "steady", "--timeout", "3s"]);
+    let waiting = Waiting::after_first_read(&env, &marker, &args);
+    let id = message(&env, &["--to", "w8"]);
+    let out = waiting.finish();
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(env.case(&id).state().as_str(), "sent");
 }

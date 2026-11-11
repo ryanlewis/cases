@@ -703,6 +703,42 @@ fn open_warns_of_options_numbered_or_marked_as_the_pick() {
     assert_eq!(plain.stderr, "");
 }
 
+/// An `open --wait` hears its case's answer itself, so it is not warned
+/// that the sessions listening on the label will not, nor told to open the
+/// case again or wait on its id.
+#[test]
+fn open_wait_is_not_warned_of_listeners_its_answer_does_not_wake() {
+    let env = Env::new();
+    let open = |wait: bool| {
+        let mut args = vec![
+            "open",
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Runner",
+            "--worker",
+            "ci-runner",
+            "--label",
+            "homeday",
+        ];
+        if wait {
+            args.extend(["--wait", "--timeout", "100ms"]);
+        }
+        env.cases(&args)
+    };
+    assert_eq!(open(false).code, 0);
+    env.db()
+        .listen("homeday", "homeday", &["homeday".to_owned()], &[], None)
+        .unwrap();
+
+    assert!(open(false).stderr.contains("wakes none of them"));
+    let out = open(true);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(!out.stderr.contains("wakes none of them"), "{out:?}");
+}
+
 #[test]
 fn open_warns_when_its_answer_wakes_none_of_the_waits_on_its_label() {
     let env = Env::new();
