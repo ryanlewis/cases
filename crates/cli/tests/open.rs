@@ -804,3 +804,185 @@ fn open_warns_when_its_answer_wakes_none_of_the_waits_on_its_label() {
     ]);
     assert_eq!((out.code, out.stderr.as_str()), (0, ""), "{out:?}");
 }
+
+/// `cases open` with `args` and `--wait`, started with its stdout and
+/// stderr piped; gives it once the first line of stdout, the id, is out.
+fn opening_and_waiting(env: &Env, args: &[&str]) -> (std::process::Child, String) {
+    use std::io::{BufRead, BufReader};
+    let mut all = vec!["open"];
+    all.extend(args);
+    all.push("--wait");
+    let mut child = common::spawn(
+        env.command(env.store_args(&all))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    );
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut id = String::new();
+    stdout.read_line(&mut id).unwrap();
+    // Put back what is left for the end, in order.
+    child.stdout = Some(stdout.into_inner());
+    (child, id.trim().to_owned())
+}
+
+/// The lines a finished `child` printed after its id, with its stderr and
+/// exit code.
+fn rest(child: std::process::Child) -> (Vec<serde_json::Value>, String, i32) {
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    (
+        stdout.lines().map(json).collect(),
+        String::from_utf8(out.stderr).unwrap(),
+        out.status.code().unwrap(),
+    )
+}
+
+/// `line` with its case's id, and the times that differ between two cases
+/// answered one after the other, left out.
+fn same_but_when(line: &serde_json::Value) -> serde_json::Value {
+    let mut line = line.clone();
+    let fields = line.as_object_mut().unwrap();
+    fields.remove("id");
+    fields.remove("next_since");
+    fields["answer"]
+        .as_object_mut()
+        .unwrap()
+        .remove("answered_at");
+    line
+}
+
+const DECISION: &[&str] = &[
+    "--kind",
+    "decision",
+    "--urgency",
+    "today",
+    "--title",
+    "Pin bun?",
+    "--option",
+    "Pin",
+    "--option",
+    "Float",
+    "--worker",
+    "bun-pins",
+];
+
+/// `open --wait` prints the id first, before the case is answered, and
+/// then, once it is, the line `cases wait --id ID --since ID --pickup --by
+/// WORKER` prints after a plain open: the case picked up by its worker.
+/// It ends as that wait does, exit 0, with the same stderr.
+#[test]
+fn open_wait_prints_the_id_then_what_the_chained_wait_prints() {
+    let env = Env::new();
+    let (waiting, id) = opening_and_waiting(&env, DECISION);
+    // The id is out while the case is still open, before any answer.
+    assert_eq!(env.case(&id).state(), State::Open);
+    env.ok(&["answer", &id, "--option", "1", "--as", "Ryan"]);
+    let (lines, stderr, code) = rest(waiting);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["id"], id.as_str());
+    assert_eq!(lines[0]["state"], "pickedup");
+    let case = env.case(&id);
+    assert_eq!(case.pickup().unwrap().by, "bun-pins");
+
+    // The two commands, chained as the skill teaches them.
+    let mut open = vec!["open"];
+    open.extend(DECISION);
+    let chained = env.ok(&open).trim().to_owned();
+    let mut wait = env.command(env.store_args(&[
+        "wait", "--id", &chained, "--since", &chained, "--pickup", "--by", "bun-pins",
+    ]));
+    let waiting = common::spawn(
+        wait.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    );
+    env.ok(&["answer", &chained, "--option", "1", "--as", "Ryan"]);
+    let (theirs, their_stderr, their_code) = rest(waiting);
+    assert_eq!((code, stderr.as_str()), (their_code, their_stderr.as_str()));
+    assert_eq!(
+        lines.iter().map(same_but_when).collect::<Vec<_>>(),
+        theirs.iter().map(same_but_when).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        lines[0]["next_since"],
+        env.case(&id).events()[1].at().unwrap().to_string().as_str()
+    );
+}
+
+/// With no worker, `open --wait` picks the answer up by no name, as `cases
+/// wait --pickup` given no `--by` does.
+#[test]
+fn open_wait_with_no_worker_picks_up_by_no_name() {
+    let env = Env::new();
+    let args = ["--kind", "fyi", "--urgency", "today", "--title", "Seen?"];
+    let (waiting, id) = opening_and_waiting(&env, &args);
+    env.ok(&["answer", &id, "--ack"]);
+    let (lines, stderr, code) = rest(waiting);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(lines[0]["state"], "pickedup");
+    assert_eq!(env.case(&id).pickup().unwrap().by, "");
+}
+
+/// A `--wait` that times out has printed the id already, and ends as `cases
+/// wait` does at its timeout: one line on stderr, exit 2. The case stays
+/// open.
+#[test]
+fn open_wait_that_times_out_leaves_the_id_on_stdout_and_exits_2() {
+    let env = Env::new();
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--wait", "--timeout", "100ms"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "UkLWZ\n");
+    assert_eq!(out.stderr, "no case needed the agent within 100ms\n");
+    assert_eq!(env.case("UkLWZ").state(), State::Open);
+}
+
+/// `--timeout` is the wait's, so an open without `--wait` refuses it: exit
+/// 1, and nothing written. Without `--wait`, open is as it was.
+#[test]
+fn open_refuses_a_timeout_without_wait_and_writes_nothing() {
+    let env = Env::new();
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--timeout", "1s"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("--wait"), "{out:?}");
+    assert!(!env.store.exists());
+}
+
+/// `--json` prints a record over several lines, and the wait's lines are
+/// one each, so `--wait` refuses it: exit 1, and nothing written.
+#[test]
+fn open_refuses_json_with_wait_and_writes_nothing() {
+    let env = Env::new();
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--json", "--wait"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("--json"), "{out:?}");
+    assert!(!env.store.exists());
+}
+
+/// A config file whose mood the wait would refuse is refused before the
+/// case is opened: exit 1, and no case left with no wait on it.
+#[test]
+fn open_wait_refuses_a_bad_mood_before_it_opens_the_case() {
+    let env = Env::new();
+    env.config("mood = \"sleepy\"\n");
+    let mut args = vec!["open"];
+    args.extend(DECISION);
+    args.extend(["--wait", "--timeout", "100ms"]);
+    let out = env.cases(&args);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("\"sleepy\""), "{out:?}");
+    assert!(!env.store.exists());
+}

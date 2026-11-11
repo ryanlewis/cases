@@ -1125,7 +1125,11 @@ fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_ea
             .stderr(Stdio::piped()),
     );
     let until = Instant::now() + Duration::from_secs(10);
-    while holder(&locks, "worker-lead-") == before {
+    // A holder writes its line after it takes the lock, in parts: until the
+    // whole of a new one is there, a refusal could not name it.
+    while holder(&locks, "worker-lead-")
+        .is_none_or(|now| Some(&now) == before.as_ref() || !now.ends_with('\n'))
+    {
         assert!(Instant::now() < until, "the forwarded wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
@@ -1833,7 +1837,62 @@ fn held(dir: &std::path::Path, prefix: &str) -> bool {
     fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry.file_name().to_string_lossy().starts_with(prefix)
-                && fs::read_to_string(entry.path()).is_ok_and(|text| !text.trim().is_empty())
+                && fs::read_to_string(entry.path()).is_ok_and(|text| text.ends_with('\n'))
         })
     })
+}
+
+/// `open --wait` on a forwarded store opens the case on the far side,
+/// prints its id first, and picks the answer up there as a chained `wait
+/// --pickup` does, taking its locks on the far side and letting them go.
+#[test]
+fn open_wait_over_ssh_opens_waits_and_picks_up_on_the_far_side() {
+    use std::io::{BufRead, BufReader};
+    let f = Forwarding::new();
+    let mut child = spawn(
+        f.env
+            .command([
+                "open",
+                "--kind",
+                "decision",
+                "--urgency",
+                "today",
+                "--title",
+                "Ship it?",
+                "--option",
+                "yes",
+                "--option",
+                "no",
+                "--worker",
+                "lead",
+                "--wait",
+                "--timeout",
+                "30s",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut id = String::new();
+    stdout.read_line(&mut id).unwrap();
+    let id = id.trim().to_owned();
+    assert!(
+        f.far(&["show", &id, "--json"])
+            .contains(r#""state": "open""#)
+    );
+    f.far(&["answer", &id, "--option", "1"]);
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut stdout, &mut rest).unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success(), "{status:?}: {rest}");
+    let line = json(rest.trim());
+    assert_eq!(line["id"], id.as_str());
+    assert_eq!(line["state"], "pickedup");
+    let shown = json(&f.far(&["show", &id, "--json"]));
+    assert_eq!(shown["pickup"]["by"], "lead");
+    // Its lock is let go: a pickup wait on the same id, which is refused
+    // while another holds it, starts at once.
+    let again = f.run(&["wait", "--pickup", "--id", &id, "--timeout", "100ms"]);
+    assert_eq!(again.code, 2, "{again:?}");
 }

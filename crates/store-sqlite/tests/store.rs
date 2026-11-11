@@ -184,8 +184,101 @@ fn only_create_makes_the_store() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(meta.permissions().mode() & 0o777, 0o644);
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     }
+}
+
+/// The permission bits of the file or directory at `path`.
+#[cfg(unix)]
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// The file SQLite keeps beside the store at `db`, under `suffix`.
+#[cfg(unix)]
+fn beside(db: &Db, suffix: &str) -> std::path::PathBuf {
+    let mut file = db.path().as_os_str().to_owned();
+    file.push(suffix);
+    file.into()
+}
+
+/// A store holds what agents asked and what the human answered, so a new one
+/// is for its owner alone: the file, each directory made for it, and the log
+/// and shared-memory files SQLite makes beside it, whose modes it copies from
+/// the store's.
+#[cfg(unix)]
+#[test]
+fn a_new_store_is_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("made").join("for-it");
+    let db = Db::new(parent.join("cases.db"));
+    create(&db, "fyi");
+    assert_eq!(mode_of(db.path()), 0o600);
+    assert_eq!(mode_of(&parent), 0o700);
+    assert_eq!(mode_of(parent.parent().unwrap()), 0o700);
+    assert_eq!(mode_of(&beside(&db, "-wal")), 0o600);
+    assert_eq!(mode_of(&beside(&db, "-shm")), 0o600);
+}
+
+/// A directory that was there keeps its mode when a store is made in it, and
+/// only the directories below it are made private.
+#[cfg(unix)]
+#[test]
+fn a_new_store_leaves_a_directory_that_was_there_as_it_was() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let there = dir.path().join("there");
+    fs::create_dir(&there).unwrap();
+    fs::set_permissions(&there, fs::Permissions::from_mode(0o755)).unwrap();
+    let db = Db::new(there.join("cases.db"));
+    create(&db, "fyi");
+    assert_eq!(mode_of(&there), 0o755);
+    assert_eq!(mode_of(db.path()), 0o600);
+
+    let below = Db::new(there.join("new").join("cases.db"));
+    create(&below, "fyi");
+    assert_eq!(mode_of(&there), 0o755);
+    assert_eq!(mode_of(&there.join("new")), 0o700);
+}
+
+/// An empty file that was there is made into the store with the mode it had:
+/// only a file cases makes is private.
+#[cfg(unix)]
+#[test]
+fn an_empty_file_made_into_a_store_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, db) = scratch();
+    fs::write(db.path(), "").unwrap();
+    fs::set_permissions(db.path(), fs::Permissions::from_mode(0o640)).unwrap();
+    create(&db, "fyi");
+    assert_eq!(mode_of(db.path()), 0o640);
+}
+
+/// A store that was there, and its directory, keep their modes through a
+/// write, and SQLite's files beside it follow the store's.
+#[cfg(unix)]
+#[test]
+fn an_existing_store_and_its_directory_keep_their_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("store");
+    let path = parent.join("cases.db");
+    // Closing the last connection removes the -wal and -shm files.
+    drop({
+        let db = Db::new(&path);
+        create(&db, "fyi");
+        db
+    });
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let db = Db::new(&path);
+    create(&db, "fyi");
+    assert_eq!(mode_of(&path), 0o644);
+    assert_eq!(mode_of(&parent), 0o755);
+    assert_eq!(mode_of(&beside(&db, "-wal")), 0o644);
+    assert_eq!(mode_of(&beside(&db, "-shm")), 0o644);
 }
 
 /// A file that exists but that no cases has written to, such as one another

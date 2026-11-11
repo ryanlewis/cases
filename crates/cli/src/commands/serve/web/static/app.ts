@@ -234,12 +234,14 @@ interface Live {
   heard: (read: Listener[] | null) => Listener[] | null;
   setNow: (now: number) => void;
   setData: (update: (was: Data | null) => Data | null) => void;
+  reopen: { current: (() => boolean) | null };
+  failed: { current: boolean };
 }
 
 // The page following the store: the event stream, the minute's tick and
 // the 15 s read of who is listening, each an effect of App's, in App's
 // order. Each runs once, with what App's first draw gave it.
-function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live): void {
+function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed }: Live): void {
   // The event stream (IN-06). One tab of the browser holds it, shown or
   // hidden: a browser allows six connections to one address, shared by all
   // its tabs, and each stream holds one. The holder is the tab that holds
@@ -255,6 +257,9 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live)
     const locks = channel && "locks" in navigator ? navigator.locks : null;
     let stream: EventSource | null = null;
     let dropped = false;
+    // Whether the stream opening is one the minute's tick opened again,
+    // which checked the build itself.
+    let reopened = false;
     let gone = false;
     let release: (() => void) | null = null;
     const seen = (v: string) => {
@@ -276,6 +281,8 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live)
       // down (IN-12). A read set off as the stream dropped, as when serve
       // restarts, may have failed with it: read again.
       stream.onopen = () => {
+        // One the minute's tick opened again: the tick checks the build.
+        if (reopened && !dropped) return;
         checkBuild();
         if (dropped) refresh();
         // The other tabs hold no stream of their own: they check the build
@@ -287,6 +294,14 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live)
     const close = () => {
       if (stream) stream.close();
       stream = null;
+      reopened = false;
+    };
+    reopen.current = () => {
+      if (!stream || dropped) return false;
+      close();
+      reopened = true;
+      open();
+      return true;
     };
     if (channel) {
       channel.onmessage = (e) => {
@@ -320,11 +335,21 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData }: Live)
 
   // Ages stay right, and a lost message is caught up, once a minute. So is
   // an upgrade, for a browser whose stream did not come back after serve
-  // restarted (IN-12).
+  // restarted (IN-12). A tab whose stream is up opens it again rather than
+  // read every case: serve answers a stream opened after the version the
+  // page has at once if the store has moved since, which the page then
+  // reads, so a stream that died without a word loses nothing. It reads who
+  // is listening, which moves no version (ST-16). A tab with no stream up,
+  // or whose last read failed, reads the store.
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Date.now());
-      refresh();
+      if (failed.current || !(reopen.current && reopen.current())) refresh();
+      else
+        void api.listeners().then((read) => {
+          const listeners = heard(read);
+          setData((was) => (was ? { ...was, listeners } : was));
+        });
       checkBuild();
     }, 60000);
     return () => clearInterval(timer);
@@ -386,6 +411,12 @@ function App({ build }: { build: string }) {
   const checking = useRef(false);
   const again = useRef(false);
   const reloading = useRef(false);
+  // Opens this tab's stream again, from the version the page has, and says
+  // whether it did: only a tab whose stream is up does (the minute's tick).
+  const reopen = useRef<(() => boolean) | null>(null);
+  // Whether the last read of the store failed: the minute's tick reads it
+  // again, as the stream has nothing more to say until the store moves.
+  const failed = useRef(false);
   // Who the page takes to be listening, and how many reads of the listeners
   // in a row have failed: the page's load and the 15 s poll both read them.
   const listening = useRef<{ list: Listener[] | null; missed: number }>({ list: null, missed: 0 });
@@ -441,6 +472,7 @@ function App({ build }: { build: string }) {
         if (seq !== loads.current) return;
         setData({ route: r, show: filter, inbox, done, briefings, shown, listeners });
         setProblem("");
+        failed.current = false;
       };
       // A move to another page cross-fades, as the stylesheet's view
       // transition names ask, where the browser can and motion is not
@@ -460,6 +492,7 @@ function App({ build }: { build: string }) {
       shownOnce.current = r;
     } catch (e) {
       if (seq !== loads.current) return;
+      failed.current = true;
       // serve answered, and says why it could not read; or it did not.
       setProblem(e instanceof api.Refused ? e.message : "serve cannot be reached. the inbox follows the store again once it is back.");
     }
@@ -535,7 +568,7 @@ function App({ build }: { build: string }) {
 
   useComposerEntry(composing, entry);
 
-  useLive({ version, refresh, checkBuild, heard, setNow, setData });
+  useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed });
 
   useLinks({ entry, composerBack, routeRef, stale, restore, keysDialog, navigate, shut, setComposing, setRoute });
 

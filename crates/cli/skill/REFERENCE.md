@@ -34,7 +34,7 @@ Add `"by":"human"` to a row for a step only the human can carry out, such as one
 cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
   [--body TEXT | --body-file FILE|-] [--option TEXT]... [--recommend N] [--row JSON]... \
   [--landed] [--left-out TEXT]... [--link URL]... [--label TEXT]... [--worker NAME] [--brief TEXT] \
-  [--context TEXT] [--for NAME] [--re ID] [--json]
+  [--context TEXT] [--for NAME] [--re ID] [--json | --wait [--timeout D]]
 ```
 
 - `--recommend N` names the option you recommend, by its number from 1. The web inbox and `show` mark it, and `show --json` gives it as `recommend`. Use it instead of a `Recommendation:` line in the body, and keep your reasons in the body. It must name one of the options; "Other, see note" is not one.
@@ -47,6 +47,7 @@ cases open --kind KIND --urgency blocking|today|whenever --title TEXT \
 - `--re ID` names the case this one is about, by its whole id, such as a message from the human that left you with a question. The inbox shows the link both ways. An id not in the store is refused.
 - Your events record you as their `actor`: one actor per worker name, or one unnamed agent when you give no worker. An answer records the human's actor too; it changes nothing about what the answer means.
 - Prints the new case id. `--json` prints its `id`, `state` and `revision` instead.
+- `--wait` then waits on the case, as `cases wait --id ID --since ID --pickup --by WORKER` does, with your `--worker` (or no name, without one): the id comes first, flushed, and the case's line follows once it is your turn, picked up when answered. `--timeout D` gives up after D with exit 2, the id already printed, or exit 1 with why if the store could not be read at the last try; it needs `--wait`. `--wait` refuses `--json`, and a config file whose `mood` the wait would refuse, before it opens the case.
 
 ## amend — change a case, or reopen it
 
@@ -153,7 +154,7 @@ cases wait [--pickup [--by NAME]] [--since TIME|ID] [--timeout DURATION] [--id I
 - `fresh` is true for the cases that woke `wait`. A case with `fresh` false was usually already waiting on you, such as a parked case, which is printed on every wake until it is resumed. It can also be an answer recorded earlier than the `--since` you passed, so do not skip a case on `fresh` alone.
 - `--kind KIND`, `--label TEXT` and `--worker NAME` (each repeatable) wait on cases with any of those kinds or labels, or from any of those workers. A case must match every filter given, `--id` included. `--kind` alone does not scope `wait` to your own cases. A filter that matches none of your cases waits until the timeout, so check the label you pass is the one you opened with.
 - `--since` takes a case id, meaning every event since that case was opened, or an RFC 3339 time such as `2026-09-16T09:12:03Z`. An id that is not in the store is an error (exit 1).
-- `--timeout` takes a duration such as `30m` or `1h30m`. When it passes with nothing to report, `wait` prints one line to stderr and exits 2: run it again with the same `--since`. Other errors exit 1. Without it, `wait` waits for ever.
+- `--timeout` takes a duration such as `30m` or `1h30m`. When it passes with nothing to report, `wait` prints one line to stderr and exits 2: nothing came, so run it again with the same `--since`. If the store could not be read at the last try before it passed, `wait` exits 1 and says why on stderr: nothing is known to have come or not, so act on what it says rather than run the wait again blindly. Other errors exit 1. Without it, `wait` waits for ever.
 - `--mood` says how long `wait` keeps collecting after the first answer, so that answers given together come in one print. `eager`, the default, prints at once. `steady` prints once no new answer has come for 10 seconds, and `patient` for 30, at most 1 or 5 minutes after the first. Either prints at once when none of the cases it waits on is still open, when a blocking case is answered, or when a case is withdrawn. A `--timeout` that passes while it collects prints what it has and exits 0. The config file's `mood` sets the default.
 - `--for human` waits for cases waiting on the human instead. It is for the human's notifiers.
 - A line that says `answered` after `--pickup`: `wait` could not pick the case up, usually because it changed after `wait` read it; stderr says why. Read it with `cases show ID --answer`. Still `answered` at revision N: pick it up with `cases pickup ID --revision N --by NAME --json`, act on the answer, and close with the `revision` the pickup printed. `pickedup`: another wait of yours took it, so act on it once. `open`: wait again. `withdrawn`: the human ended it.
