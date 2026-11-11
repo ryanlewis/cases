@@ -282,9 +282,11 @@ function setUp({ url = "/", server = {}, prefs = {}, meta = BUILD } = {}) {
     focus() {},
     casesPrefs: sharedPrefs,
     EventSource: class {
+      static CLOSED = 2;
       constructor(url) {
         this.url = url;
         this.closed = false;
+        this.readyState = 0;
         page.streams.push(this);
       }
       close() {
