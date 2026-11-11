@@ -2835,12 +2835,18 @@ fn a_blocking_message_ends_a_steady_wait_at_once() {
     let marker = marker(&env);
     let args = listening("w9", &["--mood", "steady", "--timeout", "40s"]);
     let waiting = Waiting::after_first_read(&env, &marker, &args);
+    // Held already when the blocking one comes.
+    let held = message(&env, &["--to", "w9", "--body", "When you can."]);
+    thread::sleep(Duration::from_millis(1500));
     let start = Instant::now();
     let sent = message(
         &env,
         &["--to", "w9", "--urgency", "blocking", "--body", "Stop."],
     );
-    assert_eq!(ids(&woke(&waiting.finish())), [sent.as_str()]);
+    assert_eq!(
+        ids(&woke(&waiting.finish())),
+        [held.as_str(), sent.as_str()]
+    );
     assert!(
         start.elapsed() < Duration::from_secs(8),
         "{:?}",

@@ -104,9 +104,9 @@ pub(crate) struct Args {
     doing: Option<String>,
 
     /// How long to keep collecting after the first event, so that answers
-    /// given together are printed together. It stops early when an event on
-    /// a case leaves no case it waits on still open, on the answer to a
-    /// blocking case, on a withdraw, and at --timeout, which then prints
+    /// given together are printed together. It stops early when a human's
+    /// event on a case leaves no case it waits on still open, on the answer
+    /// to a blocking case, on a withdraw, and at --timeout, which then prints
     /// what it has and exits 0, or exits 1 when all it held was messages it
     /// could not take. Messages are collected through the quiet time, so a
     /// burst of them wakes it once, until one is blocking. Default: the
@@ -557,8 +557,8 @@ impl First {
 /// prints, so that a wait killed while it collects leaves them sent for the
 /// next wait, however it is killed. It reads on after that first new event, and
 /// gives the cases once the first of these comes: its quiet time with no
-/// event new to it, its cap after the first, an event on a case that leaves
-/// no case it waits on still open, the answer to a blocking case or a
+/// event new to it, its cap after the first, a human's event on a case that
+/// leaves no case it waits on still open, the answer to a blocking case or a
 /// withdraw among the new events, a blocking message it holds, or the
 /// timeout (AG-18). Other messages do not end it early: more can come
 /// whatever is open.
