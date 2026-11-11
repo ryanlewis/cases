@@ -221,7 +221,10 @@ fn a_case_goes_round_over_ssh() {
     let runs = f.ssh_runs();
     assert!(!runs.is_empty());
     for run in &runs {
-        assert_eq!(run, "-T -o BatchMode=yes -- devbox cases dial-stdio");
+        assert_eq!(
+            run,
+            "-T -o BatchMode=yes -o ConnectTimeout=10 -- devbox cases dial-stdio"
+        );
     }
 }
 
@@ -447,7 +450,7 @@ fn a_user_and_a_port_go_to_ssh() {
     f.ok(&["list"]);
     assert_eq!(
         f.ssh_runs(),
-        ["-T -o BatchMode=yes -p 2222 -- ryan@devbox cases dial-stdio"]
+        ["-T -o BatchMode=yes -o ConnectTimeout=10 -p 2222 -- ryan@devbox cases dial-stdio"]
     );
 }
 
@@ -1125,7 +1128,11 @@ fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_ea
             .stderr(Stdio::piped()),
     );
     let until = Instant::now() + Duration::from_secs(10);
-    while holder(&locks, "worker-lead-") == before {
+    // A holder writes its line after it takes the lock, in parts: until the
+    // whole of a new one is there, a refusal could not name it.
+    while holder(&locks, "worker-lead-")
+        .is_none_or(|now| Some(&now) == before.as_ref() || !now.ends_with('\n'))
+    {
         assert!(Instant::now() < until, "the forwarded wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
@@ -1833,7 +1840,7 @@ fn held(dir: &std::path::Path, prefix: &str) -> bool {
     fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry.file_name().to_string_lossy().starts_with(prefix)
-                && fs::read_to_string(entry.path()).is_ok_and(|text| !text.trim().is_empty())
+                && fs::read_to_string(entry.path()).is_ok_and(|text| text.ends_with('\n'))
         })
     })
 }

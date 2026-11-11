@@ -279,7 +279,9 @@ fn appending_to_a_missing_case() {
 }
 
 /// A case whose last row has the highest seq SQLite holds has no seq left
-/// for another: the append is refused as damage, and stores nothing.
+/// for another: the append is refused as damage, and stores nothing. The core
+/// would take that row, as its own limit is `u64::MAX`, past which it refuses
+/// the append as a transition; so the two limits fail differently.
 #[test]
 fn a_case_with_no_seq_left_for_another_row_is_damaged() {
     let (_dir, db) = scratch();
