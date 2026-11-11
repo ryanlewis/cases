@@ -44,7 +44,7 @@ pub use freshness::Since;
 pub use key::{Key, UnknownId};
 pub use listening::{DOING_MAX, HEARTBEAT, LAPSE, Listening, Wait, doing_line, heard_in_time};
 pub use names::{Author, EventType, Kind, State, Urgency};
-pub use poll::Poller;
+pub use poll::{Poller, Refolded};
 pub use record::{
     Actor, Amend, Answer, ApprovalRow, Close, Note, Open, Park, Pickup, Record, Resume, RowVerdict,
     Withdraw,

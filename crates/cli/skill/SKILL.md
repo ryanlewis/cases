@@ -82,7 +82,8 @@ cases wait --label LABEL --worker NAME --pickup --by NAME --since ID
 - `--pickup` picks up each answered case before printing it, so its line says `pickedup` and has the `revision` after the pickup. **Always scope it to your own cases**: `--id`, or `--label` with `--worker` set to your session name.
 - A `--pickup` wait refuses to start, exit 1 with `another wait is already picking up worker "NAME" (pid P, since T)`, when another `--pickup` wait on the store is still running on the same `--worker`, the same `--id`, or, for waits without `--worker`, the same `--label`. That wait is yours: do not start a second or retry. Read the output of the one already running. If you no longer can, because it ran in a shell that has gone, stop process P and start the wait again.
 - `--since` with the id `cases open` printed makes `wait` count every event since that case was opened, so an answer that lands before `wait` starts is not missed. When you wait again, pass the `next_since` the last `wait` printed.
-- `--timeout D` gives up after D with exit 2: run it again with the same `--since`. Filters and fields are in `cases skill show --reference wait`.
+- `--timeout D` gives up after D with exit 2, which means nothing came: run it again with the same `--since`. Exit 1 at the timeout means the store could not be read: act on what stderr says rather than run it again blindly. Filters and fields are in `cases skill show --reference wait`.
+- On Claude Code, give a background wait `--timeout 55m`, so that it wakes you while the harness's 1-hour prompt cache is still warm. When the notification says exit code 2, nothing came: run only the `cases wait` part again, with the same arguments and the case's id in place of `$id`, in the background, without reading its output file. If writes ran before it after a `;`, read the output once first: a failed write shows only there. After about 8 hours of re-arms, leave `--timeout` out and wait as long as it takes. A harness with a 5-minute cache gains nothing from this.
 
 ### `cases close`, `pickup`, `note` and `withdraw`
 
@@ -102,15 +103,14 @@ cases withdraw ID --revision N --reason TEXT
 
 ## Workflow
 
-**Each decision costs one background command.** Put the bookkeeping for a decision in the same command as the work: close the last case, open the next and start its `wait`, chained with `&&`, in the background. Do not run `wait`, `close` or `open` in a call of their own when you can chain them.
+**Each decision costs one background command.** Put the bookkeeping for a decision in the same command as the work: close the last case, then open the next with `--wait`, which opens it and waits on it in one command, chained with `&&`, in the background. Do not run `wait`, `close` or `open` in a call of their own when you can chain them.
 
 The first case:
 
 ```sh
-id=$(cases open --kind decision --urgency today --worker bun-pins \
+cases open --kind decision --urgency today --worker bun-pins \
   --title "Pin bun or float?" --body-file question.md \
-  --option "Pin to 1.2.3" --option "Float and fix the lockfile") &&
-  cases wait --id "$id" --since "$id" --pickup --by bun-pins
+  --option "Pin to 1.2.3" --option "Float and fix the lockfile" --wait
 ```
 
 Run `cases status` as a second tool call in the same message as the first `open`, not as a call of its own: if it exits 1, no inbox is running, so tell the human they can answer from `cases serve` or the terminal. To put one case in front of them in a terminal pane you open, see `cases skill show --reference status`.
@@ -121,13 +121,12 @@ When the command finishes, read its output with `cat FILE` on the output file (r
 git commit -qam "Pin bun to 1.2.3" &&
   cases close UkLWZ --revision 3 --outcome "Pinned bun to 1.2.3 in abc123." \
     --link https://github.com/o/r/pull/12 &&
-  id=$(cases open --kind approval --urgency today --worker bun-pins \
+  cases open --kind approval --urgency today --worker bun-pins \
     --title "Run the migration?" --body-file migrate.md \
-    --row '{"id":"mig","label":"Migrate","script":"make migrate","link":"https://github.com/o/r/blob/main/Makefile"}') &&
-  cases wait --id "$id" --since "$id" --pickup --by bun-pins
+    --row '{"id":"mig","label":"Migrate","script":"make migrate","link":"https://github.com/o/r/blob/main/Makefile"}' --wait
 ```
 
-`id=$(…)` keeps the new id out of the output, so while it waits `cases list --worker NAME` shows it, to amend or withdraw the case. If the command stops with no answer, run only its `cases wait` part again, with that id: all of it would open a second case. If a write in the chain fails, such as a close that exits 3 or 4, the commands after its `&&` did not run: read the case with `cases show ID --answer`, settle it, then run the rest of the chain. If its output is gone, find the case with `cases list --state pickedup,withdrawn --worker NAME` and read it with `cases show ID --answer`.
+`open --wait` prints the new id first, then waits as `cases wait --id ID --since ID --pickup --by WORKER` does, and prints the case's line once it is your turn. While it waits, `cases list --worker NAME` shows the case, to amend or withdraw it. If the command stops with no answer, run that `cases wait` with the id it printed: running the command again would open a second case. If a write in the chain fails, such as a close that exits 3 or 4, the commands after its `&&` did not run: read the case with `cases show ID --answer`, settle it, then run the rest of the chain. If its output is gone, find the case with `cases list --state pickedup,withdrawn --worker NAME` and read it with `cases show ID --answer`.
 
 Act on each line by its `state`:
 
@@ -146,7 +145,7 @@ Act on each line by its `state`:
 
 If the answer is unclear, note the case rather than guess, and wait again in the same command: `cases note ID --revision N --reopen --body-file q.md && cases wait --id ID --since NEXT_SINCE --pickup --by NAME`. Close every case you pick up, unless the human withdraws it: an unclosed case looks like work in progress.
 
-**Several cases.** A session that may open more than one case gives them all the same `--label` from its first case, and its session name as `--worker`, and runs one `wait` on both instead of one per case. That `wait` takes a case only when it has both, so a case opened without the label is not covered. If you began with a `wait --id` and open a second case, give that case its own `wait --id`: waits on different cases do not collide. The label `wait` takes as its first `--since` the id of the first case it opened. A case opened later is covered without restarting it. Do not also run `wait --id` on those cases: of two `--pickup` waits on one case, the loser may never wake. When the `wait` returns, start the next one, with `--since` set to its `next_since`, in the same command as your bookkeeping, after a `;` so that it starts even when a write before it fails. A write that fails there shows only in the output when that `wait` returns, and no later `wait` prints the case again: read the output for it, and settle that case with `cases show ID --answer`. Give the label `wait` `--mood steady`, so that answers the human gives together wake you once: it prints when no new answer has come for a few seconds, or at once when none of your cases is still open, a blocking case is answered or a case is withdrawn:
+**Several cases.** A session that may open more than one case gives them all the same `--label` from its first case, and its session name as `--worker`, and runs one `wait` on both instead of one per case. That `wait` takes a case only when it has both, so a case opened without the label is not covered. If you began with a `wait --id` and open a second case, give that case its own `wait --id`: waits on different cases do not collide. The label `wait` takes as its first `--since` the id of the first case it opened. A case opened later is covered without restarting it. Do not also run `wait --id` on those cases: of two `--pickup` waits on one case, the loser may never wake. When the `wait` returns, start the next one, with `--since` set to its `next_since`, in the same command as your bookkeeping, after a `;` so that it starts even when a write before it fails. A write that fails there shows only in the output when that `wait` returns, and no later `wait` prints the case again: read the output for it, and settle that case with `cases show ID --answer`. Give the label `wait` `--mood steady`, so that answers the human gives together wake you once: it prints when no new answer has come for a few seconds, or at once when an answer leaves none of your cases open, a blocking case is answered or a case is withdrawn. Messages are collected the same way, so a burst wakes you once and a lone message comes after the quiet time, unless one is blocking, which prints at once:
 
 ```sh
 cases close UkLWZ --revision 3 --outcome "Pinned bun to 1.2.3.";
