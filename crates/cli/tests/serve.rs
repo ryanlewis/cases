@@ -1294,6 +1294,24 @@ fn a_second_sigterm_ends_a_slow_stop_with_143() {
     drop(stalled);
 }
 
+/// A stop forced by a second signal removes serve's record, as one that
+/// runs its course does (SV-02).
+#[test]
+fn a_forced_stop_removes_the_record() {
+    let env = Env::new();
+    let serve = env.serve(&[]);
+    let file = env.instance_file();
+    assert!(file.exists(), "serve recorded nothing");
+    let stalled = held(&serve.addr, &serve.csrf());
+    serve.raise(Signal::INT);
+    stop_begun(&serve.addr);
+    serve.raise(Signal::INT);
+    let out = serve.exit_within(Duration::from_secs(4));
+    assert_eq!(out.code, 130, "{out:?}");
+    assert!(!file.exists(), "the record outlived serve");
+    drop(stalled);
+}
+
 /// On a terminal, the status screen's last frame comes after the stop, so
 /// that it shows what the stop logged: the connections it closed, which
 /// the screen alone shows when stderr is the terminal too.
@@ -1364,6 +1382,11 @@ fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
     assert!(
         ends_within(pid, Duration::from_secs(3)),
         "serve did not end on a stopped terminal"
+    );
+    // The held write puts the terminal back, and does not hold this up.
+    assert!(
+        !env.instance_file().exists(),
+        "the record outlived a forced stop"
     );
     // Ctrl-Q lets the terminal show what was held.
     terminal.type_keys("\x11");

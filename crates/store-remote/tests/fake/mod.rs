@@ -85,6 +85,12 @@ pub(crate) enum Fault {
     Gone,
     /// The connection closes with no answer.
     Hangup,
+    /// The connection closes with no answer, and the request is applied
+    /// after this wait.
+    Late(Duration),
+    /// The connection closes with no answer, and the request is applied
+    /// just before the next write of an event.
+    Deferred,
     /// 200, with a body that is not the API's.
     Garbage,
     /// 200, with this body.
@@ -153,6 +159,15 @@ struct Entry {
 struct State {
     stores: Mutex<BTreeMap<String, Entry>>,
     faults: Mutex<VecDeque<Fault>>,
+    /// Faults for the next writes of an event, ahead of `faults`.
+    event_faults: Mutex<VecDeque<Fault>>,
+    /// Whether every request but a write of an event fails with a 503.
+    fail_reads: Mutex<bool>,
+    /// Faults for the requests straight after a write of an event that met
+    /// a fault of `event_faults`, ahead of `faults`.
+    after_event: Mutex<VecDeque<Fault>>,
+    /// A request of [`Fault::Deferred`], not applied yet.
+    deferred: Mutex<Option<Request>>,
     requests: Mutex<Vec<String>>,
     tokens: Mutex<Vec<Minted>>,
     grants: Mutex<BTreeMap<String, Grant>>,
@@ -292,6 +307,40 @@ impl Fake {
     /// Removes the store `id`: every route of it answers 410 after.
     pub(crate) fn remove(&self, id: &str) {
         lock(&self.state.stores).get_mut(id).unwrap().gone = true;
+    }
+
+    /// Adds a fault for the next write of an event, whatever is sent
+    /// before it.
+    pub(crate) fn fault_event(&self, fault: Fault) {
+        lock(&self.state.event_faults).push_back(fault);
+    }
+
+    /// Adds a fault for the requests straight after the next write of an
+    /// event that meets a fault.
+    #[allow(
+        dead_code,
+        reason = "only some of the tests that share the fake use it"
+    )]
+    pub(crate) fn fault_after_event(&self, fault: Fault) {
+        lock(&self.state.after_event).push_back(fault);
+    }
+
+    /// Fails every request from now on but a write of an event.
+    #[allow(
+        dead_code,
+        reason = "only some of the tests that share the fake use it"
+    )]
+    pub(crate) fn fail_reads(&self) {
+        *lock(&self.state.fail_reads) = true;
+    }
+
+    /// Takes away every fault queued.
+    #[allow(
+        dead_code,
+        reason = "only some of the tests that share the fake use it"
+    )]
+    pub(crate) fn clear_faults(&self) {
+        lock(&self.state.faults).clear();
     }
 
     /// Answers the next request with `fault`, after any queued before it.
@@ -535,8 +584,30 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
     let Some((request, raw)) = read(&stream) else {
         return;
     };
+    let event = raw
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("POST ") && line.contains("/events"));
+    let event_fault = event
+        .then(|| lock(&state.event_faults).pop_front())
+        .flatten();
+    if event && let Some(deferred) = lock(&state.deferred).take() {
+        handle(state, addr, &deferred);
+    }
+    if event_fault.is_some() {
+        let mut after = lock(&state.after_event);
+        let mut faults = lock(&state.faults);
+        while let Some(fault) = after.pop_back() {
+            faults.push_front(fault);
+        }
+    }
+    let fault = event_fault.or_else(|| {
+        if !event && *lock(&state.fail_reads) {
+            return Some(Fault::Status(503));
+        }
+        lock(&state.faults).pop_front()
+    });
     lock(&state.requests).push(raw);
-    let fault = lock(&state.faults).pop_front();
     let answer = match fault {
         Some(Fault::Status(status)) => Answer::refuse(status, "store", "the fake failed"),
         Some(Fault::Unavailable) => Answer::refuse(
@@ -546,6 +617,16 @@ fn serve(state: &State, addr: SocketAddr, stream: TcpStream) {
         ),
         Some(Fault::Refuse(status, category)) => {
             Answer::refuse(status, category, "the fake refused")
+        }
+        Some(Fault::Late(wait)) => {
+            drop(stream);
+            thread::sleep(wait);
+            handle(state, addr, &request);
+            return;
+        }
+        Some(Fault::Deferred) => {
+            *lock(&state.deferred) = Some(request);
+            return;
         }
         Some(Fault::Lost) => {
             handle(state, addr, &request);
