@@ -680,6 +680,69 @@ fn a_wait_rides_out_a_far_side_it_cannot_reach_for_a_while() {
     );
 }
 
+/// A far side whose `cases` stops being runnable (exit 126) is ridden out
+/// as one out of reach is, until the wait's timeout: a wait does not tell
+/// it from a connection lost. Its last try having failed, the wait then
+/// ends with that failure, exit 1, not as a timeout.
+#[test]
+fn a_forwarded_wait_rides_out_a_far_side_that_exits_126_until_its_timeout() {
+    // The stand-in ssh as ever, but exiting 126 once the file `.cut` is
+    // there; its relay copies what the wait sends to `.sent`, and writes
+    // the far side's pid to `.far`.
+    let script = SSH
+        .replacen(
+            "echo \"$*\" >> \"@LOG@\"\n",
+            "echo \"$*\" >> \"@LOG@\"\n[ -e \"@LOG@.cut\" ] && { echo 'cases: Permission denied' >&2; exit 126; }\n",
+            1,
+        )
+        .replacen("exec cat'", "exec tee -a \"@LOG@.sent\"'", 1)
+        .replacen(
+            "perl -e 'setpgrp; ",
+            "perl -e 'setpgrp; open my $f, \">\", \"@LOG@.far\"; print $f $$; close $f; ",
+            1,
+        );
+    let f = Forwarding::with_ssh(&script);
+    let id = f.open_decision();
+    fs::write(f.env.path("relay"), "1").unwrap();
+    let start = Instant::now();
+    let wait = spawn(
+        f.env
+            .command(["wait", "--id", &id, "--timeout", "8s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let sent = f.env.path("ssh.log.sent");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read_to_string(&sent).is_ok_and(|sent| sent.contains("/store/changes?after=")) {
+        assert!(Instant::now() < until, "the wait held no poll");
+        thread::sleep(Duration::from_millis(50));
+    }
+    fs::write(f.env.path("ssh.log.cut"), "").unwrap();
+    for name in ["ssh.log.far", "relay.pid"] {
+        let pid: u32 = fs::read_to_string(f.env.path(name))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        signal("KILL", pid);
+    }
+    let waited: Output = wait.wait_with_output().unwrap().into();
+    assert_eq!(waited.code, 1, "{waited:?}");
+    assert_eq!(waited.stdout, "", "{waited:?}");
+    assert!(
+        waited
+            .stderr
+            .ends_with("(exit 126): cases: Permission denied\n"),
+        "{waited:?}"
+    );
+    assert!(
+        waited.stderr.contains("trying again until the timeout"),
+        "{waited:?}"
+    );
+    // It went on to its timeout, and did not end at the first failure.
+    assert!(start.elapsed() >= Duration::from_secs(8), "{waited:?}");
+}
+
 /// A steady wait with no timeout that holds an answer, and whose connection
 /// then drops with the far side out of reach, prints the answer at the end
 /// of its quiet time, exit 0, rather than wait on it for ever (AG-18).
