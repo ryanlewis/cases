@@ -2161,6 +2161,82 @@ mod tests {
         );
     }
 
+    /// What a read found with nothing in it but the messages `pending`.
+    fn holding(pending: Vec<(Key, &Case)>) -> Found<'_> {
+        Found {
+            turns: Vec::new(),
+            withdrawn: Vec::new(),
+            pending,
+            open: true,
+        }
+    }
+
+    /// Gives `check` a steady wait with no timeout, on a store not there.
+    fn with_steady(check: impl FnOnce(&Asked)) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let ctx = Ctx {
+            store: AnyStore::Local(Db::new(&path)),
+            target: crate::store::Target::Local { path },
+            config: crate::config::Config::default(),
+            store_flag: None,
+            out: std::io::stdout().lock(),
+        };
+        let args = args_of(&["wait", "--mood", "steady"]);
+        check(&Asked {
+            args: &args,
+            ctx: &ctx,
+            ids: &[],
+            since: None,
+            mood: Mood::Steady,
+            far: None,
+            deadline: None,
+        });
+    }
+
+    /// A message a read found stored after its pickup's answer was lost is
+    /// the wait's already, so a steady wait that has just begun to collect
+    /// gives it at once, rather than at the end of a new quiet time.
+    #[test]
+    fn a_message_already_taken_ends_a_steady_wait_at_once() {
+        with_steady(|asked| {
+            let nothing = holding(Vec::new());
+            let mut collecting = None;
+            assert!(!asked.done(&mut collecting, &nothing, &[]));
+
+            let mut case = message_to_w9();
+            write(&mut case, Author::Agent, &pickup_by("w9"));
+            let taken = Turn {
+                key: Key::new(1).unwrap(),
+                case,
+                at: None,
+                fresh: true,
+                taken: true,
+            };
+            let mut collecting = None;
+            assert!(asked.done(&mut collecting, &nothing, &[taken]));
+        });
+    }
+
+    /// A message held for the print is an event like any other to the quiet
+    /// time: a new one starts it again, and one seen before does not.
+    #[test]
+    fn a_held_message_starts_the_quiet_time_again_once() {
+        with_steady(|asked| {
+            let start = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
+            let mut collecting = Some(Collecting::new(start));
+            let case = message_to_w9();
+            let found = holding(vec![(Key::new(1).unwrap(), &case)]);
+
+            assert!(!asked.done(&mut collecting, &found, &[]));
+            let last = collecting.as_ref().unwrap().last;
+            assert!(last > start, "{last:?} {start:?}");
+
+            assert!(!asked.done(&mut collecting, &found, &[]));
+            assert_eq!(collecting.as_ref().unwrap().last, last);
+        });
+    }
+
     #[test]
     fn eager_never_lingers_and_patient_lingers_longest() {
         assert_eq!(Mood::Eager.linger(), None);
