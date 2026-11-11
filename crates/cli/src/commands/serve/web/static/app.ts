@@ -214,9 +214,11 @@ function useLinks({ entry, composerBack, routeRef, stale, restore, keysDialog, n
     document.addEventListener("click", click);
     document.addEventListener("click", copy);
     window.addEventListener("popstate", back);
-    keys(() => keysDialog.current);
-    notify(navigate);
+    const unkey = keys(() => keysDialog.current);
+    const unnotify = notify(navigate);
     return () => {
+      unkey();
+      unnotify();
       document.removeEventListener("click", click);
       document.removeEventListener("click", copy);
       window.removeEventListener("popstate", back);
@@ -236,12 +238,13 @@ interface Live {
   setData: (update: (was: Data | null) => Data | null) => void;
   reopen: { current: (() => boolean) | null };
   failed: { current: boolean };
+  loads: { current: number };
 }
 
 // The page following the store: the event stream, the minute's tick and
 // the 15 s read of who is listening, each an effect of App's, in App's
 // order. Each runs once, with what App's first draw gave it.
-function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed }: Live): void {
+function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed, loads }: Live): void {
   // The event stream (IN-06). One tab of the browser holds it, shown or
   // hidden: a browser allows six connections to one address, shared by all
   // its tabs, and each stream holds one. The holder is the tab that holds
@@ -372,8 +375,12 @@ function useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen,
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!document.querySelector(".zero-panel, #compose")) return;
-      const listeners = heard(await api.listeners());
+      const seq = loads.current;
+      const read = await api.listeners();
       setNow(Date.now());
+      // A load that went since has read them later than this did.
+      if (seq !== loads.current) return;
+      const listeners = heard(read);
       setData((was) => (was ? { ...was, listeners } : was));
     }, 15000);
     return () => clearInterval(timer);
@@ -580,7 +587,7 @@ function App({ build }: { build: string }) {
 
   useComposerEntry(composing, entry);
 
-  useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed });
+  useLive({ version, refresh, checkBuild, heard, setNow, setData, reopen, failed, loads });
 
   useLinks({ entry, composerBack, routeRef, stale, restore, keysDialog, navigate, shut, setComposing, setRoute });
 
@@ -620,26 +627,30 @@ function App({ build }: { build: string }) {
     if (routeRef.current.page === "list" && home.current && home.current.id === current.id) {
       const show = routeRef.current.show!;
       const path = page(current) + query(show);
-      // With the composer open, the entry is the composer's: the case's page
-      // takes its place and the composer's goes on again over it, as on a
-      // move under the composer (navigate), so that closing the composer,
-      // which takes its entry off, lands on the case and not on the list.
-      // The entries keep the filter, which back and forward read (back).
-      const moved = entry.moved(path);
-      history.replaceState({ ...history.state, show }, "", path);
-      if (moved) {
-        entry.kept();
-        history.replaceState({ ...history.state, show }, "");
-      }
-      // The inbox's query is none, which on a case's page would list the
-      // case under its own filter: a stale refusal's case has moved on from
-      // the inbox, and the list would move with it. The route keeps the filter.
-      const r: Route = { ...where(location)!, show };
-      pinned.current = r;
-      shownOnce.current = r;
       // A read of / still out would draw its first case over this one.
       loads.current++;
-      setRoute(r!);
+      // A back that a composer's close left out is on the entry it takes off:
+      // the case's page goes on the entry it lands on.
+      entry.afterBack(() => {
+        // With the composer open, the entry is the composer's: the case's page
+        // takes its place and the composer's goes on again over it, as on a
+        // move under the composer (navigate), so that closing the composer,
+        // which takes its entry off, lands on the case and not on the list.
+        // The entries keep the filter, which back and forward read (back).
+        const moved = entry.moved(path);
+        history.replaceState({ ...history.state, show }, "", path);
+        if (moved) {
+          entry.kept();
+          history.replaceState({ ...history.state, show }, "");
+        }
+        // The inbox's query is none, which on a case's page would list the
+        // case under its own filter: a stale refusal's case has moved on from
+        // the inbox, and the list would move with it. The route keeps the filter.
+        const r: Route = { ...where(location)!, show };
+        pinned.current = r;
+        shownOnce.current = r;
+        setRoute(r!);
+      });
     }
   }
 
