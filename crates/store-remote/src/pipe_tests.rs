@@ -782,6 +782,30 @@ fn a_hold_is_a_child_of_its_own_kept_until_it_is_dropped() {
     assert_eq!(starts(dir.path()), 1);
 }
 
+/// A far side too old for leases lets go as the connection ends, so a
+/// hold on one is gone once its child is.
+#[test]
+fn a_hold_with_no_lease_lapses_once_its_child_has_gone() {
+    let answers_and_exits = holding("200 OK").replace("\"$ANSWER\";;", "\"$ANSWER\"; exit 0;;");
+    let (dir, store) = over(&answers_and_exits, &[("ANSWER", "{}")], quick());
+    let hold = store.hold(&[("worker", "lead"), ("id", "UkLWZ")]).unwrap();
+    let why = lapses(&hold);
+    assert!(why.starts_with("its connection ended"), "{why}");
+    assert!(matches!(hold.left(), Err(Error::Lapsed { .. })));
+    assert_eq!(starts(dir.path()), 1);
+}
+
+/// What ended a hold with no lease stands: bytes not asked for are read
+/// once, and the next check must not find the connection as good as new.
+#[test]
+fn a_hold_with_no_lease_that_has_lapsed_stays_lapsed() {
+    let stray = holding("200 OK").replace("\"$ANSWER\";;", "\"$ANSWER\"; sleep 0.2; printf x;;");
+    let (_dir, store) = over(&stray, &[("ANSWER", "{}")], quick());
+    let hold = store.hold(&[("worker", "lead"), ("id", "UkLWZ")]).unwrap();
+    let why = lapses(&hold);
+    assert_eq!(hold.check(), Err(Error::Lapsed { reason: why }));
+}
+
 /// A far side that answers its first request with a lease of `$LEASE` ms,
 /// 300 when it is not set, after `$DELAY` seconds when that is set, and
 /// then, as `$THEN` says: `serve` answers each request so, `silent` reads

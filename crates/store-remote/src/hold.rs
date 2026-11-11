@@ -60,8 +60,10 @@ pub struct Hold {
 
 #[derive(Debug)]
 enum Kept {
-    /// Held while the connection lasts.
-    Open(#[allow(dead_code, reason = "kept for its drop, which ends the child")] Pipe),
+    /// Held while the connection lasts. In a mutex as asking whether it
+    /// does needs the pipe itself, and a hold is shared. Boxed, to keep the
+    /// two variants of a size.
+    Open(Box<Mutex<Connection>>),
     /// Held while the lease is renewed, by a thread that has the connection.
     Lease {
         standing: Arc<Mutex<Standing>>,
@@ -69,6 +71,14 @@ enum Kept {
         /// child: it answers on the sender it is given once it has.
         release: Mutex<Option<Sender<Sender<()>>>>,
     },
+}
+
+/// The connection of a hold with no lease, and why it ended, once it has:
+/// the pipe says so only once for bytes not asked for.
+#[derive(Debug)]
+struct Connection {
+    pipe: Pipe,
+    lost: Option<String>,
 }
 
 /// Until when a hold on a lease is good, by each clock, or why it is not.
@@ -159,7 +169,7 @@ impl Hold {
     /// Held while `pipe` lasts.
     pub(crate) fn open(pipe: Pipe) -> Hold {
         Hold {
-            kept: Kept::Open(pipe),
+            kept: Kept::Open(Box::new(Mutex::new(Connection { pipe, lost: None }))),
         }
     }
 
@@ -216,7 +226,8 @@ impl Hold {
     /// # Errors
     ///
     /// [`Error::Lapsed`] when it was given on a lease that may have run
-    /// out: a renewal failed, or none was answered in time.
+    /// out: a renewal failed, or none was answered in time; or when it was
+    /// held while a connection lasted, and that has ended.
     pub fn check(&self) -> Result<(), Error> {
         self.left().map(|_| ())
     }
@@ -230,7 +241,18 @@ impl Hold {
     /// [`Error::Lapsed`], as [`Hold::check`] gives it.
     pub fn left(&self) -> Result<Option<Duration>, Error> {
         match &self.kept {
-            Kept::Open(_) => Ok(None),
+            Kept::Open(connection) => {
+                let mut connection = connection.lock().unwrap_or_else(PoisonError::into_inner);
+                if connection.lost.is_none() && !connection.pipe.is_open() {
+                    connection.lost = Some(why(&connection.pipe.closed()));
+                }
+                match &connection.lost {
+                    Some(reason) => Err(Error::Lapsed {
+                        reason: reason.clone(),
+                    }),
+                    None => Ok(None),
+                }
+            }
             Kept::Lease { standing: s, .. } => guard(s)
                 .left()
                 .map(Some)
