@@ -159,7 +159,7 @@ After upgrading `cases`, run `cases skill install` again.
 
 ## Configuration
 
-The store is `--store FILE`, then `$CASES_STORE`, then the config file's `store`, then `~/.local/share/cases/cases.db` (or under `$XDG_DATA_HOME`). The config file, `~/.config/cases/config.toml` by default, supplies defaults for flags such as the store, serve's address and the name answers are written as. `cases config init` writes a commented template, and `cases config show` prints what is in use.
+The store is `--store FILE`, then `$CASES_STORE`, then the config file's `store`, then `~/.local/share/cases/cases.db` (or under `$XDG_DATA_HOME`). On Linux and macOS a new store is readable only by you: the file is `0600`, and any directory cases makes for it `0700`. A store or directory that already exists keeps its mode. The config file, `~/.config/cases/config.toml` by default, supplies defaults for flags such as the store, serve's address and the name answers are written as. `cases config init` writes a commented template, and `cases config show` prints what is in use.
 
 An agent closes its briefings once it has acted on the answer. `cases serve` closes any briefing left picked up for longer than the config file's `briefing-close-after`, `7d` by default, as expired, with an outcome that says why, such as "closed after 7 days picked up". It checks when it starts and each hour after. The close wakes no agent's wait. `briefing-close-after = "off"` turns it off. `cases sweep --stale-briefings` does the same by hand, and only prints what it would close until given `--yes`. Durations here and in flags take `d` for days, as well as `h`, `m` and `s`.
 
