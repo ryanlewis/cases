@@ -1125,7 +1125,11 @@ fn a_pickup_wait_on_the_far_store_and_one_forwarded_to_it_by_a_symlink_refuse_ea
             .stderr(Stdio::piped()),
     );
     let until = Instant::now() + Duration::from_secs(10);
-    while holder(&locks, "worker-lead-") == before {
+    // A holder writes its line after it takes the lock, in parts: until the
+    // whole of a new one is there, a refusal could not name it.
+    while holder(&locks, "worker-lead-")
+        .is_none_or(|now| Some(&now) == before.as_ref() || !now.ends_with('\n'))
+    {
         assert!(Instant::now() < until, "the forwarded wait took no lock");
         thread::sleep(Duration::from_millis(50));
     }
@@ -1833,7 +1837,7 @@ fn held(dir: &std::path::Path, prefix: &str) -> bool {
     fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry.file_name().to_string_lossy().starts_with(prefix)
-                && fs::read_to_string(entry.path()).is_ok_and(|text| !text.trim().is_empty())
+                && fs::read_to_string(entry.path()).is_ok_and(|text| text.ends_with('\n'))
         })
     })
 }
