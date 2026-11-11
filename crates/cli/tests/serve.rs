@@ -149,20 +149,8 @@ fn serve_stops_on_ctrl_c_and_removes_its_record() {
 #[test]
 fn a_second_ctrl_c_ends_a_slow_stop_at_once() {
     let env = Env::new();
-    let id = env.open_fyi("Heads up");
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A write whose body stops a few bytes in holds the stop for its whole
-    // grace period.
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(
-        stalled,
-        "POST /v1/cases/{id}/answer HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"revision\"",
-        serve.addr
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     std::thread::sleep(Duration::from_millis(300));
     let second = Instant::now();
@@ -321,22 +309,11 @@ fn a_second_serve_on_the_same_store_is_refused() {
 /// counts as no serve, and a new serve replaces it.
 #[test]
 fn a_stale_record_is_replaced() {
-    // Port 0 takes no connection, ever: a port freed for the test could be
-    // taken by another before serve dials it.
-    let closed_addr = "127.0.0.1:0";
     let mut gone = common::spawn(&mut std::process::Command::new("true"));
     gone.wait().unwrap();
     for pid in [gone.id(), std::process::id()] {
         let env = Env::new();
-        let stale = serde_json::json!({
-            "pid": pid,
-            "url": format!("http://{closed_addr}/"),
-            "addr": closed_addr,
-            "store": std::path::absolute(&env.store).unwrap(),
-            "started_at": "2026-09-25T12:00:00Z",
-            "version": "0.0.0",
-        });
-        write_file(&env.instance_file(), &stale.to_string());
+        env.stale_instance(pid);
         let serve = env.serve(&[]);
         let info = json(&fs::read_to_string(env.instance_file()).unwrap());
         assert_eq!(info["pid"], serve.pid(), "pid {pid}");
@@ -360,6 +337,30 @@ fn serve_runs_without_a_state_directory_it_can_write() {
             .contains("could not record the instance for cases status: "),
         "{out:?}"
     );
+}
+
+/// With neither `$XDG_STATE_HOME` nor `$HOME` there is no state directory
+/// to find: serve is not refused for it, serves, and says it could not
+/// record itself, and status says why it cannot look.
+#[test]
+fn serve_runs_with_no_state_directory_to_find() {
+    let mut env = Env::new();
+    env.unset("XDG_STATE_HOME");
+    env.unset("HOME");
+    let want = "cannot find the state directory";
+    let serve = env.serve(&[]);
+    assert_eq!(serve.get("/v1").status, 200);
+    let out = serve.stop();
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "could not record the instance for cases status: {want}"
+        )),
+        "{out:?}"
+    );
+    let status = env.cases(&["status"]);
+    assert_eq!(status.code, 1, "{status:?}");
+    assert!(status.stderr.contains(want), "{status:?}");
 }
 
 #[test]
@@ -866,10 +867,7 @@ fn serve_on_ipv6_brackets_its_address() {
 fn a_stop_closes_what_is_still_open_after_its_grace() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(stalled, "{}", stalled_send(&serve.addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The grace is 5 s.
     let out = serve.exit_within(Duration::from_secs(15));
@@ -880,15 +878,6 @@ fn a_stop_closes_what_is_still_open_after_its_grace() {
         "{out:?}"
     );
     drop(stalled);
-}
-
-/// A message whose body stops a few bytes in, which holds a stop for its
-/// whole grace.
-fn stalled_send(addr: &str, token: &str) -> String {
-    format!(
-        "POST /v1/cases HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"kind\""
-    )
 }
 
 /// The address and pid of the serve that `env`'s instance file records,
@@ -998,10 +987,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
     let _reap = Reap(pid);
-    let token = csrf(&addr);
-    let mut stalled = common::serve::connect(&addr);
-    write!(stalled, "{}", stalled_send(&addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&addr, &csrf(&addr));
     // Sent until it lands, as two that come closer than serve takes the
     // first are one signal. The stalled write holds the stop for its 5 s
     // grace, so an exit before then is a forced one.
@@ -1032,27 +1018,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
 fn a_second_ctrl_c_straight_after_the_first_ends_serve() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A message whose body serve is reading, which it says with `100
-    // Continue`, and never gets: it holds the stop for its 5 s grace.
-    let mut stalled = common::serve::connect(&serve.addr);
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    write!(
-        stalled,
-        "POST /v1/cases HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n",
-        serve.addr
-    )
-    .unwrap();
-    let mut continued = [0; 25];
-    std::io::Read::read_exact(&mut stalled, &mut continued).unwrap();
-    assert!(
-        continued.starts_with(b"HTTP/1.1 100 Continue"),
-        "{:?}",
-        String::from_utf8_lossy(&continued)
-    );
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The stop has begun once serve takes no new connection, and the second
     // comes straight after. (Two that come closer than serve can take the
@@ -1132,6 +1098,86 @@ fn serve_closes_a_stale_briefing_when_it_starts() {
     );
     assert!(case.close().unwrap().expired);
     assert_eq!(env.case(&young).state(), cases_core::State::PickedUp);
+}
+
+/// A stop waits for a pass over the briefings that is under way, longer
+/// than the 1 s it gives what is left on blocking threads, so that the
+/// close the pass is making is made and logged (AG-19).
+#[test]
+fn a_stop_waits_for_the_briefing_pass_under_way() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "briefing",
+        "--urgency",
+        "today",
+        "--title",
+        "Old",
+        "--body",
+        "Done.",
+    ]);
+    env.write(&id, "human", "answer", r#"{"briefing": "accept"}"#);
+    let at = format!(
+        r#"{{"picked_up_at": "{}"}}"#,
+        common::from_now(-8 * 24 * 3600)
+    );
+    env.write(&id, "agent", "pickup", &at);
+
+    // Holding the store's write lock holds the pass in its close, for up to
+    // the store's 5 s wait on the lock.
+    let lock = rusqlite::Connection::open(&env.store).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let serve = env.serve(&[]);
+    // A stop that came before the pass began could skip it.
+    store_held(&serve.addr);
+    let pid = i32::try_from(serve.pid()).unwrap();
+    serve.raise(Signal::TERM);
+    assert!(
+        !ends_within(pid, Duration::from_millis(1_500)),
+        "serve left the pass under way"
+    );
+    lock.execute_batch("COMMIT").unwrap();
+    let out = serve.exit_within(Duration::from_secs(10));
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("closed briefing {id}: closed after 7 days")),
+        "{out:?}"
+    );
+    assert_eq!(env.case(&id).state(), cases_core::State::Closed);
+}
+
+/// Waits until a write by serve at `addr` is held on the store's lock: a
+/// read of the store then queues behind it, and takes no answer. Reads made
+/// before the write begins are answered, and made again.
+fn store_held(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut stream = common::serve::connect(addr);
+        stream
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /v1/cases HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut text = Vec::new();
+        match std::io::Read::read_to_end(&mut stream, &mut text) {
+            Err(error)
+                if text.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return;
+            }
+            read => assert!(read.is_ok(), "{read:?}"),
+        }
+        assert!(Instant::now() < deadline, "no write held the store");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// With briefing-close-after off, serve leaves the briefings alone; with a
