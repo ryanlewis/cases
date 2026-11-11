@@ -1180,6 +1180,10 @@ fn a_pickup_wait_whose_locks_connection_is_killed_holds_off_a_second_until_the_l
         .trim()
         .parse()
         .unwrap();
+    // The relayed far side is out of the near side's reach: it is killed if
+    // the test fails, or it would last until the wait's timeout.
+    let far: u32 = holder.split_whitespace().next().unwrap().parse().unwrap();
+    let _far = Kill(far);
     // The relay is what carries the connection to the far side's
     // dial-stdio, which sees it end.
     // Renewed a second at most before the kill, the lease runs out two
@@ -1749,6 +1753,10 @@ fn a_pickup_wait_whose_renewals_are_lost_stops_before_a_second_can_start() {
         .trim()
         .parse()
         .unwrap();
+    // The relayed far side is out of the near side's reach: it is killed if
+    // the test fails, or it would last until the wait's timeout.
+    let far: u32 = holder.split_whitespace().next().unwrap().parse().unwrap();
+    let _far = Kill(far);
     signal("STOP", relay);
     // Read off the lock, as a second wait is started some time before it
     // takes it.
