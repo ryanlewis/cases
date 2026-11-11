@@ -682,6 +682,12 @@ fn wait(
         } else {
             Vec::new()
         };
+        // A pickup that was not stored leaves the version as it was, so a
+        // held poll would not wake on it: the next read settles it.
+        if !asked.past_deadline() && listening.as_ref().is_some_and(Listening::unsettled) {
+            thread::sleep(held_for(far).map_or(POLL, |held| held.min(POLL)));
+            continue;
+        }
         if let Err(error) = asked.rest(&poller, collecting.as_ref(), &mut offline) {
             let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
             if let Some(turns) =
@@ -844,7 +850,9 @@ impl Asked<'_> {
     /// the read, is passed over. At the first that the store or the far
     /// side's locks would not have, it stops, as the next would meet the
     /// same, and gives why: the rest stay sent for the next wait. A lapse of
-    /// the locks is said on stderr when messages it took will be printed.
+    /// the locks is said on stderr when messages it took will be printed. A
+    /// message whose pickup is of unknown outcome is left for a read to
+    /// settle, and that is the failure given, when no other is.
     fn take_pending<'c>(
         &self,
         listening: Option<&Listening>,
@@ -915,7 +923,8 @@ impl Asked<'_> {
             return Ok(Some(collected.into_iter().chain(taken).collect()));
         }
         if self.past_deadline() {
-            return Err(failure.unwrap_or(error));
+            let unsettled = listening.and_then(Listening::unsettled_failure);
+            return Err(failure.or(unsettled).unwrap_or(error));
         }
         Ok(None)
     }
@@ -1330,11 +1339,16 @@ struct Listening<'a> {
 impl Drop for Listening<'_> {
     fn drop(&mut self) {
         for (key, (_, why)) in self.unknown.borrow().iter() {
-            ctx::warn(format_args!(
-                "{key}: may be picked up, but not printed: {why}"
-            ));
+            warn_unsettled(*key, why);
         }
     }
+}
+
+/// Names on stderr the message `key`, whose pickup got no answer, `why`.
+fn warn_unsettled(key: Key, why: &str) {
+    ctx::warn(format_args!(
+        "{key}: may be picked up, but not printed: {why}"
+    ));
 }
 
 impl<'a> Listening<'a> {
@@ -1504,10 +1518,17 @@ impl<'a> Listening<'a> {
 
     /// Settles the unknown pickup of the message `key` by `case`, as a read
     /// found it: the turn of the message when the pickup was stored, or
-    /// none, the message being as any other, when it was not.
+    /// none, the message being as any other, when it is still sent. One
+    /// that has moved on past the pickup cannot say, and is named on stderr.
     fn recovered(&self, key: Key, case: &Case) -> Option<Turn> {
-        let (revision, _) = self.unknown.borrow_mut().remove(&key)?;
-        self.own_pickup(revision, case).then(|| Turn {
+        let (revision, why) = self.unknown.borrow_mut().remove(&key)?;
+        if !self.own_pickup(revision, case) {
+            if case.state() != State::Sent {
+                warn_unsettled(key, &why);
+            }
+            return None;
+        }
+        Some(Turn {
             key,
             case: case.clone(),
             // The event before the pickup, as for a take that was answered.
@@ -1515,6 +1536,18 @@ impl<'a> Listening<'a> {
             fresh: true,
             taken: true,
         })
+    }
+
+    /// Why a pickup's outcome is unknown, when one is.
+    fn unsettled_failure(&self) -> Option<Error> {
+        let unknown = self.unknown.borrow();
+        let (_, why) = unknown.values().next()?;
+        Some(Error::new(why.clone()))
+    }
+
+    /// Whether a pickup's outcome is still unknown, for a read to settle.
+    fn unsettled(&self) -> bool {
+        !self.unknown.borrow().is_empty()
     }
 
     /// Takes the sent message `case`: picks it up at the revision wait read

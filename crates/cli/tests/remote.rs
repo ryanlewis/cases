@@ -1824,6 +1824,121 @@ fn a_wait_whose_time_runs_out_before_it_can_read_back_names_the_message() {
     assert!(!out.stderr.contains("not taken"), "{out:?}");
 }
 
+/// A pickup whose outcome was unknown, with the message moved on past it by
+/// the time a read comes back, cannot be settled: the wait names it on
+/// stderr, as it may be this wait's and no later wait would take it.
+#[test]
+fn a_pickup_of_unknown_outcome_that_the_message_has_moved_past_is_named() {
+    let (r, sent, wait) = holding_message_for("14s", Fault::Lost);
+    for _ in 0..12 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let store = r.ids[0].clone();
+    let picked = || {
+        r.fake
+            .db(&store)
+            .rows(&common::key(&sent))
+            .unwrap()
+            .is_some_and(|rows| rows.len() == 2)
+    };
+    assert!(soon(Duration::from_secs(13), picked));
+    let close = cases_core::Append {
+        author: "agent".into(),
+        event: "close".into(),
+        data: r#"{"outcome": "Done."}"#.into(),
+    };
+    r.fake
+        .db(&store)
+        .append(
+            &common::key(&sent),
+            &close,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("{sent}: may be picked up, but not printed:")),
+        "{out:?}"
+    );
+}
+
+/// A default-mood wait whose pickup got no answer and was not stored, with
+/// the read back failed too, tries it again at the next read rather than
+/// hold on a store that has not changed.
+#[test]
+fn an_eager_wait_whose_unstored_pickup_got_no_answer_tries_again() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "25s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Hangup);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let start = Instant::now();
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(sent.trim()), "{out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// A wait with no case open and a pickup of unknown outcome, whose reads
+/// fail to its timeout, ends with that failure, exit 1, and names the
+/// message: it cannot say that nothing came.
+#[test]
+fn a_wait_with_nothing_open_ends_with_the_failure_of_an_unknown_pickup() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        "5s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..200 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "{}: may be picked up, but not printed:",
+            sent.trim()
+        )),
+        "{out:?}"
+    );
+}
+
 /// A wait that cannot read the store at the end of its quiet time still
 /// takes what it held, when the store takes the pickup: what it took is
 /// printed, exit 0.
