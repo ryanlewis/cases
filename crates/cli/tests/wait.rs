@@ -3701,3 +3701,50 @@ fn a_steady_wait_leaves_a_message_to_another_worker() {
     assert_eq!(out.stdout, "", "{out:?}");
     assert_eq!(env.case(&id).state().as_str(), "sent");
 }
+
+/// Steady waits on one label, with different workers and the same `--by`,
+/// end their quiet time together: one prints the message.
+#[test]
+fn steady_waits_sharing_a_by_print_a_message_once() {
+    let env = Env::new();
+    let workers = ["w1", "w2", "w3", "w4"];
+    for worker in workers {
+        env.open(&[
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            "Left open",
+            "--worker",
+            worker,
+            "--label",
+            "release",
+        ]);
+    }
+    let marker = marker(&env);
+    let waits: Vec<Waiting> = workers
+        .into_iter()
+        .map(|worker| {
+            let args = [
+                "--pickup",
+                "--worker",
+                worker,
+                "--by",
+                "same",
+                "--label",
+                "release",
+                "--mood",
+                "steady",
+                "--timeout",
+                "14s",
+            ];
+            Waiting::after_first_read(&env, &marker, &args)
+        })
+        .collect();
+    let id = message(&env, &["--label", "release"]);
+    let outs: Vec<Output> = waits.into_iter().map(Waiting::finish).collect();
+    let printed = outs.iter().filter(|out| out.stdout.contains(&id)).count();
+    assert_eq!(printed, 1, "{outs:?}");
+    assert_eq!(files(&env, &id).len(), 2, "{outs:?}");
+}
