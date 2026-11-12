@@ -2375,6 +2375,253 @@ fn click(app: &mut App, text: &str) {
     );
 }
 
+/// The screen drawn to a buffer, for how each cell looks.
+fn drawn(app: &mut App) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| view::draw(frame, app)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// Whether the cell at `at` is drawn reversed, as a selection is.
+fn reversed(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16)) -> bool {
+    buffer[(x, y)]
+        .modifier
+        .contains(ratatui::style::Modifier::REVERSED)
+}
+
+/// Presses the left button at `from`, drags it to `to` and lets go, with
+/// the screen drawn between, as the loop draws it; gives what was copied.
+fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) -> Option<String> {
+    screen(app, 120, 40);
+    mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+    screen(app, 120, 40);
+    mouse(app, MouseEventKind::Drag(MouseButton::Left), to);
+    screen(app, 120, 40);
+    mouse(app, MouseEventKind::Up(MouseButton::Left), to);
+    app.copied.take()
+}
+
+/// A drag over a case's text selects it, drawn reversed, and the release
+/// copies it to the clipboard with OSC 52, and says so (TU-12).
+#[test]
+fn a_drag_selects_text_and_the_release_copies_it() {
+    let store = Store::new();
+    store.open("fyi", "today", "Fox", |open| {
+        "The quick brown fox jumps.".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let from = spot(&shown, "quick");
+    let to = (spot(&shown, "brown").0 + 4, from.1);
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), from);
+    screen(&mut app, 120, 40);
+    mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), to);
+    let buffer = drawn(&mut app);
+    assert!(reversed(&buffer, from) && reversed(&buffer, to));
+    assert!(!reversed(&buffer, (from.0 - 1, from.1)));
+    assert!(!reversed(&buffer, (to.0 + 1, to.1)));
+    assert_eq!(app.copied, None, "copied before the release");
+    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), to);
+    let copied = app.copied.take().unwrap();
+    assert_eq!(copied, "quick brown");
+    assert_eq!(
+        super::select::osc52(&copied),
+        b"\x1b]52;c;cXVpY2sgYnJvd24=\x07"
+    );
+    assert_eq!(app.said_done(), Some("copied 11 characters"));
+    // Still shown after the release, until something clears it.
+    assert!(reversed(&drawn(&mut app), from));
+}
+
+/// A press and a release on one cell is a click, as it was: it acts on
+/// the press, selects nothing and copies nothing (TU-12).
+#[test]
+fn a_click_is_still_a_click_and_copies_nothing() {
+    let store = Store::new();
+    store.open("fyi", "blocking", "First case", |_| {});
+    let second = store.open("fyi", "today", "Second case", |_| {});
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let at = spot(&shown, "Second case");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+    assert_eq!(
+        app.selected,
+        Some(second),
+        "the click waited for the release"
+    );
+    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), at);
+    assert_eq!(app.copied, None);
+    assert!(app.selection.is_none());
+    assert!(!reversed(&drawn(&mut app), at));
+
+    // A hand that wobbles a column as it clicks copies nothing either.
+    let copied = drag(&mut app, at, (at.0 + 1, at.1));
+    assert_eq!(copied, None);
+    assert_eq!(app.selected, Some(second));
+}
+
+/// On a narrow terminal, a press on the selected case in the list opens
+/// it in the list's place: the drag that follows copies none of the case,
+/// which was not under the press (TU-12).
+#[test]
+fn a_selection_does_not_pass_to_the_pane_that_takes_its_place() {
+    let store = Store::new();
+    store.open("fyi", "today", "Only case", |open| {
+        "Case body text.".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 80, 30);
+    let at = spot(&shown, "Only case");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+    assert_eq!(app.focus, Focus::Case);
+    screen(&mut app, 80, 30);
+    mouse(
+        &mut app,
+        MouseEventKind::Drag(MouseButton::Left),
+        (at.0 + 8, at.1 + 2),
+    );
+    screen(&mut app, 80, 30);
+    mouse(
+        &mut app,
+        MouseEventKind::Up(MouseButton::Left),
+        (at.0 + 8, at.1 + 2),
+    );
+    assert_eq!(app.copied, None);
+}
+
+/// A drag keeps to the pane it began in: past its edge, it stops at the
+/// edge, so the other pane, the line between them and the bars are never
+/// copied (TU-12).
+#[test]
+fn a_selection_does_not_leave_its_pane() {
+    let store = Store::new();
+    store.open("fyi", "today", "Listed title", |open| {
+        "Body one.\n\nBody two.".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let from = spot(&shown, "Body one");
+    // Down into the list and the footer, from the case pane.
+    let copied = drag(&mut app, from, (0, 39)).unwrap();
+    assert!(copied.starts_with("Body one.\n\nBody two."), "{copied:?}");
+    assert!(!copied.contains("Listed title"), "{copied:?}");
+    assert!(!copied.contains('│'), "{copied:?}");
+    assert!(
+        !copied.contains("quit"),
+        "the footer was copied: {copied:?}"
+    );
+    // And up into the bars, from the list.
+    let row = spot(&shown, "Listed title");
+    let copied = drag(&mut app, row, (row.0 + 60, 0)).unwrap();
+    assert!(!copied.contains("Body"), "{copied:?}");
+    assert!(
+        !copied.contains("Inbox"),
+        "the tabs were copied: {copied:?}"
+    );
+}
+
+/// What is copied is the text as drawn, each row's trailing spaces
+/// dropped, and the pane's margin with them (TU-12).
+#[test]
+fn a_copy_drops_trailing_spaces() {
+    let store = Store::new();
+    store.open("fyi", "today", "Short", |open| {
+        "alpha\n\nomega".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let from = spot(&shown, "alpha");
+    let to = spot(&shown, "omega");
+    // Past the end of the last row, to the pane's right edge.
+    let copied = drag(&mut app, from, (119, to.1)).unwrap();
+    assert_eq!(copied, "alpha\n\nomega");
+}
+
+/// Esc clears the selection, and does nothing else; a click clears it
+/// too, and still acts (TU-12).
+#[test]
+fn escape_or_a_click_clears_the_selection() {
+    let store = Store::new();
+    store.open("fyi", "today", "Fox", |open| {
+        "The quick brown fox.".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let from = spot(&shown, "quick");
+    let to = (from.0 + 4, from.1);
+    drag(&mut app, from, to).unwrap();
+    let focus = app.focus;
+    press(&mut app, KeyCode::Esc);
+    assert!(app.selection.is_none());
+    assert_eq!(app.focus, focus, "esc did more than clear it");
+    assert!(!app.quit);
+    assert!(!reversed(&drawn(&mut app), from));
+
+    drag(&mut app, from, to).unwrap();
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (0, 0));
+    assert!(app.selection.is_none());
+    assert!(!reversed(&drawn(&mut app), from));
+}
+
+/// A change to what the pane shows clears the selection: here the wheel
+/// scrolls the case under it (TU-12).
+#[test]
+fn a_change_to_the_pane_clears_the_selection() {
+    let store = Store::new();
+    store.open("fyi", "today", "Long", |open| {
+        let long: Vec<String> = (1..=80).map(|n| format!("line {n}")).collect();
+        open.body = long.join("\n\n");
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    let from = spot(&shown, "line 1");
+    drag(&mut app, from, (from.0 + 3, from.1)).unwrap();
+    mouse(&mut app, MouseEventKind::ScrollDown, from);
+    let buffer = drawn(&mut app);
+    assert!(app.selection.is_none());
+    assert!(!reversed(&buffer, from));
+}
+
+/// A wide character at either end of the selection is copied whole, from
+/// either of its halves (TU-12).
+#[test]
+fn a_wide_character_at_either_end_is_copied_whole() {
+    let store = Store::new();
+    store.open("fyi", "today", "Wide", |open| {
+        "前 mid 🦀 end".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    // 前 takes two columns, then " mid ", then 🦀 two more.
+    let (x, y) = spot(&shown, "前");
+    assert_eq!(drag(&mut app, (x + 1, y), (x + 7, y)).unwrap(), "前 mid 🦀");
+    // Drawn as copied: 前 lit from its first half, which holds its look.
+    assert!(reversed(&drawn(&mut app), (x, y)));
+    assert_eq!(drag(&mut app, (x + 8, y), (x, y)).unwrap(), "前 mid 🦀");
+}
+
+/// A case's text cannot put anything on the clipboard by itself: its
+/// escapes are drawn as text, nothing is copied until a drag, and a copy
+/// of them is their text, as base64 (TU-01, TU-12).
+#[test]
+fn a_case_cannot_write_to_the_clipboard() {
+    let store = Store::new();
+    store.open("fyi", "today", "Clip", |open| {
+        "grab \x1b]52;c;b3duZWQ=\x07 tail".clone_into(&mut open.body);
+    });
+    let mut app = store.app();
+    let shown = screen(&mut app, 120, 40);
+    assert!(app.copied.is_none());
+    assert!(!shown.contains('\x1b'), "{shown:?}");
+    let from = spot(&shown, "grab");
+    let to = spot(&shown, "tail");
+    let copied = drag(&mut app, from, (to.0 + 3, to.1)).unwrap();
+    assert_eq!(copied, "grab ␛]52;c;b3duZWQ=␇ tail");
+    let sent = String::from_utf8(super::select::osc52(&copied)).unwrap();
+    assert_eq!(sent.matches('\x1b').count(), 1, "{sent:?}");
+    assert_eq!(sent.matches('\x07').count(), 1, "{sent:?}");
+}
+
 /// A click on a tab switches to it (TU-12).
 #[test]
 fn a_click_on_a_tab_switches_to_it() {
