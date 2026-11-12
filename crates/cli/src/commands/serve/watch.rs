@@ -542,6 +542,127 @@ mod tests {
             .count()
     }
 
+    /// The key `n`.
+    fn key(n: u64) -> Key {
+        Key::new(n).unwrap()
+    }
+
+    /// The case an open with `data` gives, or why it does not fold.
+    fn open(data: String) -> Result<Case, cases_core::Error> {
+        let open = Append {
+            author: "agent".into(),
+            event: "open".into(),
+            data,
+        };
+        let now = "2026-11-01T09:00:00Z".parse().unwrap();
+        Case::open(&open, now, None).map(|(case, _)| case)
+    }
+
+    /// A case that folds, an fyi titled `title`.
+    fn folded(title: &str) -> Case {
+        open(format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"{title}"}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Why a case that opens with no kind does not fold.
+    fn unfolded() -> cases_core::Error {
+        open("{}".into()).unwrap_err()
+    }
+
+    /// Serve logs a case that does not fold once for its error, as `warning:
+    /// KEY: WHY`, and not again at a later read that still finds it so;
+    /// another case that does not fold is logged when it appears.
+    #[test]
+    fn a_case_that_does_not_fold_is_logged_once() {
+        let log = Log::new(false, 10);
+        let mut warned = HashSet::new();
+        let mut cases = Cases::new();
+        cases.insert(key(1), Ok(folded("Fine")));
+        cases.insert(key(2), Err(unfolded()));
+        let two = format!("warning: {}: {}", key(2), unfolded());
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        cases.insert(key(3), Err(unfolded()));
+        warn_unfolded(&mut warned, &log, &cases);
+        let three = format!("warning: {}: {}", key(3), unfolded());
+        assert_eq!(log.last(), [two, three]);
+    }
+
+    /// Each case `merged` gives for `cases` and `refolded`, in its order: its
+    /// key, its title, and whether it is the very case `current` holds.
+    fn merge(
+        current: &Snapshot,
+        cases: &Cases,
+        refolded: Option<&HashSet<Key>>,
+    ) -> Vec<(u64, String, bool)> {
+        merged(current, cases, refolded)
+            .iter()
+            .map(|(key, case)| {
+                let shared = current.cases.iter().any(|(_, was)| Arc::ptr_eq(was, case));
+                (key.get(), case.title().to_owned(), shared)
+            })
+            .collect()
+    }
+
+    /// The rules of the next snapshot's cases, from the snapshot before and
+    /// a read. A case not folded again since is the snapshot's, shared, even
+    /// when the read's differs, and
+    /// one folded again is a new copy, even when equal; after a read of every
+    /// case, an equal case is shared and a changed one is a new copy. A case
+    /// new to the snapshot is a new copy; one that does not fold is left
+    /// out, and one gone from the read is dropped; the order is the read's.
+    #[test]
+    fn the_next_snapshot_shares_the_cases_its_rules_say() {
+        let current = Snapshot {
+            cases: [1, 2, 3, 4, 6, 7]
+                .into_iter()
+                .map(|n| (key(n), Arc::new(folded(&format!("case {n}")))))
+                .collect(),
+            version: "before".into(),
+        };
+        let mut cases = Cases::new();
+        for n in [2, 7] {
+            cases.insert(key(n), Ok(folded(&format!("case {n}"))));
+        }
+        // Changed, and not folded again: as a snapshot that missed it.
+        cases.insert(key(1), Ok(folded("changed")));
+        cases.insert(key(3), Ok(folded("changed")));
+        cases.insert(key(5), Ok(folded("new")));
+        cases.insert(key(6), Err(unfolded()));
+        let row = |n: u64, title: &str, shared: bool| (n, title.to_owned(), shared);
+
+        // Folded again since, by key: 2 and 3.
+        let refolded = HashSet::from([key(2), key(3)]);
+        assert_eq!(
+            merge(&current, &cases, Some(&refolded)),
+            [
+                row(1, "case 1", true),
+                row(2, "case 2", false),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
+
+        // Every case folded again.
+        assert_eq!(
+            merge(&current, &cases, None),
+            [
+                row(1, "changed", false),
+                row(2, "case 2", true),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
+    }
+
     thread_local! {
         /// What the next read of a [`scripted`] reader gives, in place of
         /// the store's answer.
