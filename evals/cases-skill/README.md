@@ -68,7 +68,7 @@ Cost-sensitive tasks, where the skill says to chain the bookkeeping into one bac
 
 ## Graders
 
-Programmatic, from the transcript's tool calls, the background tasks' output and the store as the run left it (`graders.py`). Each gives pass, fail or n/a:
+Programmatic, from the transcript's tool calls, the background tasks' output and the store as the run left it (`graders.py`). Each gives pass, fail or n/a. An `open --wait` counts as the open followed in the same command by its wait, `wait --id ID --since ID --pickup` with the open's `--timeout`, for every rule that reads waits:
 
 | Rule | Passes when |
 | --- | --- |
@@ -83,7 +83,7 @@ Programmatic, from the transcript's tool calls, the background tasks' output and
 | wait_in_background | every `wait` runs in the background |
 | wait_since | every `wait` on a case (`--id` or `--label`) has `--since` |
 | one_pickup_wait_per_case | no two `--pickup` waits covering the same case run at once |
-| open_chained | every `open` starts its `wait` in the same command, unless a label wait already covers it |
+| open_chained | every `open` starts its `wait` in the same command, with `--wait` or a `cases wait`, unless a label wait already covers it |
 | close_chained | a `close` followed by more cases work is not a call of its own |
 | wait_output_read_once | each background wait's output is read once, unfiltered |
 | exit_3_4_handled | after a write exits 3 or 4, the agent reads the case with `show` before writing to it again, and never repeats the write |
@@ -102,7 +102,7 @@ LLM judge (`claude-haiku-4-5`, 20 runs per `claude -p` call, no tools), for what
 - options_explained: every decision says what its options cost and why the recommended one.
 - outcome_honest: every close outcome says what the commands show was done, and matches the answer.
 
-Cost, as the cost study counted it (`transcript.py`): API calls, turns, context tokens and dollars per run and per decision (a human answer, park, resume, withdrawal or message), and extra calls: API calls that made only `cases` bookkeeping other than an open (`transcript.bookkeeping_only`). Until 2026-11-09 a call that chained work with a `cases` call counted too, so BASELINE.md's extra calls are not comparable with later runs.
+Cost, as the cost study counted it (`transcript.py`): API calls, turns, context tokens and dollars per run and per decision (a human answer, park, resume, withdrawal or message), and extra calls: API calls that made only `cases` bookkeeping other than an open (`transcript.bookkeeping_only`); reading the output of an `open --wait` is reading a wait's output. Until 2026-11-09 a call that chained work with a `cases` call counted too, so BASELINE.md's extra calls are not comparable with later runs.
 
 ## Known weaknesses of the graders
 
