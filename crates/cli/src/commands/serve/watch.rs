@@ -203,14 +203,7 @@ impl Reader<'_> {
     fn read(&mut self) -> Read {
         let polled = self.poller.poll().map(|_| ());
         // Taken from a failed poll too, which folds every case again next.
-        match self.poller.refolded() {
-            Refolded::Changed { folded, .. } => {
-                if let Some(refolded) = &mut self.refolded {
-                    refolded.extend(folded);
-                }
-            }
-            _ => self.refolded = None,
-        }
+        self.note_refolded();
         let missing = match polled {
             Ok(()) => false,
             Err(cases_store_sqlite::Error::Missing { .. }) => true,
@@ -228,14 +221,7 @@ impl Reader<'_> {
         if self.read && version == current.version {
             return Ok(current);
         }
-        for (key, case) in cases {
-            if let Err(error) = case {
-                let warning = format!("warning: {key}: {error}");
-                if self.warned.insert(warning.clone()) {
-                    self.log.line(warning);
-                }
-            }
-        }
+        warn_unfolded(&mut self.warned, &self.log, cases);
         // A store that goes missing leaves the engine as it was: were the
         // file put back, its cases would all be new again. A first read
         // that finds none still counts, so the first case to come is new.
@@ -252,31 +238,68 @@ impl Reader<'_> {
         // again since that snapshot, one that came out equal is shared too:
         // comparing it allocates nothing, where a copy clones its events.
         let refolded = self.refolded.replace(HashSet::new());
-        // Both the snapshot and the poller's cases are in key order.
-        let mut before = current.cases.iter().peekable();
         let snapshot = Arc::new(Snapshot {
-            cases: cases
-                .iter()
-                .filter_map(|(key, case)| {
-                    let case = case.as_ref().ok()?;
-                    while before.next_if(|(was, _)| was < key).is_some() {}
-                    let was = before.next_if(|(was, _)| was == key).map(|(_, was)| was);
-                    let kept = |was: &Case| match &refolded {
-                        Some(refolded) => !refolded.contains(key),
-                        None => was == case,
-                    };
-                    let shared = match was {
-                        Some(was) if kept(was) => Arc::clone(was),
-                        _ => Arc::new(case.clone()),
-                    };
-                    Some((*key, shared))
-                })
-                .collect(),
+            cases: merged(&current, cases, refolded.as_ref()),
             version,
         });
         self.shared.snapshots.send_replace(Arc::clone(&snapshot));
         Ok(snapshot)
     }
+
+    /// Adds the cases the last poll folded again to those folded since the
+    /// snapshot published last, or notes that every case was.
+    fn note_refolded(&mut self) {
+        match self.poller.refolded() {
+            Refolded::Changed { folded, .. } => {
+                if let Some(refolded) = &mut self.refolded {
+                    refolded.extend(folded);
+                }
+            }
+            _ => self.refolded = None,
+        }
+    }
+}
+
+/// Logs each case in `cases` that does not fold, once, as `warned` keeps.
+fn warn_unfolded(warned: &mut HashSet<String>, log: &Log, cases: &Cases) {
+    for (key, case) in cases {
+        if let Err(error) = case {
+            let warning = format!("warning: {key}: {error}");
+            if warned.insert(warning.clone()) {
+                log.line(warning);
+            }
+        }
+    }
+}
+
+/// The cases of the next snapshot: each case in `cases` that folds. One
+/// whose key is not in `refolded` is the `current` snapshot's, shared; when
+/// every case was folded again, `refolded` is `None`, and one that came out
+/// equal to the current snapshot's is shared. The rest are new copies.
+fn merged(
+    current: &Snapshot,
+    cases: &Cases,
+    refolded: Option<&HashSet<Key>>,
+) -> Vec<(Key, Arc<Case>)> {
+    // Both the snapshot and the poller's cases are in key order.
+    let mut before = current.cases.iter().peekable();
+    cases
+        .iter()
+        .filter_map(|(key, case)| {
+            let case = case.as_ref().ok()?;
+            while before.next_if(|(was, _)| was < key).is_some() {}
+            let was = before.next_if(|(was, _)| was == key).map(|(_, was)| was);
+            let kept = |was: &Case| match refolded {
+                Some(refolded) => !refolded.contains(key),
+                None => was == case,
+            };
+            let shared = match was {
+                Some(was) if kept(was) => Arc::clone(was),
+                _ => Arc::new(case.clone()),
+            };
+            Some((*key, shared))
+        })
+        .collect()
 }
 
 /// Queues a notification for each case in `landed`, with the case as
@@ -517,6 +540,127 @@ mod tests {
             .iter()
             .filter(|(_, case)| before.cases.iter().any(|(_, was)| Arc::ptr_eq(was, case)))
             .count()
+    }
+
+    /// The key `n`.
+    fn key(n: u64) -> Key {
+        Key::new(n).unwrap()
+    }
+
+    /// The case an open with `data` gives, or why it does not fold.
+    fn open(data: String) -> Result<Case, cases_core::Error> {
+        let open = Append {
+            author: "agent".into(),
+            event: "open".into(),
+            data,
+        };
+        let now = "2026-11-01T09:00:00Z".parse().unwrap();
+        Case::open(&open, now, None).map(|(case, _)| case)
+    }
+
+    /// A case that folds, an fyi titled `title`.
+    fn folded(title: &str) -> Case {
+        open(format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"{title}"}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Why a case that opens with no kind does not fold.
+    fn unfolded() -> cases_core::Error {
+        open("{}".into()).unwrap_err()
+    }
+
+    /// Serve logs a case that does not fold once for its error, as `warning:
+    /// KEY: WHY`, and not again at a later read that still finds it so;
+    /// another case that does not fold is logged when it appears.
+    #[test]
+    fn a_case_that_does_not_fold_is_logged_once() {
+        let log = Log::new(false, 10);
+        let mut warned = HashSet::new();
+        let mut cases = Cases::new();
+        cases.insert(key(1), Ok(folded("Fine")));
+        cases.insert(key(2), Err(unfolded()));
+        let two = format!("warning: {}: {}", key(2), unfolded());
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        cases.insert(key(3), Err(unfolded()));
+        warn_unfolded(&mut warned, &log, &cases);
+        let three = format!("warning: {}: {}", key(3), unfolded());
+        assert_eq!(log.last(), [two, three]);
+    }
+
+    /// Each case `merged` gives for `cases` and `refolded`, in its order: its
+    /// key, its title, and whether it is the very case `current` holds.
+    fn merge(
+        current: &Snapshot,
+        cases: &Cases,
+        refolded: Option<&HashSet<Key>>,
+    ) -> Vec<(u64, String, bool)> {
+        merged(current, cases, refolded)
+            .iter()
+            .map(|(key, case)| {
+                let shared = current.cases.iter().any(|(_, was)| Arc::ptr_eq(was, case));
+                (key.get(), case.title().to_owned(), shared)
+            })
+            .collect()
+    }
+
+    /// The rules of the next snapshot's cases, from the snapshot before and
+    /// a read. A case not folded again since is the snapshot's, shared, even
+    /// when the read's differs, and
+    /// one folded again is a new copy, even when equal; after a read of every
+    /// case, an equal case is shared and a changed one is a new copy. A case
+    /// new to the snapshot is a new copy; one that does not fold is left
+    /// out, and one gone from the read is dropped; the order is the read's.
+    #[test]
+    fn the_next_snapshot_shares_the_cases_its_rules_say() {
+        let current = Snapshot {
+            cases: [1, 2, 3, 4, 6, 7]
+                .into_iter()
+                .map(|n| (key(n), Arc::new(folded(&format!("case {n}")))))
+                .collect(),
+            version: "before".into(),
+        };
+        let mut cases = Cases::new();
+        for n in [2, 7] {
+            cases.insert(key(n), Ok(folded(&format!("case {n}"))));
+        }
+        // Changed, and not folded again: as a snapshot that missed it.
+        cases.insert(key(1), Ok(folded("changed")));
+        cases.insert(key(3), Ok(folded("changed")));
+        cases.insert(key(5), Ok(folded("new")));
+        cases.insert(key(6), Err(unfolded()));
+        let row = |n: u64, title: &str, shared: bool| (n, title.to_owned(), shared);
+
+        // Folded again since, by key: 2 and 3.
+        let refolded = HashSet::from([key(2), key(3)]);
+        assert_eq!(
+            merge(&current, &cases, Some(&refolded)),
+            [
+                row(1, "case 1", true),
+                row(2, "case 2", false),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
+
+        // Every case folded again.
+        assert_eq!(
+            merge(&current, &cases, None),
+            [
+                row(1, "changed", false),
+                row(2, "case 2", true),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
     }
 
     thread_local! {

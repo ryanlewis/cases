@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::mem;
+use std::ops::ControlFlow;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -608,12 +609,7 @@ fn wait(
     // The messages this wait took: a later read finds them picked up, so
     // they are kept here until the wait gives its cases.
     let mut taken: Vec<Turn> = Vec::new();
-    let mut collecting: Option<Collecting> = None;
-    // What a lingering wait collected at its last read, and the messages
-    // it means to take when it prints: what it has, should its timeout pass
-    // while the store cannot be read.
-    let mut collected: Vec<Turn> = Vec::new();
-    let mut held: Vec<(Key, Case)> = Vec::new();
+    let mut gathered = Gathered::default();
     loop {
         if let Some(error) = lapsed(far) {
             return stop(taken, error);
@@ -622,85 +618,87 @@ fn wait(
             &mut poller,
             &none,
             first.is_some(),
-            collecting.as_ref(),
+            gathered.collecting.as_ref(),
             &mut offline,
         );
         let cases = match read {
             Ok(Some(cases)) => cases,
             Ok(None) => continue,
             Err(error) => {
-                let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
-                if let Some(turns) =
-                    asked.give_up(error, had, &messages, listening.as_ref(), &mut warned)?
-                {
-                    return Ok(turns);
+                let failed = asked.failed(error, &mut gathered, listening.as_ref(), &mut warned);
+                if let ControlFlow::Break(end) = failed {
+                    return end;
                 }
-                collecting = None;
                 continue;
             }
         };
-        warn_once(db, cases, &mut warned, &mut unfolded);
-        if let Some(listening) = &mut listening {
-            listening.beat(db, &mut warned);
-        }
-        let first = first.get_or_insert_with(|| First::read(cases, ids));
-        let found = match asked.find(listening.as_ref(), first, cases, &mut taken, &mut warned) {
+        let looked = asked.look(
+            cases,
+            &mut first,
+            &mut listening,
+            &mut taken,
+            &mut warned,
+            &mut unfolded,
+        );
+        let found = match looked {
             Ok(found) => found,
             Err(error) => return stop(taken, error),
         };
-        let woke = !taken.is_empty() || found.woke() || !found.pending.is_empty();
-        if woke && asked.done(&mut collecting, &found, &taken) {
-            let failure = asked.take_pending(
-                listening.as_ref(),
-                found.pending.iter().copied(),
-                &mut taken,
-                &mut warned,
-            );
-            if !taken.is_empty() || found.woke() {
-                return Ok(found.give(taken));
+        let woke = found.wakes(&taken);
+        if woke && asked.done(&mut gathered.collecting, &found, &taken) {
+            let finished = asked.finish(found, listening.as_ref(), &mut taken, &mut warned);
+            if let ControlFlow::Break(end) = finished {
+                return end;
             }
-            if let Some(error) = failure.filter(|_| asked.past_deadline()) {
-                return Err(error);
-            }
-            // It took none of the messages it held: one was edited since the
-            // read, or the store failed. A failed write leaves the version
-            // as it was, so a held poll would not wake on it: it reads again
-            // soon, still at the end of its quiet time.
-            thread::sleep(held_for(far).map_or(POLL, |held| held.min(POLL)));
             continue;
         }
+        gathered.note(woke, found);
+        if asked.settling(listening.as_ref()) {
+            continue;
+        }
+        if let Err(error) = asked.rest(&poller, gathered.collecting.as_ref(), &mut offline) {
+            let failed = asked.failed(error, &mut gathered, listening.as_ref(), &mut warned);
+            if let ControlFlow::Break(end) = failed {
+                return end;
+            }
+        }
+    }
+}
+
+/// What a lingering wait has gathered from its reads.
+#[derive(Debug, Default)]
+struct Gathered {
+    /// It has seen the first event that would wake it, and collects the
+    /// rest.
+    collecting: Option<Collecting>,
+    /// What it collected at its last read, and the messages it means to take
+    /// when it prints: what it has, should its timeout pass while the store
+    /// cannot be read.
+    collected: Vec<Turn>,
+    held: Vec<(Key, Case)>,
+}
+
+impl Gathered {
+    /// Keeps what a read `found`, which did not end the wait, and which `woke`
+    /// it or did not.
+    fn note(&mut self, woke: bool, found: Found) {
         // What it was collecting has gone, such as a case another wait
         // picked up or a message another session took first: it waits as it
         // did before the first event.
         if !woke {
-            collecting = None;
+            self.collecting = None;
         }
-        held = if collecting.is_some() {
+        self.held = if self.collecting.is_some() {
             let pending = found.pending.iter();
             pending.map(|&(key, case)| (key, case.clone())).collect()
         } else {
             Vec::new()
         };
-        collected = if collecting.is_some() {
+        self.collected = if self.collecting.is_some() {
             found.give(Vec::new())
         } else {
             Vec::new()
         };
-        // A pickup that was not stored leaves the version as it was, so a
-        // held poll would not wake on it: the next read settles it.
-        if !asked.past_deadline() && listening.as_ref().is_some_and(Listening::unsettled) {
-            thread::sleep(held_for(far).map_or(POLL, |held| held.min(POLL)));
-            continue;
-        }
-        if let Err(error) = asked.rest(&poller, collecting.as_ref(), &mut offline) {
-            let (had, messages) = (mem::take(&mut collected), mem::take(&mut held));
-            if let Some(turns) =
-                asked.give_up(error, had, &messages, listening.as_ref(), &mut warned)?
-            {
-                return Ok(turns);
-            }
-            collecting = None;
-        }
     }
 }
 
@@ -904,6 +902,93 @@ impl Asked<'_> {
         unsettled
     }
 
+    /// Warns of what is wrong in `cases`, the store as a read found it,
+    /// records a wait `listening` when a heartbeat is due, notes the wait's
+    /// `first` read, and gives what `cases` holds for it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Asked::find`].
+    fn look<'c>(
+        &self,
+        cases: &'c Cases,
+        first: &mut Option<First>,
+        listening: &mut Option<Listening>,
+        taken: &mut Vec<Turn>,
+        warned: &mut HashSet<String>,
+        unfolded: &mut HashMap<Key, (String, String)>,
+    ) -> Result<Found<'c>, Failure> {
+        let db = &self.ctx.store;
+        warn_once(db, cases, warned, unfolded);
+        if let Some(listening) = listening {
+            listening.beat(db, warned);
+        }
+        let first = first.get_or_insert_with(|| First::read(cases, self.ids));
+        self.find(listening.as_ref(), first, cases, taken, warned)
+    }
+
+    /// Ends a wait that `found` what it was waiting for, once it has taken
+    /// the messages it held, with its cases or, past its timeout, why it
+    /// could not take them. It goes on, to read again, when it has nothing
+    /// to give yet.
+    fn finish(
+        &self,
+        found: Found,
+        listening: Option<&Listening>,
+        taken: &mut Vec<Turn>,
+        warned: &mut HashSet<String>,
+    ) -> ControlFlow<Result<Vec<Turn>, Error>> {
+        let failure = self.take_pending(listening, found.pending.iter().copied(), taken, warned);
+        if !taken.is_empty() || found.woke() {
+            return ControlFlow::Break(Ok(found.give(mem::take(taken))));
+        }
+        if let Some(error) = failure.filter(|_| self.past_deadline()) {
+            return ControlFlow::Break(Err(error));
+        }
+        // It took none of the messages it held: one was edited since the
+        // read, or the store failed. A failed write leaves the version
+        // as it was, so a held poll would not wake on it: it reads again
+        // soon, still at the end of its quiet time.
+        thread::sleep(held_for(self.far).map_or(POLL, |held| held.min(POLL)));
+        ControlFlow::Continue(())
+    }
+
+    /// Whether a pickup's outcome is unknown with time left, after sleeping
+    /// until the read that settles it. A pickup that was not stored leaves
+    /// the version as it was, so a held poll would not wake on it: the next
+    /// read settles it.
+    fn settling(&self, listening: Option<&Listening>) -> bool {
+        if !self.past_deadline() && listening.is_some_and(Listening::unsettled) {
+            thread::sleep(held_for(self.far).map_or(POLL, |held| held.min(POLL)));
+            return true;
+        }
+        false
+    }
+
+    /// The end of a wait whose read of the store, or held poll, failed with
+    /// `error`, as [`Asked::give_up`] says, from what it has `gathered`,
+    /// which is empty after. A wait that goes on no longer collects.
+    fn failed(
+        &self,
+        error: Error,
+        gathered: &mut Gathered,
+        listening: Option<&Listening>,
+        warned: &mut HashSet<String>,
+    ) -> ControlFlow<Result<Vec<Turn>, Error>> {
+        let (had, messages) = (
+            mem::take(&mut gathered.collected),
+            mem::take(&mut gathered.held),
+        );
+        match self.give_up(error, had, &messages, listening, warned) {
+            Ok(Some(turns)) => ControlFlow::Break(Ok(turns)),
+            Ok(None) => {
+                gathered.collecting = None;
+                ControlFlow::Continue(())
+            }
+            Err(error) => ControlFlow::Break(Err(error)),
+        }
+    }
+
     /// Whether the timeout has passed, if there is one.
     fn past_deadline(&self) -> bool {
         left(self.deadline).is_some_and(|left| left.is_zero())
@@ -1057,6 +1142,12 @@ impl Asked<'_> {
 }
 
 impl Found<'_> {
+    /// Whether the wait, with the messages it `taken`, has something to
+    /// wake for.
+    fn wakes(&self, taken: &[Turn]) -> bool {
+        !taken.is_empty() || self.woke() || !self.pending.is_empty()
+    }
+
     /// Whether it wakes the wait: a message withdrawn, or a turn new to it.
     fn woke(&self) -> bool {
         !self.withdrawn.is_empty() || self.turns.iter().any(|&(.., fresh)| fresh)
@@ -2159,6 +2250,82 @@ mod tests {
             until(Some(late), Mood::Eager, Some(&collecting)),
             Some(late)
         );
+    }
+
+    /// What a read found with nothing in it but the messages `pending`.
+    fn holding(pending: Vec<(Key, &Case)>) -> Found<'_> {
+        Found {
+            turns: Vec::new(),
+            withdrawn: Vec::new(),
+            pending,
+            open: true,
+        }
+    }
+
+    /// Gives `check` a steady wait with no timeout, on a store not there.
+    fn with_steady(check: impl FnOnce(&Asked)) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let ctx = Ctx {
+            store: AnyStore::Local(Db::new(&path)),
+            target: crate::store::Target::Local { path },
+            config: crate::config::Config::default(),
+            store_flag: None,
+            out: std::io::stdout().lock(),
+        };
+        let args = args_of(&["wait", "--mood", "steady"]);
+        check(&Asked {
+            args: &args,
+            ctx: &ctx,
+            ids: &[],
+            since: None,
+            mood: Mood::Steady,
+            far: None,
+            deadline: None,
+        });
+    }
+
+    /// A message a read found stored after its pickup's answer was lost is
+    /// the wait's already, so a steady wait that has just begun to collect
+    /// gives it at once, rather than at the end of a new quiet time.
+    #[test]
+    fn a_message_already_taken_ends_a_steady_wait_at_once() {
+        with_steady(|asked| {
+            let nothing = holding(Vec::new());
+            let mut collecting = None;
+            assert!(!asked.done(&mut collecting, &nothing, &[]));
+
+            let mut case = message_to_w9();
+            write(&mut case, Author::Agent, &pickup_by("w9"));
+            let taken = Turn {
+                key: Key::new(1).unwrap(),
+                case,
+                at: None,
+                fresh: true,
+                taken: true,
+            };
+            let mut collecting = None;
+            assert!(asked.done(&mut collecting, &nothing, &[taken]));
+        });
+    }
+
+    /// A message held for the print is an event like any other to the quiet
+    /// time: a new one starts it again, and one seen before does not.
+    #[test]
+    fn a_held_message_starts_the_quiet_time_again_once() {
+        with_steady(|asked| {
+            let start = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
+            let mut collecting = Some(Collecting::new(start));
+            let case = message_to_w9();
+            let found = holding(vec![(Key::new(1).unwrap(), &case)]);
+
+            assert!(!asked.done(&mut collecting, &found, &[]));
+            let last = collecting.as_ref().unwrap().last;
+            assert!(last > start, "{last:?} {start:?}");
+
+            assert!(!asked.done(&mut collecting, &found, &[]));
+            assert_eq!(collecting.as_ref().unwrap().last, last);
+        });
     }
 
     #[test]
