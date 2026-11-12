@@ -121,4 +121,4 @@ Tasks whose runs in one arm disagree on at least one rule, and the spread of run
 | stuck-park-resume | heldout | 100% | 79% |  |
 | withdraw-open | heldout | 100% | 82% |  |
 
-Programmatic re-grade: 467 verdicts changed.
+Programmatic re-grade: 0 verdicts changed.
