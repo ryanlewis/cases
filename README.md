@@ -141,6 +141,7 @@ To keep the inbox running, `cases service install` sets `cases serve` up as a us
 - `m` writes a message to an agent session: pick one of the sessions listening now with a number, or type a worker name or `#label`. `e` edits a message no agent has picked up yet, and `w` takes one back.
 - The case shows its body as markdown, its options or rows, the answer, the outcome and the thread.
 - On a narrow terminal it shows one pane at a time.
+- Press and drag over the list or the case to select its text, and let go to copy it; a click is still a click, and Esc clears the selection. The copy goes to the system clipboard by OSC 52, which the terminal has to allow (under tmux, `set -g set-clipboard on`). In most terminals, holding Shift while you drag gives the terminal's own selection instead.
 - A strip under the filters shows the cases opened and answered on each of the last 14 days (UTC) and the median time to answer. `s` hides or shows it, and it hides itself on a terminal under 24 rows. `tui-stats = "off"` in the config file starts with it hidden. Where the terminal draws kitty graphics, as kitty, Ghostty and Rex do, the strip is a small bar chart; elsewhere it is text, and `tui-stats = "text"` keeps it text.
 - Inside [herdr](https://herdr.dev), the pane shows as blocked while cases wait on you.
 
