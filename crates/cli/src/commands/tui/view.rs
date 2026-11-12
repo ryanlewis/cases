@@ -155,6 +155,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     draw_focus(frame, app);
     let hits = draw_flow(frame, keys, footer);
     app.hits.extend(hits);
+    super::select::draw(frame, app);
     draw_toasts(frame, app, body);
     if app.palette.is_some() {
         draw_palette(frame, app);
