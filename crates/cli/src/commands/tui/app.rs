@@ -339,6 +339,10 @@ pub(crate) struct App {
     pub(crate) strip: Strip,
     /// The key the footer offers for a new line in a field.
     pub(crate) newline: Newline,
+    /// The text the mouse selects, to copy (TU-12).
+    pub(crate) selection: Option<super::select::Selection>,
+    /// Text for the loop to put on the clipboard.
+    pub(crate) copied: Option<String>,
 }
 
 /// The key for a new line in a field (TU-12): shift+enter where the
@@ -421,6 +425,8 @@ impl App {
                 area: None,
             },
             newline: Newline::AltEnter,
+            selection: None,
+            copied: None,
         }
     }
 
@@ -1026,7 +1032,9 @@ impl App {
 
     /// Does what `key` asks (TU-08).
     pub(crate) fn key(&mut self, key: KeyEvent) {
-        if key.kind == KeyEventKind::Release {
+        if key.kind == KeyEventKind::Release
+            || (key.code == KeyCode::Esc && super::select::clear(self))
+        {
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1177,6 +1185,7 @@ impl App {
     /// the pointer that leaves it over the same thing.
     pub(crate) fn mouse(&mut self, event: MouseEvent) -> bool {
         let at = Position::new(event.column, event.row);
+        let selected = super::select::mouse(self, event);
         let hit = self.hit_at(at);
         self.pointer = Some(at);
         let was = self.hover;
@@ -1192,7 +1201,9 @@ impl App {
                 .map(|(_, hit)| *hit)
         };
         match event.kind {
-            MouseEventKind::Moved | MouseEventKind::Drag(_) => return self.hover != was,
+            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                return self.hover != was || selected;
+            }
             // The palette and a row's menu take a click: on one of their
             // actions, runs it; on their face, nothing; anywhere else,
             // closes them.

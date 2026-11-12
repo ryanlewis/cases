@@ -2,7 +2,7 @@
 
 Every keep and change user story, one line per acceptance criterion, in the stories' order. Each line names the tests that prove it: `file::name` for a test, `file::tests::name` for a unit test, `spec/vectors/x.json "description"` for a vector (run by `crates/core/tests/vectors.rs` and `crates/store-sqlite/tests/vectors.rs`), `crates/cli/src/commands/serve/web/test/x.test.js "name"` for a test of the inbox's modules (run in node by `npm test` in `crates/cli/src/commands/serve/web`). A line is marked **gap** when no test proves it, with why; **by hand** for what only the page draws, or what needs a real terminal or service manager, which was checked by hand (for the web inbox, in headless Chromium against a running serve, by scripts kept out of the repository); **question** where the story needs Ryan's decision; **n/a** for what is v2 or not behaviour. A line counts as covered only when tests prove all of it; otherwise it counts once, by the first of question, gap, by hand, n/a that it carries. The drop stories, HU-05 and ST-15, are left out. The tests of remote stores, `login`, `logout` and `stores` are built only with the cli's `remote` feature, which CI turns on in a second run (`cargo test --workspace --features cases/remote`); a release is built without it.
 
-Tally: 453 criteria, 387 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
+Tally: 459 criteria, 393 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 
 ## AG-01 Open a case (change)
 
@@ -305,6 +305,12 @@ Tally: 453 criteria, 387 covered, 59 by hand, 5 gap, 0 question, 2 n/a.
 - An unknown event shown as possibly from a newer version: `crates/cli/tests/show.rs::show_reports_an_unknown_event_as_version_skew`; by hand — in a browser
 - A done case shown beside the done list: by hand — in a browser; a sent message is shown under in flight: `crates/cli/src/commands/serve/web/test/routes.test.js "a case's address keeps the filter, or has none and lists the case under its own"`
 - A case says which case it is about and lists the cases about it; a message's page is IN-13's: `crates/cli/src/commands/serve/web/test/case.test.js "a case says what it is about and lists the cases about it, and offers to message its agent"`
+- In `cases tui`, a press and a drag over a pane's text selects it, drawn reversed, and the release copies it to the system clipboard with OSC 52 and says so in a toast: `crates/cli/src/commands/tui/tests.rs::a_drag_selects_text_and_the_release_copies_it`, `crates/cli/tests/tui.rs::a_drag_copies_to_the_clipboard`
+- A press and a release on one cell, or one column apart, is a click, as it was: it acts on the press, and selects and copies nothing: `crates/cli/src/commands/tui/tests.rs::a_click_is_still_a_click_and_copies_nothing`
+- The selection keeps to the pane it began in: past its edge it stops there, so the other pane, the line between them and the bars are never copied, nor the case that takes the list's place on a narrow terminal: `crates/cli/src/commands/tui/tests.rs::a_selection_does_not_leave_its_pane`, `a_selection_does_not_pass_to_the_pane_that_takes_its_place`
+- The copy is the text as drawn, rows joined by newlines, each row's trailing spaces dropped; a wide character at either end is copied whole: `crates/cli/src/commands/tui/tests.rs::a_copy_drops_trailing_spaces`, `a_wide_character_at_either_end_is_copied_whole`
+- Esc, a click, or a change to what the pane shows clears the selection: `crates/cli/src/commands/tui/tests.rs::escape_or_a_click_clears_the_selection`, `a_change_to_the_pane_clears_the_selection`
+- A case's text cannot write to the clipboard by itself: its escapes are drawn as text, and only a selection is copied: `crates/cli/src/commands/tui/tests.rs::a_case_cannot_write_to_the_clipboard`
 
 ## IN-03 Answer, drop, park or resume from the inbox (change)
 
