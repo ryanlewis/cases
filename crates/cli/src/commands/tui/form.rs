@@ -332,8 +332,9 @@ impl Form {
     /// Answers by a number (TU-12): a decision's option, other being the
     /// number after the last, with the keys put in the note to say it; a
     /// signoff's or a briefing's 1 to accept, 2 for changes or to send it
-    /// back; or an approval's row, with the keys on its verdicts. Gives
-    /// whether the number names one.
+    /// back; or, on an approval, 1, 2 or 3 to approve, hold or reject the
+    /// current row and move on to the next with no verdict, as the web
+    /// inbox's keys do. Gives whether the number names one.
     pub(crate) fn pick(&mut self, n: u32) -> bool {
         let wide = i64::from(n);
         let at = |n: u32| usize::try_from(n).unwrap_or(usize::MAX);
@@ -364,8 +365,8 @@ impl Form {
                 self.briefing = mark;
                 self.go(Spot::Choices);
             }
-            Kind::Approval if (1..=self.rows.len()).contains(&at(n)) => {
-                self.row = at(n) - 1;
+            Kind::Approval if !self.rows.is_empty() && (1..=3).contains(&n) => {
+                self.give_verdict(["approve", "hold", "reject"][at(n) - 1]);
                 self.go(Spot::Rows);
             }
             _ => return false,

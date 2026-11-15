@@ -414,13 +414,13 @@ fn a_narrow_terminal_shows_one_pane_at_a_time() {
         "The body text.".clone_into(&mut open.body);
     });
     let mut app = store.app();
-    let list = screen(&mut app, 80, 20);
+    let list = screen(&mut app, 80, 30);
     assert!(
         list.contains("Which name?") && !list.contains("The body text."),
         "{list}"
     );
     press(&mut app, KeyCode::Enter);
-    let case = screen(&mut app, 80, 20);
+    let case = screen(&mut app, 80, 30);
     assert!(case.contains("The body text."), "{case}");
 }
 
@@ -1066,13 +1066,13 @@ fn a_row_the_human_carries_out_is_theirs_and_its_approve_reads_done() {
     assert!(text.contains("$ git tag v1"), "{text}");
     press(&mut app, KeyCode::Char('a'));
     let text = screen(&mut app, 120, 50);
-    assert!(text.contains("y done"), "{text}");
-    assert!(text.contains("x won't do"), "{text}");
-    press(&mut app, KeyCode::Char('y'));
+    assert!(text.contains("1 done"), "{text}");
+    assert!(text.contains("3 won't do"), "{text}");
+    press(&mut app, KeyCode::Char('1'));
     // On the agent's row, the keys read as before.
     let text = screen(&mut app, 120, 50);
-    assert!(text.contains("y approve"), "{text}");
-    assert!(text.contains("x reject"), "{text}");
+    assert!(text.contains("1 approve"), "{text}");
+    assert!(text.contains("3 reject"), "{text}");
     press(&mut app, KeyCode::Char('x'));
     let text = screen(&mut app, 120, 50);
     assert!(text.contains("● done  ○ hold  ○ won't do"), "{text}");
@@ -2470,17 +2470,17 @@ fn a_selection_does_not_pass_to_the_pane_that_takes_its_place() {
         "Case body text.".clone_into(&mut open.body);
     });
     let mut app = store.app();
-    let shown = screen(&mut app, 80, 30);
+    let shown = screen(&mut app, 80, 24);
     let at = spot(&shown, "Only case");
     mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
     assert_eq!(app.focus, Focus::Case);
-    screen(&mut app, 80, 30);
+    screen(&mut app, 80, 24);
     mouse(
         &mut app,
         MouseEventKind::Drag(MouseButton::Left),
         (at.0 + 8, at.1 + 2),
     );
-    screen(&mut app, 80, 30);
+    screen(&mut app, 80, 24);
     mouse(
         &mut app,
         MouseEventKind::Up(MouseButton::Left),
@@ -2505,7 +2505,10 @@ fn a_selection_does_not_leave_its_pane() {
     let copied = drag(&mut app, from, (0, 39)).unwrap();
     assert!(copied.starts_with("Body one.\n\nBody two."), "{copied:?}");
     assert!(!copied.contains("Listed title"), "{copied:?}");
-    assert!(!copied.contains('│'), "{copied:?}");
+    assert!(
+        !copied.lines().any(|line| line.starts_with('│')),
+        "{copied:?}"
+    );
     assert!(
         !copied.contains("quit"),
         "the footer was copied: {copied:?}"
@@ -2649,7 +2652,7 @@ fn a_click_on_a_case_selects_it_and_a_second_opens_it() {
     assert_eq!(app.selected, Some(second));
     assert_eq!(app.focus, Focus::List);
 
-    let narrow = screen(&mut app, 80, 30);
+    let narrow = screen(&mut app, 80, 24);
     let at = spot(&narrow, "Second case");
     mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
     assert_eq!(app.focus, Focus::Case);
@@ -2707,7 +2710,7 @@ fn a_click_in_the_answer_chooses_types_and_sends() {
     assert_eq!(app.form.as_ref().map(|f| f.choice), Some(Some(2)));
     click(&mut app, "Pin it");
     assert_eq!(app.form.as_ref().map(|f| f.choice), Some(Some(1)));
-    click(&mut app, "note     empty");
+    click(&mut app, "press n to add a note");
     assert_eq!(app.form.as_ref().and_then(|f| f.editing), Some(Which::Note));
     typing(&mut app, "pinned");
     click(&mut app, "⏎ Send");
@@ -3133,6 +3136,13 @@ fn an_image_strip_too_narrow_for_its_image_is_text() {
 /// The background of the cell at `at`, as `app` is drawn now.
 fn bg_at(app: &mut App, at: (u16, u16)) -> ratatui::style::Color {
     bg_in(app, (120, 40), at)
+}
+
+/// The foreground of the cell at `at`, as `app` is drawn now at 120x40.
+fn fg_at(app: &mut App, (column, row): (u16, u16)) -> ratatui::style::Color {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| view::draw(frame, app)).unwrap();
+    terminal.backend().buffer()[(column, row)].fg
 }
 
 /// The background of the cell at `at`, as `app` is drawn now at `size`.
@@ -3856,7 +3866,7 @@ fn an_answer_by_clicks_records_what_the_keys_record() {
         let mut app = store.app();
         if by_click {
             click(&mut app, "Float it");
-            click(&mut app, "note     empty");
+            click(&mut app, "press n to add a note");
             typing(&mut app, " fine ");
             click(&mut app, "⏎ Send");
         } else {
@@ -4617,13 +4627,7 @@ fn an_answer_by_the_new_keys_records_what_the_old_keys_record() {
         (
             "approval",
             &[a, Key(Char('y')), Key(Char('x')), Ctrl('s')],
-            &[
-                Key(Char('2')),
-                Key(Char('x')),
-                Key(Char('1')),
-                Key(Char('y')),
-                Key(Enter),
-            ],
+            &[Key(Char('1')), Key(Char('3')), Key(Enter)],
         ),
         (
             "question",
@@ -4835,9 +4839,19 @@ fn a_number_from_the_list_answers_and_puts_the_keys_on_it() {
     });
     let mut app = store.app();
     screen(&mut app, 120, 20);
-    press(&mut app, KeyCode::Char('9'));
+    // Each 1 approves the row the keys are on and moves on to the next,
+    // as in the web inbox.
+    for _ in 0..8 {
+        press(&mut app, KeyCode::Char('1'));
+    }
     let form = app.form.as_ref().unwrap();
     assert_eq!((form.row, form.spot()), (8, Spot::Rows));
+    assert!(
+        form.rows[..8]
+            .iter()
+            .all(|row| row.verdict == Some("approve"))
+    );
+    assert_eq!(form.rows[8].verdict, None);
     // The case scrolled to the row, its verdicts in sight.
     let shown = screen(&mut app, 120, 20);
     assert!(shown.contains("▸ r8"), "{shown}");
@@ -4887,11 +4901,12 @@ fn the_focus_is_drawn_on_each_region_and_part() {
     // The pointer over another part lights it, not as the focus.
     mouse(&mut app, MouseEventKind::Moved, (x, y));
     assert_eq!(bg_at(&mut app, (x, y)), view::HOVER_BG);
-    // Then the note, filled and pointed at, with the cursor in it.
+    // Then the note, pointed at and ringed by its border, not filled.
     press(&mut app, KeyCode::Tab);
     let shown = screen(&mut app, 120, 40);
-    let (x, y) = spot(&shown, "▸ note");
-    assert_eq!(bg_at(&mut app, (x + 2, y)), view::FOCUS_BG);
+    let (x, y) = spot(&shown, "▸ ╭─ note");
+    assert_ne!(bg_at(&mut app, (x + 2, y)), view::FOCUS_BG);
+    assert_eq!(fg_at(&mut app, (x + 2, y)), view::ACCENT);
     assert!(shown.contains("on: note · tab → buttons"), "{shown}");
     // Then the buttons, at send: pointed at by its own face, not filled.
     press(&mut app, KeyCode::Tab);
@@ -4955,7 +4970,7 @@ fn the_footer_leads_with_the_keys_place_and_the_answer() {
         ),
         (
             "approval",
-            "on: list · tab → rows │ 1-2 row   n note   ⏎ answer",
+            "on: list · tab → rows │ 1 approve   2 hold   3 reject   n note   ⏎ answer",
         ),
         ("question", "on: list · tab → reply │ n note   ⏎ answer"),
         ("fyi", "on: list · tab → note │ n note   ⏎ answer"),
