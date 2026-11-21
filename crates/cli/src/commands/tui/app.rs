@@ -939,11 +939,7 @@ impl App {
 
     /// Runs the `at`th action the palette finds.
     fn run_found(&mut self, at: usize) {
-        let query = self
-            .palette
-            .as_ref()
-            .map(|p| p.query.clone())
-            .unwrap_or_default();
+        let query = self.palette.as_ref().map_or_default(|p| p.query.clone());
         if let Some(action) = actions::ranked(self, &query).get(at).copied() {
             self.run(action);
         }
