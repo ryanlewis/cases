@@ -104,9 +104,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let pane = case_pane(app, layout(&trimmed)[4], side_by_side).map(|pane| inset(pane, 2, 1));
     let mut buttons = pane.and_then(|inner| panel_buttons(app, inner.width));
     let bar = pane.is_some_and(|inner| {
-        case_fit(app, &verbs, scroll_area(inner, buttons.as_ref()))
-            .0
-            .is_some()
+        case_fit(
+            app,
+            &verbs,
+            scroll_area(app, &verbs, inner, buttons.as_ref()),
+        )
+        .0
+        .is_some()
     });
     let keys = if bar {
         trimmed
@@ -1548,13 +1552,16 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect, verbs: &[Verb], butto
     let buttons = buttons.filter(|_| panel.is_none());
     let inner = match buttons {
         Some(buttons) => {
+            let case_area = scroll_area(app, verbs, inner, Some(&buttons));
             let tall = u16::try_from(buttons.0.len()).unwrap_or(u16::MAX);
-            let [case_area, _, buttons_area] = Layout::vertical([
-                Constraint::Min(1),
-                Constraint::Length(1),
-                Constraint::Length(tall),
-            ])
-            .areas(inner);
+            // A row under the case, then the buttons; under them, the gap
+            // above the footer, when [`scroll_area`] left room for it.
+            let buttons_area = Rect {
+                y: case_area.bottom().saturating_add(1),
+                height: tall,
+                ..inner
+            }
+            .intersection(inner);
             let hits = draw_flow(frame, buttons, buttons_area);
             app.hits.extend(hits);
             case_area
@@ -2058,17 +2065,29 @@ fn panel_buttons(app: &App, width: u16) -> Option<Flow> {
 }
 
 /// The part of the case pane's `inner` area the case scrolls in, above
-/// the answer's panel's `buttons`, when they are drawn.
-fn scroll_area(inner: Rect, buttons: Option<&Flow>) -> Rect {
-    match buttons {
-        Some((lines, _)) => {
-            let tall = u16::try_from(lines.len() + 1).unwrap_or(u16::MAX);
-            Rect {
-                height: inner.height.saturating_sub(tall),
-                ..inner
-            }
-        }
-        None => inner,
+/// the answer's panel's `buttons`, when they are drawn, and a row between
+/// it and them. A row under the buttons keeps them apart from the
+/// footer's keys, unless the case would lose its bar, its title held over
+/// it, or [`MIN_BODY`] rows for it: the gap gives way first.
+fn scroll_area(app: &App, verbs: &[Verb], inner: Rect, buttons: Option<&Flow>) -> Rect {
+    let Some((lines, _)) = buttons else {
+        return inner;
+    };
+    let tall = u16::try_from(lines.len() + 1).unwrap_or(u16::MAX);
+    let above = |rows: u16| Rect {
+        height: inner.height.saturating_sub(rows),
+        ..inner
+    };
+    let fit = |area: Rect| {
+        let (bar, fixed) = case_fit(app, verbs, area);
+        (bar.is_some(), fixed)
+    };
+    let snug = above(tall);
+    let spaced = above(tall.saturating_add(1));
+    if spaced.height >= MIN_BODY && fit(spaced) == fit(snug) {
+        spaced
+    } else {
+        snug
     }
 }
 
@@ -4564,11 +4583,36 @@ mod tests {
         for scroll in [0, u16::MAX] {
             app.scroll = scroll;
             let rows = rows(&screen(&mut app, 100, 20));
-            // The pane's last row, above the footer, has the buttons.
-            assert!(rows[17].contains("⏎ Send   d Drop"), "{rows:#?}");
+            // Over the pane's last row, above the footer, the buttons;
+            // that row is blank, to keep them apart from the footer's keys.
+            assert!(rows[16].contains("⏎ Send   d Drop"), "{rows:#?}");
+            assert!(rows[17].trim_end().ends_with('│'), "{rows:#?}");
         }
         let all = rows(&screen(&mut app, 100, 20)).concat();
         assert!(all.contains("note     "), "the foot of the answer: {all}");
+    }
+
+    #[test]
+    fn the_gap_under_the_answers_buttons_gives_way_on_a_short_terminal() {
+        let case = open("approval", |open| {
+            open.rows = (0..12).map(|n| row(&format!("r{n}"), "", "x")).collect();
+        });
+        let mut app = app(0);
+        app.update(vec![(key(), case.0.clone())], 0, Actors::default(), at(60));
+        app.focus = Focus::Case;
+        app.form = Some(Form::new(key(), &case.0, Act::Answer));
+        // At 16 rows, the case keeps its title and bar with the gap: a
+        // blank row between the buttons and the footer, which is on rows 14
+        // and 15.
+        let rows = rows(&screen(&mut app, 100, 16));
+        assert!(rows[12].contains("⏎ Send   d Drop"), "{rows:#?}");
+        assert!(rows[13].trim_end().ends_with('│'), "{rows:#?}");
+        // At 15, the gap would cost the case its title held over the bar,
+        // so it goes: the buttons sit on the footer.
+        let rows = self::rows(&screen(&mut app, 100, 15));
+        assert!(rows[12].contains("⏎ Send   d Drop"), "{rows:#?}");
+        assert!(rows[5].contains("● today"), "the title held: {rows:#?}");
+        assert!(rows[7].contains("Answer"), "the bar: {rows:#?}");
     }
 
     #[test]
