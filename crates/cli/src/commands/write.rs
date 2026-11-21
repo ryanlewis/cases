@@ -72,8 +72,7 @@ pub(crate) fn append(
         Err(StoreError::Refused(error)) if error.category() == Category::Stale => {
             let now = ctx
                 .case(key)
-                .map(|case| format!("; it is now {}", case.state()))
-                .unwrap_or_default();
+                .map_or_default(|case| format!("; it is now {}", case.state()));
             Err(Error::with_status(Status::Stale, format!("{error}{now}")))
         }
         Err(StoreError::NoCase) => Err(Error::new(format!("no case {key}"))),

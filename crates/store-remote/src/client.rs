@@ -779,10 +779,7 @@ pub(crate) fn classify(status: u16, retry_after: Option<Duration>, body: &[u8]) 
     let refusal = serde_json::from_slice::<Refusal>(body)
         .ok()
         .map(|r| r.error);
-    let message = refusal
-        .as_ref()
-        .map(|r| r.message.clone())
-        .unwrap_or_default();
+    let message = refusal.as_ref().map_or_default(|r| r.message.clone());
     let category = refusal.as_ref().map(|r| r.category.as_str());
     let protocol = |message: &str| {
         Failure::Error(Error::Protocol {
