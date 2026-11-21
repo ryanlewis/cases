@@ -417,8 +417,7 @@ impl Fake {
             pairs
                 .iter()
                 .find(|(key, _)| key == name)
-                .map(|(_, value)| value.clone())
-                .unwrap_or_default()
+                .map_or_default(|(_, value)| value.clone())
         };
         if get("code_challenge_method") != "S256" {
             return Err("The sign-in must use PKCE with S256.".into());

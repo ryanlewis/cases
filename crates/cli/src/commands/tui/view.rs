@@ -2620,8 +2620,7 @@ fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: 
         let mut keys = app
             .selected_case()
             .filter(|(_, case)| Act::Answer.fits(case))
-            .map(|(_, case)| answer_keys(case))
-            .unwrap_or_default();
+            .map_or_default(|(_, case)| answer_keys(case));
         let rest: &[(&str, &str)] = match (app.focus, side_by_side) {
             // A stuck case can be parked too, which ends the screen
             // (TU-11).

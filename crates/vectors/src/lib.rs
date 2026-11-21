@@ -111,8 +111,7 @@ pub fn load_all() -> Result<Vec<(String, Vec<Vector>)>, Vec<String>> {
     for path in paths {
         let name = path
             .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|stem| stem.to_string_lossy().into_owned());
         match read(&path) {
             Ok(vectors) => {
                 errors.extend(check_file(&name, &vectors));
