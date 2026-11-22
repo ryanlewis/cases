@@ -26,11 +26,11 @@
   ],
   "packageRules": [
     {
-      "description": "Each Rust release gets its own PR, out of the weekly batch, so its CI shows any new lints on their own. A human merges it.",
+      "description": "Each Rust release gets its own PR, out of the weekly batch, so its CI shows any new lints on their own. CI gates it, so it merges itself when green.",
       "matchPackageNames": ["rust"],
       "matchDatasources": ["github-releases"],
       "groupName": null,
-      "automerge": false
+      "automerge": true
     },
     {
       "description": "serde_json is pinned exactly in normal and dev dependencies, and Cargo allows one 1.x in the build. Keep every pin in the weekly batch, so the dev-dependency patch group never bumps half of them (#129, #130).",
