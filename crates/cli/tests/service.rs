@@ -1056,6 +1056,45 @@ fn without_xdg_config_home_or_home_there_is_no_unit_directory() {
     assert!(!service.env.path("systemd").exists());
 }
 
+/// `$XDG_CONFIG_HOME` is all it takes to find systemd's user directory: it
+/// is used over `$HOME`, and with `$HOME` unset or empty.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_unit_is_under_xdg_config_home_whatever_home_is() {
+    let mut service = Service::new();
+    let unit = service.file();
+    let home = service.env.path("home");
+    for value in [Some(home.to_str().unwrap()), None, Some("")] {
+        match value {
+            None => service.env.unset("HOME"),
+            Some(value) => service.env.set("HOME", value),
+        }
+        let (out, _) = service.status(&[]);
+        assert_lines(&out, &[&format!("Installed: no ({})\n", unit.display())]);
+    }
+}
+
+/// With no systemd user directory and no `systemctl` either, the directory
+/// is what is named: it is looked for first.
+#[test]
+#[cfg(target_os = "linux")]
+fn no_unit_directory_is_named_before_a_missing_service_manager() {
+    let mut service = Service::new();
+    let config = service.env.path("config.toml");
+    write_file(&config, "");
+    service.env.set("CASES_CONFIG", config.to_str().unwrap());
+    service.env.unset("XDG_CONFIG_HOME");
+    service.env.unset("HOME");
+    service.env.unset("PATH");
+    let out = service.run(&[]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("cannot find the systemd user directory"),
+        "{out:?}"
+    );
+}
+
 impl Service {
     /// Puts `script` on `$PATH` as `launchctl` and `systemctl`, in place of
     /// the stand-in, copied while no process starts so that running it does
@@ -1084,6 +1123,16 @@ fn a_service_manager_that_cannot_be_started_is_named() {
         out.stderr.contains(&format!("{}: ", program.display())),
         "{out:?}"
     );
+}
+
+/// What a service manager command said is its stdout and then its stderr.
+#[test]
+fn a_failed_query_gives_its_stdout_then_its_stderr() {
+    let service = Service::new();
+    service.replace_manager("#!/bin/sh\necho err >&2\necho out\nexit 9\n");
+    let out = service.run(&[]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("exit status 9: out\nerr"), "{out:?}");
 }
 
 /// A query killed by a signal is an error, not a service that is there.

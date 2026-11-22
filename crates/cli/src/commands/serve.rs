@@ -34,6 +34,8 @@ use std::time::{Duration, Instant};
 
 use cases_core::Time;
 use cases_store_sqlite::Db;
+#[cfg(unix)]
+use tokio::signal::unix::SignalKind;
 use tokio::sync::{mpsc, watch as channel};
 use tokio::time::MissedTickBehavior;
 
@@ -157,6 +159,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         started,
         terminal,
         open: terminal && !no_open,
+        recorded: recorded.then(|| (store.clone(), pid)),
         // The binary as it is now, before serve says it is up: a test that
         // replaces it once serve is up must find it watched.
         binary: super::service::executable().ok().and_then(Binary::new),
@@ -324,6 +327,9 @@ struct Serving<'a> {
     open: bool,
     /// The binary serve runs, watched for an upgrade.
     binary: Option<Binary>,
+    /// The store and process of the instance file, when serve wrote one:
+    /// what a stop forced by a signal removes as it exits.
+    recorded: Option<(PathBuf, i32)>,
 }
 
 impl Serving<'_> {
@@ -379,7 +385,7 @@ impl Serving<'_> {
         let (quit, mut quits) = mpsc::unbounded_channel();
         let begun = Arc::new(AtomicBool::new(false));
         let forced: Restore = Arc::default();
-        let signals = signals(Arc::clone(&begun), Arc::clone(&forced))?;
+        let signals = signals(Arc::clone(&begun), Arc::clone(&forced), self.recorded)?;
         if self.terminal {
             if self.open
                 && let Err(error) = browser::open(&self.url)
@@ -392,12 +398,8 @@ impl Serving<'_> {
             writeln!(out, "Serving {} at {}", self.store.display(), self.url)?;
             out.flush()?;
         }
-        let raw = take_keys(self.terminal, quit);
+        let raw = arm(&forced, self.terminal, || take_keys(self.terminal, quit));
         let keys = raw.is_some();
-        // What a stop forced by a second signal puts back on the terminal
-        // before it exits, in place before the screen is drawn.
-        *forced.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(forced_restore(self.terminal, raw.clone()));
         let painter = self
             .terminal
             .then(|| Painter::start(self.store.display().to_string(), self.started, keys));
@@ -464,16 +466,32 @@ fn take_keys(terminal: bool, quit: mpsc::UnboundedSender<()>) -> Option<Arc<term
     })
 }
 
+/// Takes the keys with `take` and installs what a forced stop puts back,
+/// holding the slot throughout: a forced stop that comes between the two
+/// waits for it, rather than find nothing to put back.
+fn arm(
+    forced: &Restore,
+    screen: bool,
+    take: impl FnOnce() -> Option<Arc<term::Keys>>,
+) -> Option<Arc<term::Keys>> {
+    let mut slot = forced.lock().unwrap_or_else(PoisonError::into_inner);
+    let raw = take();
+    *slot = Some(forced_restore(screen, raw.clone()));
+    raw
+}
+
 /// What a stop forced by a second signal puts back on the terminal before
 /// it exits: the cursor and line wrapping, when serve drew its `screen`,
 /// and the keys it took (`raw`).
 fn forced_restore(screen: bool, raw: Option<Arc<term::Keys>>) -> Box<dyn FnOnce() + Send> {
     Box::new(move || {
-        if screen {
-            show(Screen::END);
-        }
+        // The keys first: a terminal whose output is stopped (Ctrl-S) holds
+        // the write of the screen's end, and serve exits while it waits.
         if let Some(raw) = &raw {
             raw.restore();
+        }
+        if screen {
+            show(Screen::END);
         }
     })
 }
@@ -518,20 +536,29 @@ type Restore = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 /// Once serve is stopping (`begun`), a second Ctrl-C or SIGTERM ends it at
 /// once, as the default would, rather than wait out the stop, which waits
 /// for the writes in flight, each of which can wait 5 s on the store's
-/// lock. `restore` puts the terminal back first. The signals are caught on
-/// a thread and a runtime of their own from now until serve exits, so that
-/// a second signal counts however soon it follows the first, and while
-/// serve's runtime, as it drops, waits for those writes and runs nothing
-/// else.
+/// lock. It removes the instance file that `recorded` names, and `restore`
+/// puts the terminal back, first. The signals are caught on a thread and a
+/// runtime of their own from now until serve exits, so that a second signal
+/// counts however soon it follows the first, and while serve's runtime, as
+/// it drops, waits for those writes and runs nothing else.
 #[cfg(unix)]
-fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Output = ()>, Error> {
+fn signals(
+    begun: Arc<AtomicBool>,
+    restore: Restore,
+    recorded: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     let (first, stop) = tokio::sync::oneshot::channel();
     let (ready, caught) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let Some((runtime, mut interrupt, mut terminate)) = handlers() else {
-            return;
-        };
-        let _ = ready.send(());
+        let (runtime, mut interrupt, mut terminate) =
+            match handlers(SignalKind::interrupt(), SignalKind::terminate()) {
+                Ok(handlers) => handlers,
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+            };
+        let _ = ready.send(Ok(()));
         let mut first = Some(first);
         runtime.block_on(async {
             loop {
@@ -544,13 +571,14 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
                 if begins_stop(&begun, &mut first) {
                     continue;
                 }
-                force_exit(code, &restore);
+                force_exit(code, recorded.as_ref(), &restore);
             }
         });
     });
     caught
         .recv()
-        .map_err(|_| Error::new("could not catch Ctrl-C or SIGTERM"))?;
+        .map_err(|_| Error::new("could not catch Ctrl-C or SIGTERM"))?
+        .map_err(|error| Error::new(format!("could not catch Ctrl-C or SIGTERM: {error}")))?;
     Ok(async move {
         if stop.await.is_err() {
             std::future::pending::<()>().await;
@@ -558,25 +586,27 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
     })
 }
 
-/// A runtime of its own, with the handlers of Ctrl-C and SIGTERM in place
-/// on it, or none when either cannot be had.
+/// A runtime of its own, with handlers of `interrupt` and `terminate` in
+/// place on it, or why either cannot be had.
 #[cfg(unix)]
-fn handlers() -> Option<(
+fn handlers(
+    interrupt: SignalKind,
+    terminate: SignalKind,
+) -> io::Result<(
     tokio::runtime::Runtime,
     tokio::signal::unix::Signal,
     tokio::signal::unix::Signal,
 )> {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::signal;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .ok()?;
+        .build()?;
     let (interrupt, terminate) = {
         let _entered = runtime.enter();
-        let interrupt = signal(SignalKind::interrupt()).ok()?;
-        (interrupt, signal(SignalKind::terminate()).ok()?)
+        let interrupt = signal(interrupt)?;
+        (interrupt, signal(terminate)?)
     };
-    Some((runtime, interrupt, terminate))
+    Ok((runtime, interrupt, terminate))
 }
 
 /// Whether a signal begins the stop: the first signal does, unless
@@ -587,27 +617,34 @@ fn begins_stop(begun: &AtomicBool, first: &mut Option<tokio::sync::oneshot::Send
     !begun.swap(true, Ordering::SeqCst) && first.take().is_some_and(|first| first.send(()).is_ok())
 }
 
-/// Ends serve at once with `code`, after `restore` puts the terminal back.
-/// A terminal whose output is stopped (Ctrl-S) holds the write that puts
-/// it back: serve exits after a moment whatever it does.
+/// Ends serve at once with `code`, after it removes the instance file that
+/// `recorded` names and `restore` puts the terminal back. A terminal whose
+/// output is stopped (Ctrl-S) holds the write that shows the cursor, so the
+/// file goes first: serve exits after a moment whatever the write does.
 #[cfg(unix)]
-fn force_exit(code: i32, restore: &Restore) -> ! {
+fn force_exit(code: i32, recorded: Option<&(PathBuf, i32)>, restore: &Restore) -> ! {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
         std::process::exit(code);
     });
-    let restore = restore
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(restore) = restore {
+    if let Some((store, pid)) = recorded {
+        let _ = instance::remove(store, *pid);
+    }
+    // Held until the exit: keys taken after this found nothing to put back
+    // would be left raw, so `arm` waits here until serve is gone.
+    let mut slot = restore.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(restore) = slot.take() {
         restore();
     }
     std::process::exit(code);
 }
 
 #[cfg(not(unix))]
-fn signals(_: Arc<AtomicBool>, _: Restore) -> Result<impl Future<Output = ()>, Error> {
+fn signals(
+    _: Arc<AtomicBool>,
+    _: Restore,
+    _: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     Ok(async {
         let _ = tokio::signal::ctrl_c().await;
     })
@@ -1021,6 +1058,28 @@ mod tests {
         assert!(!begins_stop(&begun, &mut first));
         assert!(begun.load(Ordering::SeqCst));
         assert!(first.is_none());
+    }
+
+    /// The forced restore's slot stays held while the keys are taken, so a
+    /// forced stop in between waits, and finds the restore in place.
+    #[test]
+    fn a_forced_stop_waits_while_the_keys_are_taken() {
+        let forced: Restore = Arc::default();
+        let raw = arm(&forced, false, || {
+            assert!(forced.try_lock().is_err(), "the slot was free");
+            None
+        });
+        assert!(raw.is_none());
+        assert!(forced.lock().unwrap().is_some(), "no restore installed");
+    }
+
+    /// A signal that cannot be caught says why.
+    #[cfg(unix)]
+    #[test]
+    fn handlers_give_the_cause_of_a_signal_they_cannot_catch() {
+        let kill = SignalKind::from_raw(9);
+        let error = handlers(kill, SignalKind::terminate()).err().unwrap();
+        assert!(error.to_string().contains("Refusing"), "{error}");
     }
 
     /// Where an instance file goes, in a directory of the test's own: the

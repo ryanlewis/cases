@@ -18,6 +18,7 @@ mod kitty;
 mod markdown;
 mod reader;
 mod safe;
+mod select;
 pub(crate) mod stats;
 mod view;
 mod wrap;
@@ -574,6 +575,12 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
                 }
                 _ => {}
             }
+        }
+        // What the mouse selected, to the clipboard (TU-12).
+        if let Some(text) = app.copied.take() {
+            let mut out = io::stdout();
+            out.write_all(&select::osc52(&text))?;
+            out.flush()?;
         }
         if let Some(record) = app.pending_message.take() {
             run.send(

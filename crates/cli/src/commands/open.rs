@@ -117,13 +117,14 @@ pub(crate) struct Args {
 
     /// Then wait on the case, as `cases wait --id ID --since ID --pickup
     /// --by WORKER` does: the id is printed first, and the case's line once
-    /// it is your turn, picked up when answered. Exit 2 at --timeout. Not
-    /// with --json.
+    /// it is your turn, picked up when answered. At --timeout, exit 2, or 1
+    /// if the store could not be read. Not with --json.
     #[arg(long, conflicts_with = "json")]
     wait: bool,
 
     /// With --wait: give up after this long, such as 30s or 10m, after the
-    /// id: one line on stderr, exit 2. 0 waits for ever.
+    /// id: one line on stderr, exit 2. If the store could not be read at the
+    /// last try before then, exit 1 with why instead. 0 waits for ever.
     #[arg(long, value_name = "DURATION", value_parser = duration::parse, requires = "wait")]
     timeout: Option<Duration>,
 }
@@ -218,7 +219,10 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     let append = Append::new(Author::Agent, &Record::Open(open));
     let (key, case) = ctx.store.create(&append, &writer)?;
     warn_options(&args.options, 1);
-    ctx::warn_unwoken(ctx, &case, true);
+    // A command that goes on to wait on the case hears its answer itself.
+    if !args.wait {
+        ctx::warn_unwoken(ctx, &case, true);
+    }
     if args.json {
         output::json(&mut ctx.out, &Written::new(key, &case))?;
     } else {

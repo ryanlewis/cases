@@ -19,7 +19,9 @@ use crate::schema::{self, BUSY_TIMEOUT};
 ///
 /// Only creating a case makes the file, and its directory. Until then, and
 /// while the file is empty, every read and write finds no store,
-/// [`Error::Missing`], and changes nothing.
+/// [`Error::Missing`], and changes nothing. On unix what it makes is for the
+/// owner alone: the file `0600`, and each directory `0700`. A file or
+/// directory that was there keeps its mode.
 ///
 /// The store keeps one connection to the file, and looks at the file before
 /// each read and write. When the file at the path has been removed or
@@ -352,21 +354,24 @@ fn check_leftovers(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Makes an empty file at `path`, and its directory. An empty file is an
-/// empty SQLite database. A file that is there already is left alone:
-/// another writer made it first.
+/// Makes an empty file at `path`, and its directory, for the owner alone:
+/// the store holds what agents asked and what the human answered. SQLite
+/// gives the `-wal` and `-shm` files it makes beside the store the store's
+/// mode. An empty file is an empty SQLite database. A file that is there
+/// already is left alone: another writer made it first. So is a directory
+/// that is there already.
 fn make_file(path: &Path) -> Result<(), Error> {
     if let Some(dir) = path.parent() {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o755);
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder.create(dir)?;
     }
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create_new(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o644);
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     match options.open(path) {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),

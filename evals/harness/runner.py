@@ -394,7 +394,9 @@ def session_argv(claude, *, arm, model, effort, plugin_dir, max_turns=60):
 
 def rate_limit_peak(transcript_path):
     """The highest utilisation the account reported during a session, and
-    whether any request was refused, from its rate_limit_event lines."""
+    whether any request was refused, from its rate_limit_event lines: the
+    top-level utilization and status of older transcripts, and those of
+    each window under unifiedWindows."""
     peak, refused = 0.0, False
     if not os.path.exists(transcript_path):
         return peak, refused
@@ -406,8 +408,11 @@ def rate_limit_peak(transcript_path):
                 info = json.loads(line).get("rate_limit_info") or {}
             except json.JSONDecodeError:
                 continue
-            peak = max(peak, float(info.get("utilization") or 0))
-            refused = refused or info.get("status") == "rejected"
+            windows = info.get("unifiedWindows")
+            windows = windows.values() if isinstance(windows, dict) else []
+            for window in [info, *(w for w in windows if isinstance(w, dict))]:
+                peak = max(peak, float(window.get("utilization") or 0))
+                refused = refused or window.get("status") == "rejected"
     return peak, refused
 
 

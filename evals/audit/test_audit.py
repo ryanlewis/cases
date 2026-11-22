@@ -175,6 +175,34 @@ class Audit(unittest.TestCase):
         rules_cases.select(s)
         self.assertEqual(dict((n, c) for n, _, c in rules_cases.RULES)["one_pickup_wait_per_case"](s), (1, 0))
 
+    def graded(self, *cmds):
+        """Each rule's (pass, fail) over a session of `cmds`, run in the background."""
+        f = SessionFile()
+        f.user("go")
+        for cmd in cmds:
+            f.bash(cmd, bg=True)
+        s = self.session(f)
+        rules_cases.select(s)
+        return {n: c(s) for n, _, c in rules_cases.RULES}
+
+    def test_an_open_with_wait_is_chained_and_its_wait_counted(self):
+        g = self.graded("cases open --kind fyi --title a --worker w --wait --timeout 1h")
+        self.assertEqual(g["open_chained"], (1, 0))
+        self.assertEqual(g["wait_scoped"], (1, 0))
+        self.assertEqual(g["wait_since"], (1, 0))
+        self.assertEqual(g["wait_in_background"], (1, 0))
+
+    def test_an_open_without_wait_is_still_not_chained(self):
+        g = self.graded("cases open --kind fyi --title a --worker w")
+        self.assertEqual(g["open_chained"], (0, 1))
+        self.assertIsNone(g["wait_scoped"])
+
+    def test_a_wait_in_a_quoted_title_is_not_the_flag(self):
+        g = self.graded('cases open --kind fyi --title "add --wait to open" --worker w',
+                        "cases open --kind fyi --title 'or --wait here' --worker w")
+        self.assertEqual(g["open_chained"], (0, 1))
+        self.assertIsNone(g["wait_scoped"])
+
     def test_two_starts_on_one_line_are_two(self):
         f = SessionFile()
         f.bash("herdr agent start a -- --model opus --effort medium && herdr agent start b1 --kind claude")

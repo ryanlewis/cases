@@ -378,6 +378,43 @@ fn a_lost_connection_is_tried_again_for_a_read_and_not_a_write() {
     assert_eq!(starts(dir.path()), 4);
 }
 
+/// A far side whose `cases` cannot be run (exit 126) is a connection lost
+/// as any other: only one that is not there, or too old, is a dial that
+/// will not do better.
+#[test]
+fn a_far_side_whose_cases_cannot_be_run_is_tried_again_as_a_lost_connection() {
+    let (dir, store) = over(&failing("cases: Permission denied", 126), &[], quick());
+    let error = store.version().unwrap_err();
+    assert_eq!(
+        error,
+        Error::Transport {
+            server: "ssh://far".into(),
+            reason: "the connection closed (exit 126): cases: Permission denied".into()
+        }
+    );
+    assert!(error.is_transient());
+    assert_eq!(starts(dir.path()), 3);
+}
+
+/// A child whose stdout is not HTTP, such as a banner from a shell's
+/// startup files, is a connection lost as any other.
+#[test]
+fn a_child_whose_stdout_is_not_http_is_tried_again_as_a_lost_connection() {
+    for script in [
+        "echo start >> \"$LOG\"; echo 'Welcome to devbox'; exit 0",
+        "echo start >> \"$LOG\"; printf 'Welcome to devbox\\r\\n\\r\\n'; exec cat > /dev/null",
+    ] {
+        let (dir, store) = over(script, &[], quick());
+        let error = store.version().unwrap_err();
+        assert!(
+            matches!(error, Error::Transport { .. }),
+            "{script}: {error:?}"
+        );
+        assert!(error.is_transient(), "{script}");
+        assert_eq!(starts(dir.path()), 3, "{script}");
+    }
+}
+
 #[test]
 fn a_read_that_was_lost_once_is_answered_by_a_new_child() {
     // The first child closes on the request; the next answers.
@@ -780,6 +817,30 @@ fn a_hold_is_a_child_of_its_own_kept_until_it_is_dropped() {
     drop(hold);
     assert!(logged(dir.path(), "end"), "{:?}", log(dir.path()));
     assert_eq!(starts(dir.path()), 1);
+}
+
+/// A far side too old for leases lets go as the connection ends, so a
+/// hold on one is gone once its child is.
+#[test]
+fn a_hold_with_no_lease_lapses_once_its_child_has_gone() {
+    let answers_and_exits = holding("200 OK").replace("\"$ANSWER\";;", "\"$ANSWER\"; exit 0;;");
+    let (dir, store) = over(&answers_and_exits, &[("ANSWER", "{}")], quick());
+    let hold = store.hold(&[("worker", "lead"), ("id", "UkLWZ")]).unwrap();
+    let why = lapses(&hold);
+    assert!(why.starts_with("its connection ended"), "{why}");
+    assert!(matches!(hold.left(), Err(Error::Lapsed { .. })));
+    assert_eq!(starts(dir.path()), 1);
+}
+
+/// What ended a hold with no lease stands: bytes not asked for are read
+/// once, and the next check must not find the connection as good as new.
+#[test]
+fn a_hold_with_no_lease_that_has_lapsed_stays_lapsed() {
+    let stray = holding("200 OK").replace("\"$ANSWER\";;", "\"$ANSWER\"; sleep 0.2; printf x;;");
+    let (_dir, store) = over(&stray, &[("ANSWER", "{}")], quick());
+    let hold = store.hold(&[("worker", "lead"), ("id", "UkLWZ")]).unwrap();
+    let why = lapses(&hold);
+    assert_eq!(hold.check(), Err(Error::Lapsed { reason: why }));
 }
 
 /// A far side that answers its first request with a lease of `$LEASE` ms,

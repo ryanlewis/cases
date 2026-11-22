@@ -46,7 +46,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(2);
 const STDERR_GRACE: Duration = Duration::from_millis(200);
 
 /// How long a child is given to exit after its stdin is closed, when its
-/// connection is dropped, before it is killed.
+/// connection is dropped with no write stuck, before it is killed.
 const CLOSE_GRACE: Duration = Duration::from_millis(200);
 
 /// The most an answer's head may hold, read by [`Pipe::exchange`].
@@ -713,9 +713,15 @@ impl Drop for Pipe {
     /// exec the last. The group is killed before the child is reaped, while
     /// its id cannot be another's, and the child itself too, in case it
     /// left the group.
+    ///
+    /// A child with a write not done in time is killed at once: the write's
+    /// thread holds its stdin, so the child would not see it close, and any
+    /// grace is only time in which a request given up on could still land.
     fn drop(&mut self) {
+        let stuck = self.stdin.as_ref().is_some_and(|stdin| stdin.stuck);
         self.stdin = None;
-        if self.exited(CLOSE_GRACE).is_none() {
+        let grace = if stuck { Duration::ZERO } else { CLOSE_GRACE };
+        if self.exited(grace).is_none() {
             #[cfg(unix)]
             let _ = rustix::process::kill_process_group(
                 rustix::process::Pid::from_child(&self.child),
@@ -730,6 +736,57 @@ impl Drop for Pipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A write not done in time holds the child's stdin on its thread, so
+    /// the child cannot see it close: it is killed, with no grace in which
+    /// it could yet read what the request's caller has given up on.
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_pipe_s_child_is_killed_at_once() {
+        let dial = Arc::new(Dial::new("sleep", "exec:sleep").args(["30"]));
+        // A grace is never shorter than itself, so one drop inside it is
+        // enough, and a busy machine gets three goes at one.
+        let inside = (0..3).any(|_| {
+            let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+            let written = pipe.write(
+                vec![0; 1 << 20],
+                Some(Duration::from_millis(50)),
+                ureq::Timeout::Global,
+            );
+            assert!(
+                matches!(written, Err(ureq::Error::Timeout(_))),
+                "{written:?}"
+            );
+            let start = Instant::now();
+            drop(pipe);
+            start.elapsed() < CLOSE_GRACE
+        });
+        assert!(inside);
+    }
+
+    /// A pipe that is not stuck closes the child's stdin, and gives it its
+    /// grace to end as it will.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_not_stuck_gives_its_child_time_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let ended = dir.path().join("ended");
+        let dial = Arc::new(
+            Dial::new("sh", "exec:sh")
+                .args(["-c", ": > \"$READY\"; cat > /dev/null; : > \"$ENDED\""])
+                .env("READY", &ready)
+                .env("ENDED", &ended),
+        );
+        let pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(Instant::now() < until, "the child did not start");
+            thread::sleep(Duration::from_millis(5));
+        }
+        drop(pipe);
+        assert!(ended.exists());
+    }
 
     #[test]
     fn an_answer_is_read_once_all_of_it_is_there() {

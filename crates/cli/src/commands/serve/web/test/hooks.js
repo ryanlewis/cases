@@ -5,13 +5,23 @@ import { registerHooks } from "node:module";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+// A static module imported under a query or a fragment is a second copy of
+// it, and node's coverage keeps the last copy it loaded, which hides the
+// module's coverage. A test that needs a fresh copy runs in a file of its
+// own, as api-token.test.js does: node gives each test file its own process.
+function single(resolved) {
+  const { pathname, search, hash } = new URL(resolved.url);
+  if (pathname.includes("/static/") && (search || hash)) throw new Error(`a second copy of a static module: ${resolved.url}`);
+  return resolved;
+}
+
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier.startsWith(".") && specifier.endsWith(".js") && context.parentURL?.endsWith(".ts")) {
       const ts = new URL(specifier.replace(/\.js$/, ".ts"), context.parentURL);
-      if (existsSync(fileURLToPath(ts))) return next(ts.href, context);
+      if (existsSync(fileURLToPath(ts))) return single(next(ts.href, context));
     }
-    return next(specifier, context);
+    return single(next(specifier, context));
   },
 });
 

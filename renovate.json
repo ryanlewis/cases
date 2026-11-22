@@ -12,9 +12,26 @@
       "matchStrings": ["tool: (?<depName>cargo-[a-z0-9-]+|zizmor)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "crate",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump the Rust toolchain pinned in rust-toolchain.toml. rust-lang/rust publishes a GitHub release for each stable version only.",
+      "managerFilePatterns": ["/^rust-toolchain\\.toml$/"],
+      "matchStrings": ["channel = \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "rust",
+      "packageNameTemplate": "rust-lang/rust",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
+    {
+      "description": "Each Rust release gets its own PR, out of the weekly batch, so its CI shows any new lints on their own. CI gates it, so it merges itself when green.",
+      "matchPackageNames": ["rust"],
+      "matchDatasources": ["github-releases"],
+      "groupName": null,
+      "automerge": true
+    },
     {
       "description": "serde_json is pinned exactly in normal and dev dependencies, and Cargo allows one 1.x in the build. Keep every pin in the weekly batch, so the dev-dependency patch group never bumps half of them (#129, #130).",
       "matchManagers": ["cargo"],

@@ -325,6 +325,97 @@ class Graders(unittest.TestCase):
         run = graders.Run(b.write(self.root), {"id": "t", "expect": {}})
         self.assertEqual((run.t.tools[0].task_status, run.t.tools[0].done_at), (None, None))
 
+    def test_an_open_with_wait_is_its_own_scoped_wait(self):
+        """`cases open ... --wait` opens the case and waits on it, as `cases
+        wait --id ID --since ID --pickup` with the open's --timeout does."""
+        b = RunBuilder()
+        task = b.bash('cases open --kind decision --urgency today --worker w --title "Pin or float?" '
+                      '--option A --option B --wait --timeout 30m', bg=True, bg_out=LINE)
+        b.bash("cases status", out="not running", exit=1, same_call=True)
+        b.bash(f"cat /x/{task}.output", out=LINE)
+        b.bash('sed -i "" s/a/b/ f && cases close UkLWZ --revision 3 --outcome "Pinned it."', out="UkLWZ closed")
+        b.case("UkLWZ", "closed", events=("open", "answer", "pickup", "close"))
+        run = graders.Run(b.write(self.root), TASK)
+        self.assertEqual([(s, a.split()) for _, s, a in run.segs() if s == "wait"],
+                         [("wait", ["--id", "UkLWZ", "--since", "UkLWZ", "--pickup", "--timeout", "30m"])])
+        g = self.grade(b)
+        self.assertEqual({k for k, v in g.items() if v == "fail"}, set(), g)
+        for rule in ("wait_scoped", "wait_since", "wait_in_background", "open_chained",
+                     "wait_output_read_once", "status_beside_first_open"):
+            self.assertEqual(g[rule], "pass", rule)
+        # The open with its wait is the ask; reading the wait's output is extra.
+        c = graders.grade(b.write(self.root), TASK)["cost"]
+        self.assertEqual((c["ask_calls"], c["extra_calls"]), (1, 1))
+
+    def test_an_open_with_wait_in_the_foreground_fails(self):
+        b = RunBuilder()
+        b.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B --wait', out=LINE)
+        b.case("UkLWZ", "pickedup", events=("open", "answer", "pickup"))
+        g = self.grade(b)
+        self.assertEqual(g["wait_in_background"], "fail")
+        self.assertEqual(g["open_chained"], "pass")
+        # Without --wait, and with no wait in its command, it is still not chained.
+        c = RunBuilder()
+        c.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B', out="UkLWZ")
+        c.case("UkLWZ", "open")
+        self.assertEqual(self.grade(c)["open_chained"], "fail")
+
+    def test_a_second_pickup_wait_on_a_case_an_open_waits_on_fails(self):
+        b = RunBuilder()
+        b.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B --wait', bg=True)
+        b.events.pop()  # still waiting when the next starts
+        b.bash("cases wait --id UkLWZ --since UkLWZ --pickup --by w", bg=True)
+        b.case("UkLWZ", "pickedup", events=("open", "answer", "pickup"))
+        self.assertEqual(self.grade(b)["one_pickup_wait_per_case"], "fail")
+        # Two opens that each wait on their own case are fine.
+        c = RunBuilder()
+        c.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B --wait', bg=True)
+        c.events.pop()
+        c.bash('cases open --kind fyi --worker w --title "Done" --wait', bg=True)
+        c.case("UkLWZ", "pickedup", events=("open", "answer", "pickup"))
+        c.case("Ab123", "pickedup", kind="fyi", title="Done", events=("open", "answer", "pickup"))
+        self.assertEqual(self.grade(c, {"id": "t", "expect": {}})["one_pickup_wait_per_case"], "pass")
+
+    def test_a_park_seen_by_an_open_with_wait_needs_the_next_since(self):
+        park = '{"id":"UkLWZ","state":"parked","kind":"stuck","revision":2,"next_since":"2026-09-29T10:05:00Z"}'
+        b = RunBuilder()
+        b.bash("cases open --kind stuck --title S --worker w --wait", bg=True, bg_out=park)
+        b.bash("cases wait --id UkLWZ --since UkLWZ --pickup --by w", bg=True)
+        b.case("UkLWZ", "closed", kind="stuck", title="S", events=("open", "park", "resume", "answer", "pickup", "close"))
+        b.human = [{"do": ["park", "UkLWZ"], "agent_waiting": True}, {"do": ["resume", "UkLWZ"], "agent_waiting": True}]
+        self.assertEqual(self.grade(b)["parked_handled"], "fail")
+        b.command("--since UkLWZ", "cases wait --id UkLWZ --since 2026-09-29T10:05:00Z --pickup --by w")
+        self.assertEqual(self.grade(b)["parked_handled"], "pass")
+
+    def test_a_wait_in_quotes_is_not_the_flag(self):
+        b = RunBuilder()
+        b.bash('cases open --kind question --worker w --title "Should I use --wait here?"', out="UkLWZ")
+        b.case("UkLWZ", "open", kind="question", title="Should I use --wait here?")
+        g = self.grade(b)
+        self.assertEqual(g["open_chained"], "fail")
+        self.assertEqual(g["wait_in_background"], "na")
+
+    def test_an_open_with_wait_waits_on_the_case_it_printed(self):
+        """An open that failed made no case: the next open's wait is on the
+        case that open printed, not on the one before it by order."""
+        b = RunBuilder()
+        b.bash('cases open --kind approval --worker w --title "Delete?" --row x', out="Error: row has a blank link", exit=1)
+        b.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B --wait', bg=True,
+               bg_out="UkLWZ\n" + LINE)
+        b.case("UkLWZ", "pickedup", events=("open", "answer", "pickup"))
+        run = graders.Run(b.write(self.root), {"id": "t", "expect": {}})
+        self.assertEqual([flag for _, s, a in run.segs() if s == "wait" for flag in [graders.flag_value(a, "--id")]],
+                         ["UkLWZ"])
+
+    def test_every_pickup_wait_in_a_command_counts(self):
+        b = RunBuilder()
+        b.bash('cases open --kind decision --worker w --title "Pin?" --option A --option B --wait; '
+               'cases wait --label L --worker w --pickup --by w --since x', bg=True)
+        b.events.pop()
+        b.bash("cases wait --id UkLWZ --since UkLWZ --pickup --by w", bg=True)
+        b.case("UkLWZ", "pickedup", events=("open", "answer", "pickup"))
+        self.assertEqual(self.grade(b)["one_pickup_wait_per_case"], "fail")
+
     def test_opening_a_case_when_none_was_needed_fails(self):
         b = good()
         self.assertEqual(self.grade(b, {"id": "t", "expect": {"opens": 0}})["opens_as_expected"], "fail")

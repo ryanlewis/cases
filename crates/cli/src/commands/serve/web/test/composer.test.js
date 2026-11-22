@@ -242,6 +242,44 @@ test("a press on the backdrop let go inside the composer, as a browser sends it,
   assert.deepEqual(c.log.slice(2), ["close"]);
 });
 
+test("a press inside the composer let go on the backdrop, or a later press inside, does not close it", () => {
+  const c = open();
+  const dialog = () => c.find((v) => v.type === "dialog").props;
+  const on = {};
+  const inside = {};
+  // Pressed inside, let go on the backdrop: the click goes to the dialog.
+  c.act(() => dialog().onPointerDown({ target: inside, currentTarget: on }));
+  c.act(() => dialog().onPointerUp({ target: on, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  // Pressed on the backdrop, then inside with no click between: no close.
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerDown({ target: inside, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.deepEqual(c.log.slice(2), []);
+});
+
+test("a press on the composer's backdrop the browser cancels is no click on it", () => {
+  const c = open();
+  const dialog = () => c.find((v) => v.type === "dialog").props;
+  const on = {};
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerCancel({ target: on, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.deepEqual(c.log.slice(2), []);
+});
+
+test("a click on the backdrop with a note written asks first, as Escape does", () => {
+  const c = open();
+  note(c, "Rebase");
+  const dialog = () => c.find((v) => v.type === "dialog").props;
+  const on = {};
+  c.act(() => dialog().onPointerDown({ target: on, currentTarget: on }));
+  c.act(() => dialog().onPointerUp({ target: on, currentTarget: on }));
+  c.act(() => dialog().onClick({ target: on, currentTarget: on }));
+  assert.ok(c.page().includes("discard this note?"), c.page());
+  assert.ok(!c.log.includes("close"));
+});
+
 test("back closes the composer, or with a note written asks and says it asked", () => {
   const c = open();
   assert.equal(c.back.current(), false);

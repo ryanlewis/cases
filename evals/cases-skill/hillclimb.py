@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "harness"))
 
 import graders  # noqa: E402
 import run as suite  # noqa: E402
-from runner import run_task  # noqa: E402
+from runner import rate_limit_peak, run_task  # noqa: E402
 from stats import fmt_rate, mean  # noqa: E402
 
 SKILL_FILES = ("crates/cli/skill/SKILL.md", "crates/cli/skill/REFERENCE.md")
@@ -66,24 +66,6 @@ def load_tasks(root):
                 task["split"] = split
                 tasks.append(task)
     return tasks
-
-
-def rate_limit_peak(transcript_path):
-    """The highest utilisation the account reported in a session, and whether a request was refused."""
-    peak, refused = 0.0, False
-    if not os.path.exists(transcript_path):
-        return peak, refused
-    with open(transcript_path, encoding="utf-8") as f:
-        for line in f:
-            if '"rate_limit_event"' not in line:
-                continue
-            try:
-                info = json.loads(line).get("rate_limit_info") or {}
-            except json.JSONDecodeError:
-                continue
-            peak = max(peak, float(info.get("utilization") or 0))
-            refused = refused or info.get("status") == "rejected"
-    return peak, refused
 
 
 class Budget:
