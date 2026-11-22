@@ -534,8 +534,7 @@ pub(crate) fn plural(n: u64, word: &str) -> String {
 /// none.
 pub(crate) fn stamp(at: Option<Time>) -> String {
     at.and_then(|at| Time::from_unix(at.unix_secs(), 0))
-        .map(|at| at.to_string())
-        .unwrap_or_default()
+        .map_or_default(|at| at.to_string())
 }
 
 #[cfg(test)]

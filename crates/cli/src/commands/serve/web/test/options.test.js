@@ -203,6 +203,16 @@ test("only the first group's kept choice takes the focus when the dialog opens",
   assert.deepEqual(open({ theme: "dark" }).all((v) => v.type === "input" && v.props.autofocus), []);
 });
 
+test("the notifications group says they do not work on Chrome for Android, whatever the browser allows", () => {
+  const says = "notifications do not work on chrome for android.";
+  for (const permission of ["granted", "denied", "default"]) {
+    browser(permission);
+    assert.equal(text(open().find((v) => v.props?.id === "notify-android")), says, permission);
+  }
+  unsupported();
+  assert.equal(text(open().find((v) => v.props?.id === "notify-android")), says);
+});
+
 test("the notifications group says what the browser allows, with the allow button only while it would ask", () => {
   const cases = [
     ["granted", "allowed in this browser."],

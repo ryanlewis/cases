@@ -405,9 +405,7 @@ async fn log(State(app): State<Arc<App>>, request: Request, next: Next) -> Respo
         let start = Instant::now();
         // The line is stamped with when the request came, as the log is read
         // in that order.
-        let at = output::now()
-            .map(|now| output::stamp(Some(now)))
-            .unwrap_or_default();
+        let at = output::now().map_or_default(|now| output::stamp(Some(now)));
         let method = request.method().clone();
         let uri = request.uri().clone();
         let response = next.run(request).await;

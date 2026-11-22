@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "cases-skill"))
 import graders  # noqa: E402
 from history import real_segments  # noqa: E402
+from transcript import chain_open_waits  # noqa: E402
 
 NAME = "cases"
 # #78 (25f449f) rewrote the skill: one background command per decision.
@@ -90,6 +91,12 @@ def classify(session):
 def select(session):
     for tool in session.t.tools:
         _real_use(tool)
+    # An open --wait waits on the case it made. With no store to match it
+    # to, the wait names it as "$opened", as the graders do an open they
+    # cannot match: the rules read that it is scoped, has --since and runs
+    # where the open does. one_pickup_wait_per_case cannot tell which case
+    # "$opened" is, so it never finds this wait clashing with another.
+    chain_open_waits(session.t.tools, lambda tool, k: "$opened")
     return any(set(tool.subs) & USE for tool in session.t.tools)
 
 

@@ -299,6 +299,34 @@ def flag_value(args, flag):
     return next(g for g in m.groups()[1:] if g is not None)
 
 
+def chain_open_waits(tools, case_id):
+    """`cases open ... --wait` opens a case and waits on it, as `cases wait
+    --id ID --since ID --pickup` with the open's --timeout does: each such
+    open is followed, in its tool's segments, by that wait, so that every
+    rule that reads waits sees it. `case_id(tool, k)` gives ID for the
+    session's kth open (from 0), which `tool` makes."""
+    k = 0
+    for t in tools:
+        segments = []
+        for sub, args in t.segments:
+            segments.append((sub, args))
+            if sub != "open":
+                continue
+            cid = case_id(t, k)
+            k += 1
+            # A --wait in a quoted title or body is not the flag.
+            bare = re.sub(r'"[^"]*"|\'[^\']*\'', '""', args)
+            if has_flag(bare, "--wait"):
+                wait = f" --id {cid} --since {cid} --pickup"
+                timeout = flag_value(bare, "--timeout")
+                if timeout:
+                    wait += f" --timeout {timeout}"
+                segments.append(("wait", wait))
+        if len(segments) != len(t.segments):
+            t.segments = segments
+            t.subs = [s for s, _ in segments]
+
+
 def first_positional(args):
     """The first word of a segment's arguments that is not a flag or a flag's value."""
     words = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', args)

@@ -1165,6 +1165,27 @@ fn a_local_store_is_read_again() {
     tui.quits();
 }
 
+/// A drag over the case's title, then the release, puts it on the
+/// clipboard with OSC 52, and says so (TU-12). The title is drawn at
+/// columns 49 to 55 of row 8, counted from 1, on a 120 by 40 terminal.
+#[cfg(unix)]
+#[test]
+fn a_drag_copies_to_the_clipboard() {
+    let env = Env::new();
+    env.open_fyi("Copy me");
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Copy me"), "{}", tui.drawn());
+    tui.mark();
+    tui.keys(&[b"\x1b[<0;49;8M", b"\x1b[<32;55;8M", b"\x1b[<0;55;8m"]);
+    assert!(
+        tui.shows("\x1b]52;c;Q29weSBtZQ==\x07"),
+        "nothing was copied: {}",
+        tui.drawn()
+    );
+    assert!(tui.shows("copied 7 characters"), "{}", tui.drawn());
+    tui.quits();
+}
+
 /// A smaller terminal has the whole screen drawn again, at its new size.
 #[cfg(unix)]
 #[test]

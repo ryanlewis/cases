@@ -206,3 +206,24 @@ export function message(response: Reply<unknown>): string {
   if (response.body && response.body.error) return response.body.error.message;
   return `serve answered ${response.status}`;
 }
+
+// Runs `send`, once: a send while one is out does nothing, until it is
+// answered or 10 s have passed (IN-09). `sending` holds the send that is out,
+// and only that send lets it go: one slower than 10 s does not, when it comes
+// back, let go of the send that went after it. `send` is given the send's own
+// mark, the value `sending` holds while it is out.
+export async function once(sending: { current: object | null }, send: (self: object) => Promise<void>): Promise<void> {
+  if (sending.current) return;
+  const self = {};
+  sending.current = self;
+  const done = () => {
+    if (sending.current === self) sending.current = null;
+  };
+  const release = setTimeout(done, 10000);
+  try {
+    await send(self);
+  } finally {
+    clearTimeout(release);
+    done();
+  }
+}

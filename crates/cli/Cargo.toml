@@ -77,7 +77,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 # serve's log file, which it points stderr at; and the computer's name,
 # for the name of the token `cases login` makes.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.5", features = ["event", "process", "stdio", "system", "termios"] }
+rustix = { version = "1.1.6", features = ["event", "process", "stdio", "system", "termios"] }
 # A SIGTERM or SIGHUP ends `cases tui` with the terminal put back. crossterm
 # already builds it, for the window's size.
 signal-hook = "0.4.0"

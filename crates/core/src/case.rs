@@ -860,6 +860,9 @@ mod tests {
         assert_eq!(case, opened());
     }
 
+    /// Past `u64::MAX` there is no seq, and the core refuses the append as a
+    /// transition. The SQLite store runs out first, past `i64::MAX`, and
+    /// gives its own error, not one of the core's categories.
     #[test]
     fn a_case_with_no_seq_left_takes_no_more_rows() {
         let open = Row {

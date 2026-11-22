@@ -427,7 +427,7 @@ fn doing_of(tx: &Transaction<'_>, worker: &str) -> Result<Doing, Error> {
             read_doing,
         )
         .optional()?;
-    Ok(found.flatten().map(|(_, doing)| doing).unwrap_or_default())
+    Ok(found.flatten().map_or_default(|(_, doing)| doing))
 }
 
 /// Deletes the waits that no longer count as listening at `now`, and any

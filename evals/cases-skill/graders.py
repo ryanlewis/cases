@@ -11,7 +11,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
-from transcript import Transcript, flag_value, first_positional, has_flag  # noqa: E402
+from transcript import Transcript, chain_open_waits, flag_value, first_positional, has_flag  # noqa: E402
 
 PASS, FAIL, NA = "pass", "fail", "na"
 
@@ -52,6 +52,25 @@ class Run:
                             and c.get("kind") != "message"
                             and c["id"] not in self.seeded]
         self.expect = task.get("expect", {})
+        self._chain_open_waits()
+
+    def _chain_open_waits(self):
+        """`cases open ... --wait` opens a case and waits on it, as `cases wait
+        --id ID --since ID --pickup` with the open's --timeout does: each such
+        open is followed, in its tool's segments, by that wait, so that every
+        rule that reads waits sees it (transcript.chain_open_waits). The case
+        is the one the open printed, when its command has one open; otherwise
+        it is matched as opened_by does."""
+        cases = sorted(self.agent_cases, key=lambda c: c["opened_at"])
+        ids = {c["id"] for c in self.store}
+
+        def case_id(t, k):
+            printed = [line.strip() for line in t.text().splitlines() if line.strip() in ids]
+            if t.subs.count("open") == 1 and printed:
+                return printed[0]
+            return cases[k]["id"] if k < len(cases) else "$opened"
+
+        chain_open_waits(self.t.tools, case_id)
 
     def opened_by(self, tool):
         """The case ids a tool's opens made, matched by order: the nth open
@@ -200,9 +219,11 @@ def one_pickup_wait_per_case(run):
     the loser may never wake."""
     waits = []
     for t in run.t.tools:
-        if "wait" in t.subs and t.bg:
-            a = dict(t.segments)["wait"]
-            if has_flag(a, "--pickup"):
+        if not t.bg:
+            continue
+        # Every pickup wait in the command: an open --wait is one of them.
+        for s, a in t.segments:
+            if s == "wait" and has_flag(a, "--pickup"):
                 end = t.done_at if t.done_at is not None else len(run.t.tools) + 1
                 wid = flag_value(a, "--id")
                 if wid and wid.startswith("$"):

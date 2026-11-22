@@ -61,12 +61,15 @@ impl Forward {
 
     /// How each connection is made.
     ///
-    /// Over ssh: `ssh -T -o BatchMode=yes [-p port] -- [user@]host cases
-    /// dial-stdio`, with the ssh on the PATH and the user's ssh config.
-    /// `-T` keeps a tty off the pipe, which would garble the HTTP stream
-    /// even with `RequestTTY force` in that config, and `BatchMode` makes a
-    /// host-key or password prompt fail the dial rather than hang it or
-    /// break into the terminal.
+    /// Over ssh: `ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p port] --
+    /// [user@]host cases dial-stdio`, with the ssh on the PATH and the
+    /// user's ssh config. `-T` keeps a tty off the pipe, which would garble
+    /// the HTTP stream even with `RequestTTY force` in that config, and
+    /// `BatchMode` makes a host-key or password prompt fail the dial rather
+    /// than hang it or break into the terminal. `ConnectTimeout` limits
+    /// connecting and ssh's handshake to 10 s a try, rather than the
+    /// request's whole timeout; on the command line, it wins over one in
+    /// that config.
     ///
     /// Over a command: `sh -c <command>`, so that it is quoted, and may set
     /// variables, as it would be at a shell. A shell runs the last command
@@ -82,7 +85,9 @@ impl Forward {
             Forward::Http(_) => return None,
             Forward::Ssh { user, host, port } => (user, host, port),
         };
-        let mut args = vec!["-T".to_owned(), "-o".to_owned(), "BatchMode=yes".to_owned()];
+        let mut args: Vec<String> = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+            .map(str::to_owned)
+            .into();
         if let Some(port) = port {
             args.push("-p".to_owned());
             args.push(port.to_string());
@@ -673,7 +678,7 @@ mod tests {
         ] {
             let forward = forward(text);
             assert_eq!(forward.to_string(), shown);
-            let mut want: Vec<String> = ["-T", "-o", "BatchMode=yes"]
+            let mut want: Vec<String> = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
                 .into_iter()
                 .chain(dial)
                 .map(str::to_owned)

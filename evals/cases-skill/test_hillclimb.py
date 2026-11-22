@@ -325,5 +325,46 @@ class ApplyDiff(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.repo, "evil")))
 
 
+class RateLimitPeak(unittest.TestCase):
+    """The utilisation --stop-above reads from a session's transcript."""
+
+    def peak(self, *infos):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, "transcript.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "assistant", "message": {}}) + "\n")
+            for info in infos:
+                f.write(json.dumps({"type": "rate_limit_event", "rate_limit_info": info}) + "\n")
+        return hillclimb.rate_limit_peak(path)
+
+    def test_a_window_under_unified_windows_gives_its_utilisation(self):
+        info = {"status": "allowed", "rateLimitType": "seven_day",
+                "unifiedWindows": {"seven_day": {"utilization": 0.32, "status": "allowed"}}}
+        self.assertEqual(self.peak(info), (0.32, False))
+
+    def test_two_windows_give_the_higher(self):
+        info = {"status": "allowed", "unifiedWindows": {
+            "five_hour": {"utilization": 0.91, "status": "allowed"},
+            "seven_day": {"utilization": 0.34, "status": "allowed"}}}
+        self.assertEqual(self.peak(info, {"status": "allowed", "utilization": 0.5}), (0.91, False))
+
+    def test_the_old_top_level_form_still_works(self):
+        self.assertEqual(self.peak({"status": "allowed", "utilization": 0.4},
+                                   {"status": "rejected", "utilization": 0.2}), (0.4, True))
+
+    def test_a_rejected_window_is_refused(self):
+        info = {"status": "allowed", "unifiedWindows": {
+            "seven_day": {"utilization": 0.3, "status": "allowed"},
+            "five_hour": {"utilization": 1.0, "status": "rejected"}}}
+        self.assertEqual(self.peak(info), (1.0, True))
+
+    def test_windows_not_keyed_by_name_are_skipped(self):
+        self.assertEqual(self.peak({"utilization": 0.2, "unifiedWindows": [{"utilization": 0.5}]}), (0.2, False))
+
+    def test_no_transcript_reads_nothing(self):
+        self.assertEqual(hillclimb.rate_limit_peak("/nonexistent/transcript.jsonl"), (0.0, False))
+
+
 if __name__ == "__main__":
     unittest.main()

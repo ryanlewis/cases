@@ -249,6 +249,8 @@ export class Entry {
   // whether the composer was opened again meanwhile.
   #backing = false;
   #wanted = false;
+  // What waits for that back to land.
+  #then: (() => void) | null = null;
   #places: Places;
   constructor(places: Places) {
     this.#places = places;
@@ -281,6 +283,10 @@ export class Entry {
         this.#wanted = false;
         this.opened();
       }
+      // After the page has answered this back, which it does as it pops.
+      const then = this.#then;
+      this.#then = null;
+      if (then) queueMicrotask(then);
       return false;
     }
     const was = this.#on;
@@ -290,6 +296,14 @@ export class Entry {
 
   kept(): void {
     this.opened();
+  }
+
+  // Runs `move`, a change to the entry the history is on, now, or once a
+  // back that `closed` made has landed: until then the history is still on
+  // the entry the back takes off, and the change would go with it.
+  afterBack(move: () => void): void {
+    if (this.#backing) this.#then = move;
+    else move();
   }
 
   closed(): void {
