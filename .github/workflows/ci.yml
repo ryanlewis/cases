@@ -96,6 +96,37 @@ jobs:
           rustup target add thumbv7em-none-eabihf
           cargo build -p cases-core -p cases-id --lib --locked --target thumbv7em-none-eabihf
 
+  # The workspace still builds on the oldest Rust it claims: the workspace's
+  # `rust-version`, the one place the MSRV is written. It is only a check, so
+  # it is not the pinned toolchain (rust-toolchain.toml), which `+$msrv`
+  # overrides. Renovate bumps the pin, never this.
+  msrv:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the MSRV toolchain
+        run: |
+          msrv=$(sed -nE 's/^rust-version = "([0-9.]+)"$/\1/p' Cargo.toml)
+          [[ -n "$msrv" ]] || { echo "no rust-version in Cargo.toml" >&2; exit 1; }
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check on the MSRV
+        run: |
+          cargo "+$MSRV" --version
+          rustc "+$MSRV" --version
+          cargo "+$MSRV" check --workspace --all-targets --locked
+          cargo "+$MSRV" check --workspace --all-targets --locked --features cases/remote
+
   # Its own job: a new advisory fails this job, not fmt, clippy or test.
   deny:
     runs-on: ubuntu-24.04-arm
