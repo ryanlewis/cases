@@ -54,7 +54,7 @@ getrandom = "0.4.3"
 # request that does not take gzip, and by the test that checks each file
 # against its release. Only the miniz_oxide backend, in Rust: the default
 # features would also lock zlib-rs, which is never built.
-flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+flate2 = { version = "=1.1.11", default-features = false, features = ["rust_backend"] }
 
 # SHA-256, for the token a kept list of a server's stores was read with
 # (SV-01), and in the tests to check the vendored files and the page's
@@ -104,13 +104,13 @@ security-framework = { version = "=3.7.0", default-features = false, optional = 
 # leaving the JavaScript the browser runs. Pinned with `=`: oxc's API changes
 # between minor versions, so each bump is a deliberate one.
 [build-dependencies]
-oxc_allocator = "=0.155.0"
-oxc_ast = "=0.155.0"
-oxc_ast_visit = "=0.155.0"
-oxc_parser = "=0.155.0"
-oxc_span = "=0.155.0"
+oxc_allocator = "=0.159.0"
+oxc_ast = "=0.159.0"
+oxc_ast_visit = "=0.159.0"
+oxc_parser = "=0.159.0"
+oxc_span = "=0.159.0"
 # build.rs gzips the vendored mermaid (web/static/vendor/mermaid/).
-flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+flate2 = { version = "=1.1.11", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # The store vectors' runner, for a forwarded store through dial-stdio.
@@ -118,18 +118,18 @@ cases-vectors = { path = "../vectors" }
 # One test for each vector.
 libtest-mimic = "=0.8.2"
 # Raw rows in a store, as a hand edit or a newer cases could write them.
-rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled"] }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
 # A home and a store of its own for each test.
 tempfile = "=3.27.0"
 # Time that a test moves by hand, for serve's timeouts.
 tokio = { version = "=1.54.1", features = ["io-util", "macros", "rt", "test-util"] }
 # The type strip's own tests (tests/strip.rs), and the check that what the
 # page serves is JavaScript. The same pins as the build's.
-oxc_allocator = "=0.155.0"
-oxc_ast = "=0.155.0"
-oxc_ast_visit = "=0.155.0"
-oxc_parser = "=0.155.0"
-oxc_span = "=0.155.0"
+oxc_allocator = "=0.159.0"
+oxc_ast = "=0.159.0"
+oxc_ast_visit = "=0.159.0"
+oxc_parser = "=0.159.0"
+oxc_span = "=0.159.0"
 
 [lints]
 workspace = true
