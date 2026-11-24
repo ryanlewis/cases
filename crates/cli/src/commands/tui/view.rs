@@ -13,10 +13,11 @@ use ratatui::widgets::{
     Block, BorderType, Clear, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph,
 };
 
-use super::app::{App, Filter, Focus, Group, Hit};
+use super::actions::{self, Action};
+use super::app::{App, Filter, Focus, Group, Hit, Newline, Verb};
 use super::compose::{Compose, Part};
 use super::field::Field;
-use super::form::{Act, Confirm, Form, RowPick, Which, verdict_word};
+use super::form::{Act, Confirm, Form, Press, Spot, Which, verdict_word};
 use super::wrap::{self, Para};
 use super::{markdown, safe, stats};
 use crate::describe::{self, Previous};
@@ -28,6 +29,16 @@ pub(crate) const ACCENT: Color = Color::Cyan;
 /// Detail that should recede: ids, ages, rules.
 pub(crate) const DIM: Color = Color::DarkGray;
 const SELECTED_BG: Color = Color::Indexed(236);
+/// A button's face.
+const BUTTON_BG: Color = Color::Indexed(238);
+/// What the pointer is over: a button's face, or the cells of anything
+/// else a click acts on.
+pub(crate) const HOVER_BG: Color = Color::Indexed(241);
+/// A dialog's and a toast's face, over the screen.
+const PANEL_BG: Color = Color::Indexed(235);
+/// The part of the answer the keys are on: a teal, apart from the grey of
+/// the selection, the panel and the pointer.
+pub(crate) const FOCUS_BG: Color = Color::Indexed(23);
 
 /// Below this many columns, one pane at a time (TU-02).
 pub(crate) const SIDE_BY_SIDE: u16 = 96;
@@ -37,9 +48,25 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let side_by_side = width >= SIDE_BY_SIDE;
     // The filters and the footer wrap onto more lines on a narrow terminal
     // rather than lose a tab or a key off the end.
-    let tabs = app.only.is_none().then(|| filter_lines(app, width));
+    let message = app.only.is_none().then(|| message_button(app));
+    // The palette's button is at the right of the tabs, beside the
+    // message's, where that takes the tabs no more rows than they take
+    // without it; otherwise, and on one case's screen, in the header,
+    // when it has room for it. On a screen narrower than that, the
+    // footer's ^k says how to open the palette.
+    let commands = commands_button();
+    let tabs_in = |room: u16| {
+        message
+            .as_ref()
+            .map(|message| filter_lines(app, room.saturating_sub(message.width() + 1)))
+    };
+    let alone = tabs_in(width);
+    let beside = tabs_in(width.saturating_sub(commands.width() + 1));
+    let rows_of = |tabs: &Option<Flow>| tabs.as_ref().map_or(0, |(lines, _)| lines.len());
+    let fits_beside = message.is_some() && rows_of(&beside) <= rows_of(&alone);
+    let in_header = !fits_beside && width >= HEADER_ROOM;
+    let tabs = if fits_beside { beside } else { alone };
     app.strip.room = frame.area().height >= stats::MIN_ROWS;
-    let keys = footer_lines(app, width, side_by_side);
     let rows = |lines: &[Line]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
     // The stats strip (TU-13), under the filters: not on one case's screen,
     // and not on a screen too short to spare it.
@@ -55,20 +82,55 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .as_ref()
         .filter(|_| app.strip.shown && app.strip.room && app.only.is_none())
         .map(|stats| stats::lines(stats, image));
-    let [header, filters, rule, band, body, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(tabs.as_ref().map_or(1, |(lines, _)| rows(lines))),
-        Constraint::Length(1),
-        Constraint::Length(if strip.is_some() { stats::HEIGHT } else { 0 }),
-        Constraint::Min(1),
-        Constraint::Length(rows(&keys.0)),
-    ])
-    .areas(frame.area());
+    let layout = |keys: &Flow| -> [Rect; 6] {
+        Layout::vertical([
+            Constraint::Length(1),
+            // One case's screen (TU-11) has no filters: no row for them.
+            Constraint::Length(tabs.as_ref().map_or(0, |(lines, _)| rows(lines))),
+            Constraint::Length(1),
+            Constraint::Length(if strip.is_some() { stats::HEIGHT } else { 0 }),
+            Constraint::Min(1),
+            Constraint::Length(rows(&keys.0)),
+        ])
+        .areas(frame.area())
+    };
+    // The footer leaves to the case's bar the keys it has buttons for, when
+    // the bar is drawn: worked out with the footer that leaves them, as
+    // one that has them is no shorter, and leaves the bar no more room.
+    // Worked out once a frame: the acts the case's bar offers, and the
+    // answer's panel's buttons, as wide as the case pane.
+    let verbs = app.verbs();
+    let trimmed = footer_lines(app, &verbs, width, side_by_side, true);
+    let pane = case_pane(app, layout(&trimmed)[4], side_by_side).map(|pane| inset(pane, 2, 1));
+    let mut buttons = pane.and_then(|inner| panel_buttons(app, inner.width));
+    let bar = pane.is_some_and(|inner| {
+        case_fit(
+            app,
+            &verbs,
+            scroll_area(app, &verbs, inner, buttons.as_ref()),
+        )
+        .0
+        .is_some()
+    });
+    let keys = if bar {
+        trimmed
+    } else {
+        footer_lines(app, &verbs, width, side_by_side, false)
+    };
+    let [header, filters, rule, band, body, footer] = layout(&keys);
     app.hits.clear();
-    draw_header(frame, app, header);
+    draw_header(frame, app, header, in_header.then_some(&commands));
     if let Some(tabs) = tabs {
         let hits = draw_flow(frame, tabs, filters);
         app.hits.extend(hits);
+    }
+    if let Some(message) = message {
+        let x = filters.right().saturating_sub(message.width());
+        message.draw(frame, app, x, filters.y, filters);
+        if fits_beside {
+            let x = x.saturating_sub(commands.width() + 1);
+            commands.draw(frame, app, x, filters.y, filters);
+        }
     }
     draw_rule(frame, app, rule);
     let drawn = strip.is_some();
@@ -81,32 +143,399 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .map(|wide| stats::image_area(band, wide));
     if app.only.is_some() {
         // One case (TU-11): no list beside it.
-        draw_case(frame, app, body);
+        draw_case(frame, app, body, &verbs, buttons.take());
     } else if side_by_side {
-        let list_width = (body.width * 38 / 100).clamp(36, 58);
-        let [list, gap, case] = Layout::horizontal([
-            Constraint::Length(list_width),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .areas(body);
+        let [list, gap, case] = side_by_side_panes(body);
         draw_list(frame, app, list, true);
         let bar: Vec<Line> = (0..gap.height).map(|_| Line::from("│")).collect();
         frame.render_widget(Paragraph::new(bar).style(Style::new().fg(DIM)), gap);
-        draw_case(frame, app, case);
+        draw_case(frame, app, case, &verbs, buttons.take());
     } else if app.focus == Focus::List {
         draw_list(frame, app, body, false);
     } else {
-        draw_case(frame, app, body);
+        draw_case(frame, app, body, &verbs, buttons.take());
     }
+    // Under the toasts, the palette and a row's menu.
+    draw_focus(frame, app);
     let hits = draw_flow(frame, keys, footer);
     app.hits.extend(hits);
+    super::select::draw(frame, app);
+    draw_toasts(frame, app, body);
+    if app.palette.is_some() {
+        draw_palette(frame, app);
+    }
+    if let Some(at) = app.menu.as_ref().map(|menu| menu.at) {
+        draw_menu(frame, app, at);
+    }
+    // Over a dialog or help, what lies under them is not lit: a click
+    // there takes them away.
+    if !app.help && !app.asking() {
+        light(frame, app);
+    }
     if app.help {
         draw_help(frame, app.only.is_some());
     }
+    if let Some(dialog) = question(app) {
+        draw_dialog(frame, app, &dialog);
+    }
+    // The layout may have moved under a pointer that has not: what it is
+    // over now, for the next frame.
+    app.hover = app.hovered();
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+/// Lights the cells of what the pointer is over, unless it is a button or
+/// a tab, which light themselves (TU-12).
+fn light(frame: &mut Frame, app: &App) {
+    let Some(hover) = app
+        .hover
+        .filter(|hit| !matches!(hit, Hit::Key(_) | Hit::Tab(_)))
+    else {
+        return;
+    };
+    let area = frame.area();
+    // A toast over what is lit stays as it is.
+    let toasts: Vec<Rect> = app
+        .hits
+        .iter()
+        .filter(|(_, hit)| matches!(hit, Hit::Toast(_)) && *hit != hover)
+        .map(|(rect, _)| *rect)
+        .collect();
+    let buffer = frame.buffer_mut();
+    for (rect, _) in app.hits.iter().filter(|(_, hit)| *hit == hover) {
+        let rect = rect.intersection(area);
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                let at = ratatui::layout::Position::new(x, y);
+                if toasts.iter().any(|toast| toast.contains(at)) {
+                    continue;
+                }
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.set_bg(HOVER_BG);
+                }
+            }
+        }
+    }
+}
+
+/// How a button looks: the one to press, one that loses something, or
+/// any other (TU-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Look {
+    Plain,
+    Primary,
+    Danger,
+}
+
+/// A button: its label on a filled run of cells, with its key before it
+/// or a letter of it underlined, lit while the pointer is over it. A click
+/// on it does what its hit says, as a key's does what pressing it does
+/// (TU-12). Without a hit it is not a button: its text is drawn as a
+/// footer's key that cannot be clicked, with no face.
+#[derive(Debug, Clone)]
+pub(crate) struct Button {
+    /// The key that does the same, shown before the label.
+    pub(crate) key: Option<&'static str>,
+    pub(crate) label: &'static str,
+    /// The letter of the label to underline, as a menu shows the key that
+    /// picks an item.
+    pub(crate) accel: Option<char>,
+    pub(crate) look: Look,
+    pub(crate) hit: Option<Hit>,
+}
+
+impl Button {
+    /// A plain button that does `hit`.
+    pub(crate) fn new(label: &'static str, hit: Option<Hit>) -> Button {
+        Button {
+            key: None,
+            label,
+            accel: None,
+            look: Look::Plain,
+            hit,
+        }
+    }
+
+    /// The button with `key` shown before its label.
+    pub(crate) fn key(self, key: &'static str) -> Button {
+        Button {
+            key: Some(key),
+            ..self
+        }
+    }
+
+    /// The button with the first `letter` of its label underlined, in
+    /// either case.
+    pub(crate) fn accel(self, letter: char) -> Button {
+        Button {
+            accel: Some(letter),
+            ..self
+        }
+    }
+
+    pub(crate) fn look(self, look: Look) -> Button {
+        Button { look, ..self }
+    }
+
+    /// How it is drawn: lit, while the pointer is over it.
+    pub(crate) fn spans(&self, lit: bool) -> Vec<Span<'static>> {
+        let face = match (self.hit, self.look, lit) {
+            (None, ..) => Style::new(),
+            (Some(_), Look::Plain, false) => Style::new().bg(BUTTON_BG),
+            (Some(_), Look::Plain, true) => Style::new().bg(HOVER_BG).fg(Color::White),
+            (Some(_), Look::Primary, false) => Style::new().bg(Color::Green),
+            (Some(_), Look::Primary, true) => Style::new().bg(Color::LightGreen),
+            (Some(_), Look::Danger, false) => Style::new().bg(Color::Red),
+            (Some(_), Look::Danger, true) => Style::new().bg(Color::LightRed),
+        };
+        let filled = self.hit.is_some() && self.look != Look::Plain;
+        let face = if filled {
+            face.fg(Color::Black).add_modifier(Modifier::BOLD)
+        } else {
+            face
+        };
+        let label = if self.hit.is_none() {
+            face.fg(DIM)
+        } else {
+            face
+        };
+        let key = if filled {
+            face
+        } else {
+            face.fg(ACCENT).add_modifier(Modifier::BOLD)
+        };
+        let mut spans = vec![Span::styled(" ", face)];
+        if let Some(text) = self.key {
+            spans.push(Span::styled(text, key));
+            spans.push(Span::styled(" ", face));
+        }
+        let at = self.accel.and_then(|letter| {
+            self.label
+                .char_indices()
+                .find(|(_, c)| c.eq_ignore_ascii_case(&letter))
+        });
+        match at {
+            Some((at, c)) => {
+                let after = at + c.len_utf8();
+                spans.push(Span::styled(&self.label[..at], label));
+                spans.push(Span::styled(
+                    &self.label[at..after],
+                    label.add_modifier(Modifier::UNDERLINED),
+                ));
+                spans.push(Span::styled(&self.label[after..], label));
+            }
+            None => spans.push(Span::styled(self.label, label)),
+        }
+        spans.push(Span::styled(" ", face));
+        spans
+    }
+
+    /// How it is drawn while the keys are on it, when `focused`: pointed
+    /// at, its label underlined, apart from the pointer's light (TU-12).
+    pub(crate) fn spans_at(&self, lit: bool, focused: bool) -> Vec<Span<'static>> {
+        let mut spans = self.spans(lit);
+        if focused {
+            let last = spans.len().saturating_sub(1);
+            for span in spans.iter_mut().take(last).skip(1) {
+                span.style = span
+                    .style
+                    .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+            }
+            spans.insert(
+                0,
+                Span::styled("▸", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            );
+        }
+        spans
+    }
+
+    /// How many columns it takes.
+    pub(crate) fn width(&self) -> u16 {
+        let wide: usize = self.spans(false).iter().map(Span::width).sum();
+        u16::try_from(wide).unwrap_or(u16::MAX)
+    }
+
+    /// Whether the pointer is over it.
+    fn lit(&self, app: &App) -> bool {
+        self.hit.is_some() && app.hover == self.hit
+    }
+
+    /// Draws it at `x`, `y`, as far as `area` lets it, and says where a
+    /// click on it acts. Gives the column after it.
+    pub(crate) fn draw(&self, frame: &mut Frame, app: &mut App, x: u16, y: u16, area: Rect) -> u16 {
+        let wide = self.width().min(area.right().saturating_sub(x));
+        let rect = Rect::new(x, y, wide, 1).intersection(area);
+        frame.render_widget(Line::from(self.spans(self.lit(app))), rect);
+        if let Some(hit) = self.hit {
+            app.hits.push((rect, hit));
+        }
+        x.saturating_add(wide)
+    }
+}
+
+/// A question in a box over the screen, with a button for each answer
+/// (TU-08, TU-12).
+#[derive(Debug)]
+pub(crate) struct Dialog {
+    pub(crate) title: String,
+    pub(crate) body: Option<String>,
+    /// The safe answer first.
+    pub(crate) buttons: Vec<Button>,
+}
+
+/// The question the screen asks, if any: whether to quit and lose what
+/// was typed, or the form's or the message's. Esc, the first button, is
+/// the safe answer, as is any key but y, or a click off the dialog.
+fn question(app: &App) -> Option<Dialog> {
+    let keep = |label| {
+        Button::new(label, Some(Hit::Key(KeyEvent::from(KeyCode::Esc))))
+            .key("esc")
+            .look(Look::Primary)
+    };
+    let yes = |label| {
+        Button::new(label, Some(Hit::Key(KeyEvent::from(KeyCode::Char('y')))))
+            .key("y")
+            .look(Look::Danger)
+    };
+    let typed = || "Throw away what you typed?".to_string();
+    let (title, body, buttons) = if app.confirm_quit {
+        (
+            "Quit and throw away what you typed?".to_string(),
+            None,
+            vec![keep("Keep typing"), yes("Quit")],
+        )
+    } else if let Some((form, confirm)) = app
+        .form
+        .as_ref()
+        .and_then(|form| form.confirm.map(|confirm| (form, confirm)))
+    {
+        match confirm {
+            Confirm::Drop => (
+                format!("Drop {}?", form.key),
+                Some("The agent stops the work.".to_string()),
+                vec![keep("Keep it"), yes("Drop")],
+            ),
+            Confirm::Withdraw => (
+                format!("Withdraw {} from its agent?", form.key),
+                None,
+                vec![keep("Keep it"), yes("Withdraw")],
+            ),
+            Confirm::Discard => (typed(), None, vec![keep("Keep typing"), yes("Discard")]),
+        }
+    } else if app.compose.as_ref().is_some_and(|c| c.confirm) {
+        (typed(), None, vec![keep("Keep typing"), yes("Discard")])
+    } else {
+        return None;
+    };
+    Some(Dialog {
+        title,
+        body,
+        buttons,
+    })
+}
+
+/// Draws `dialog` in the middle of the screen, its buttons along its foot.
+/// A click on its face does nothing; one off it lands on what is under it.
+fn draw_dialog(frame: &mut Frame, app: &mut App, dialog: &Dialog) {
+    const GAP: u16 = 2;
+    let area = frame.area();
+    let row: u16 = dialog
+        .buttons
+        .iter()
+        .map(Button::width)
+        .sum::<u16>()
+        .saturating_add(GAP * u16::try_from(dialog.buttons.len().saturating_sub(1)).unwrap_or(0));
+    let text = |s: &str| u16::try_from(s.chars().count()).unwrap_or(u16::MAX);
+    let wanted = text(&dialog.title)
+        .max(dialog.body.as_deref().map_or(0, text))
+        .max(row)
+        .saturating_add(6);
+    let width = wanted.min(area.width.saturating_sub(2)).min(72);
+    let inner = usize::from(width.saturating_sub(6)).max(1);
+    let mut paras = vec![Para::plain(vec![Span::styled(
+        safe::clean(&dialog.title).into_owned(),
+        Style::new().add_modifier(Modifier::BOLD),
+    )])];
+    if let Some(body) = &dialog.body {
+        paras.push(Para::plain(vec![Span::styled(
+            safe::clean(body).into_owned(),
+            Style::new().fg(DIM),
+        )]));
+    }
+    let lines = wrap::wrap(paras, inner);
+    let tall = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    // The border, a blank row above and below the text, then the buttons.
+    let height = tall.saturating_add(5).min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Yellow))
+        .style(Style::new().bg(PANEL_BG));
+    let face = block.inner(rect);
+    frame.render_widget(block, rect);
+    // On a short screen the text is cut, not the buttons under it.
+    let text_area = Rect::new(
+        face.x.saturating_add(2),
+        face.y.saturating_add(1),
+        face.width.saturating_sub(4),
+        tall.min(face.height.saturating_sub(2)),
+    )
+    .intersection(face);
+    frame.render_widget(Paragraph::new(lines), text_area);
+    app.hits.push((rect, Hit::Dialog));
+    let y = face.bottom().saturating_sub(1);
+    let mut x = face.x.saturating_add(2);
+    for button in &dialog.buttons {
+        x = button.draw(frame, app, x, y, face).saturating_add(GAP);
+    }
+}
+
+/// Draws the toasts in the top right corner of `area`, the newest on top,
+/// as many as fit: out of the way of the form at the foot of the case
+/// (TU-12).
+fn draw_toasts(frame: &mut Frame, app: &mut App, area: Rect) {
+    let width = area.width.saturating_sub(2).min(56);
+    if width < 8 {
+        return;
+    }
+    let mut top = area.y;
+    for toast in app.toasts.iter().rev() {
+        let (mark, colour) = if toast.done {
+            ("✓ ", Color::Green)
+        } else {
+            ("! ", Color::Yellow)
+        };
+        let para = Para::hanging(
+            vec![
+                Span::raw(" "),
+                Span::styled(mark, Style::new().fg(colour).add_modifier(Modifier::BOLD)),
+            ],
+            vec![Span::raw(toast.text.clone())],
+        );
+        let lines = wrap::wrap(vec![para], usize::from(width - 1));
+        let wide = lines.iter().map(Line::width).max().unwrap_or(0) + 1;
+        let wide = u16::try_from(wide).unwrap_or(width).min(width);
+        let tall = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        if tall > area.bottom().saturating_sub(top) {
+            break;
+        }
+        let rect = Rect::new(area.right() - wide - 1, top, wide, tall);
+        frame.render_widget(Clear, rect);
+        frame.render_widget(Paragraph::new(lines).style(Style::new().bg(PANEL_BG)), rect);
+        app.hits.push((rect, Hit::Toast(toast.id)));
+        // A row between toasts, so that they read as two.
+        top = top.saturating_add(tall + 1);
+    }
+}
+
+/// The header: the store, what waits on the human, and the palette's
+/// button `commands` before that when it is not beside the tabs.
+fn draw_header(frame: &mut Frame, app: &mut App, area: Rect, commands: Option<&Button>) {
     let (waiting, blocking) = app.waiting();
     let mut right = Vec::new();
     if app.only.is_some() {
@@ -135,7 +564,8 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         right.push(Span::raw(" "));
     }
     let right = Line::from(right).right_aligned();
-    let room = usize::from(area.width).saturating_sub(right.width() + 10);
+    let button = commands.map_or(0, |button| usize::from(button.width()) + 1);
+    let room = usize::from(area.width).saturating_sub(right.width() + button + 10);
     let left = Line::from(vec![
         Span::styled(
             " cases ",
@@ -149,8 +579,15 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(DIM),
         ),
     ]);
+    let right_width = u16::try_from(right.width()).unwrap_or(u16::MAX);
     frame.render_widget(left, area);
     frame.render_widget(right, area);
+    if let Some(button) = commands {
+        let x = area
+            .right()
+            .saturating_sub(right_width + button.width() + 1);
+        button.draw(frame, app, x, area.y, area);
+    }
 }
 
 /// Lines drawn over several rows, and where on them each part a click
@@ -193,21 +630,18 @@ fn flow(chips: Vec<Chip>, width: u16, gap: &str, tight: &str) -> Flow {
         .sum::<usize>();
     let gap = if wide <= width { gap } else { tight };
     let mut lines = Vec::new();
-    let mut line = vec![Span::raw(" ")];
-    let mut used = 1;
+    let mut line = Vec::new();
+    let mut used = 0;
     let mut hits = Vec::new();
     for chip in chips {
         let size: usize = chip.spans.iter().map(Span::width).sum();
         let lead = between(gap, chip.bar);
         let lead_width = lead.chars().count();
-        if used > 1 && used + lead_width + size > width {
-            lines.push(Line::from(std::mem::replace(
-                &mut line,
-                vec![Span::raw(" ")],
-            )));
-            used = 1;
+        if used > 0 && used + lead_width + size > width {
+            lines.push(Line::from(std::mem::take(&mut line)));
+            used = 0;
         }
-        if used > 1 {
+        if used > 0 {
             line.push(Span::styled(lead, Style::new().fg(DIM)));
             used += lead_width;
         }
@@ -240,43 +674,420 @@ fn draw_flow(frame: &mut Frame, (lines, hits): Flow, area: Rect) -> Vec<(Rect, H
 /// The filters' tabs, over as many lines as `width` needs (TU-12).
 fn filter_lines(app: &App, width: u16) -> Flow {
     let mut chips = Vec::new();
-    for (n, filter) in (1..).zip(Filter::ALL) {
+    for filter in Filter::ALL {
         // The briefings' count is of the open ones (IN-14).
         let count = match filter {
             Filter::Briefings => app.briefings().0.len(),
             _ => app.shown(filter).len(),
         };
+        // A pill: the chosen one filled, any other lit under the pointer.
         let chosen = filter == app.filter;
-        let (name, count_style) = if chosen {
-            (
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                Style::new().fg(ACCENT),
-            )
+        let hit = Hit::Tab(filter);
+        let (face, quiet) = if chosen {
+            let face = Style::new().fg(Color::Black).bg(if app.hover == Some(hit) {
+                Color::LightCyan
+            } else {
+                ACCENT
+            });
+            (face.add_modifier(Modifier::BOLD), face)
+        } else if app.hover == Some(hit) {
+            let face = Style::new().bg(HOVER_BG).fg(Color::White);
+            (face, face)
         } else {
             (Style::new(), Style::new().fg(DIM))
         };
         chips.push(Chip {
             spans: vec![
-                Span::styled(format!("{n} "), Style::new().fg(DIM)),
-                Span::styled(filter.name(), name),
-                Span::styled(format!(" {count}"), count_style),
+                Span::styled(" ", quiet),
+                Span::styled(filter.name(), face),
+                Span::styled(format!(" {count} "), quiet),
             ],
             bar: filter == Filter::Briefings,
-            hit: Some(Hit::Tab(filter)),
+            hit: Some(hit),
         });
     }
-    flow(chips, width, "    ", "  ")
+    flow(chips, width, "  ", " ")
+}
+
+/// The button at the right of the filters' row that starts a message
+/// (TU-07, TU-12). While a form or a message is open, which takes the
+/// keys, it is drawn but does nothing, as m does nothing then.
+fn message_button(app: &App) -> Button {
+    let open = app.form.is_some() || app.compose.is_some();
+    let hit = (!open).then(|| Hit::Key(KeyEvent::from(KeyCode::Char('m'))));
+    Button::new("+ Message", hit).accel('m')
+}
+
+/// How wide the screen is before the header has room for the palette's
+/// button beside the store and the count of what waits.
+const HEADER_ROOM: u16 = 72;
+
+/// The button that opens the palette (TU-12).
+fn commands_button() -> Button {
+    let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+    Button::new("Commands", Some(Hit::Key(ctrl_k))).key("^k")
+}
+
+/// The palette (TU-12): what is typed, the case it acts on, and the
+/// actions that fit, best first, each with why and its key; the one the
+/// keys are on marked. A click on one runs it.
+fn draw_palette(frame: &mut Frame, app: &mut App) {
+    let Some(palette) = &app.palette else {
+        return;
+    };
+    let found = actions::ranked(app, &palette.query);
+    let at = palette.at.min(found.len().saturating_sub(1));
+    let area = frame.area();
+    let width = area.width.saturating_sub(4).min(64);
+    let shown = found
+        .len()
+        .min(usize::from(area.height.saturating_sub(8)).max(1));
+    let on = app
+        .selected_case()
+        .map(|(_, case)| safe::clean(case.title()).into_owned());
+    let mut lines = vec![Line::from(vec![
+        Span::styled("› ", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::raw(safe::clean(&palette.query).into_owned()),
+        Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
+    ])];
+    lines.push(Line::styled(
+        on.map_or_else(|| "on: no case".to_string(), |title| format!("on: {title}")),
+        Style::new().fg(DIM),
+    ));
+    let inner = usize::from(width.saturating_sub(4));
+    // The window of what was found that keeps the chosen one in sight.
+    let skip = (at + 1).saturating_sub(shown);
+    for (n, action) in found.iter().enumerate().skip(skip).take(shown) {
+        let key = action.key();
+        let name = action.name();
+        let room = inner.saturating_sub(name.chars().count() + key.chars().count() + 3);
+        let why = truncate(action.why(), room);
+        let pad = room.saturating_sub(why.chars().count());
+        let chosen = n == at;
+        let face = if chosen {
+            Style::new().bg(SELECTED_BG)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{name} "),
+                face.add_modifier(if chosen {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(format!(" {why}"), face.fg(DIM)),
+            Span::styled(" ".repeat(pad), face),
+            Span::styled(
+                format!(" {key}"),
+                face.fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    if found.is_empty() {
+        lines.push(Line::styled("nothing fits", Style::new().fg(DIM)));
+    }
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 3,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" commands ")
+        .style(Style::new().bg(PANEL_BG))
+        .padding(Padding::horizontal(1));
+    let face = block.inner(rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    app.hits.push((rect, Hit::Dialog));
+    for row in 0..u16::try_from(shown.min(found.len())).unwrap_or(0) {
+        let y = face.y + 2 + row;
+        if y < face.bottom()
+            && let Some(action) = found.get(skip + usize::from(row))
+        {
+            let rect = Rect::new(face.x, y, face.width, 1);
+            app.hits.push((rect, Hit::Palette(*action)));
+        }
+    }
+}
+
+/// The menu a right-click opens on a row (TU-12): the actions that fit
+/// its case, each with its key, at the pointer `at`, kept inside the
+/// screen.
+fn draw_menu(frame: &mut Frame, app: &mut App, at: ratatui::layout::Position) {
+    let found = Action::on_case(app);
+    let item = app.menu.as_ref().map_or(0, |menu| menu.item);
+    let wide = found
+        .iter()
+        .map(|action| action.name().chars().count() + action.key().chars().count() + 3)
+        .max()
+        .unwrap_or(0)
+        .max("nothing to do on it".len());
+    let area = frame.area();
+    let width = u16::try_from(wide + 4).unwrap_or(u16::MAX).min(area.width);
+    let height = u16::try_from(found.len().max(1) + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = menu_rect(area, at, width, height);
+    let inner = usize::from(width.saturating_sub(4));
+    let mut lines = Vec::new();
+    for (n, action) in found.iter().enumerate() {
+        let face = if n == item {
+            Style::new().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        let name = action.name();
+        let pad = inner.saturating_sub(name.chars().count() + action.key().chars().count());
+        lines.push(Line::from(vec![
+            Span::styled(format!("{name}{}", " ".repeat(pad)), face),
+            Span::styled(action.key(), face.fg(ACCENT)),
+        ]));
+    }
+    if found.is_empty() {
+        lines.push(Line::styled("nothing to do on it", Style::new().fg(DIM)));
+    }
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .style(Style::new().bg(PANEL_BG))
+        .padding(Padding::horizontal(1));
+    let face = block.inner(rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+    app.hits.push((rect, Hit::Dialog));
+    for (n, action) in found.iter().enumerate() {
+        let y = face.y + u16::try_from(n).unwrap_or(u16::MAX);
+        if y < face.bottom() {
+            let rect = Rect::new(face.x, y, face.width, 1);
+            app.hits.push((rect, Hit::Menu(*action)));
+        }
+    }
+}
+
+/// Where a menu `width` by `height` opens for a right-click at `at`:
+/// below and right of the pointer, moved up and left as far as it must
+/// be to stay inside `area`.
+pub(crate) fn menu_rect(
+    area: Rect,
+    at: ratatui::layout::Position,
+    width: u16,
+    height: u16,
+) -> Rect {
+    let x = at.x.min(area.right().saturating_sub(width)).max(area.x);
+    let y = (at.y + 1)
+        .min(area.bottom().saturating_sub(height))
+        .max(area.y);
+    Rect::new(x, y, width, height)
+}
+
+/// The case's bar: a button for each act its keys would do on it (TU-12).
+fn verb_chips(app: &App, verbs: &[Verb]) -> Vec<Chip> {
+    verbs
+        .iter()
+        .copied()
+        .map(|verb| {
+            let look = if verb == Verb::Answer {
+                Look::Primary
+            } else {
+                Look::Plain
+            };
+            let button = Button::new(verb.label(), Some(Hit::Verb(verb)))
+                .accel(verb.key())
+                .look(look);
+            Chip {
+                spans: button.spans_at(button.lit(app), app.focus == Focus::Bar(verb)),
+                bar: false,
+                hit: button.hit,
+            }
+        })
+        .collect()
+}
+
+/// The fewest rows of the case, under its bar, that the bar leaves.
+const MIN_BODY: u16 = 3;
+
+/// Where the case pane is drawn in `body`: beside the list, or alone; or
+/// nowhere, on a narrow screen showing the list.
+fn case_pane(app: &App, body: Rect, side_by_side: bool) -> Option<Rect> {
+    if app.only.is_some() || (!side_by_side && app.focus != Focus::List) {
+        Some(body)
+    } else if side_by_side {
+        let [_, _, case] = side_by_side_panes(body);
+        Some(case)
+    } else {
+        None
+    }
+}
+
+/// The list, the bar between, and the case, side by side.
+fn side_by_side_panes(body: Rect) -> [Rect; 3] {
+    let list_width = (body.width * 38 / 100).clamp(36, 58);
+    Layout::horizontal([
+        Constraint::Length(list_width),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(body)
+}
+
+/// How the case's bar fits the case pane's `inner` area: the bar, when
+/// there is room for it and [`MIN_BODY`] rows of the case under it; and
+/// whether the title and the meta are held above it too, when there is
+/// room for them as well. Otherwise they scroll with the rest.
+fn case_fit(app: &App, verbs: &[Verb], inner: Rect) -> (Option<Flow>, bool) {
+    let chips = verb_chips(app, verbs);
+    let Some((key, case)) = app.selected_case().filter(|_| !chips.is_empty()) else {
+        return (None, false);
+    };
+    let bar = flow(chips, inner.width, " ", " ");
+    let tall = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    let bar_rows = tall(bar.0.len() + 1);
+    if inner.height < bar_rows.saturating_add(MIN_BODY) {
+        return (None, false);
+    }
+    let mut paras = case_paras(app, *key, case);
+    paras.truncate(2);
+    let head = tall(wrap::wrap(paras, usize::from(inner.width)).len());
+    let fixed = inner.height >= head.saturating_add(bar_rows).saturating_add(MIN_BODY);
+    (Some(bar), fixed)
 }
 
 /// Says that a click on each line drawn in `area`, from line `skip` of
 /// `hits`, does what that line's paragraph does (TU-12).
 fn line_hits(app: &mut App, area: Rect, hits: &[Option<Hit>], skip: usize) {
     for row in 0..area.height {
-        if let Some(Some(hit)) = hits.get(skip + usize::from(row)) {
-            app.hits
-                .push((Rect::new(area.x, area.y + row, area.width, 1), *hit));
+        match hits.get(skip + usize::from(row)) {
+            // A row's verdicts: a click on each picks it.
+            Some(Some(Hit::Verdicts(at, human))) => {
+                // The line, under the cells: what the keys being on the
+                // row fills, and what a click between them does nothing on.
+                app.hits.push((
+                    Rect::new(area.x, area.y + row, area.width, 1),
+                    Hit::Verdicts(*at, *human),
+                ));
+                for (x, wide, verdict) in verdict_cells(*human) {
+                    let rect = Rect::new(area.x + x, area.y + row, wide, 1).intersection(area);
+                    app.hits.push((rect, Hit::Verdict(*at, verdict)));
+                }
+            }
+            Some(Some(hit)) => app
+                .hits
+                .push((Rect::new(area.x, area.y + row, area.width, 1), *hit)),
+            _ => {}
         }
     }
+}
+
+/// The lines of the case that the part of its answer the keys are on is
+/// drawn over, first and last, from what a click on each does.
+fn reveal_lines(app: &App, hits: &[Option<Hit>]) -> Option<(usize, usize)> {
+    let form = app.form.as_ref().filter(|form| form.act == Act::Answer)?;
+    let spot = form.spot();
+    let lines: Vec<usize> = hits
+        .iter()
+        .enumerate()
+        .filter(|(_, hit)| hit.is_some_and(|hit| on_spot(form, spot, hit, false)))
+        .map(|(at, _)| at)
+        .collect();
+    Some((*lines.first()?, *lines.last()?))
+}
+
+/// Whether `hit` is drawn as part of `spot` of `form`'s answer: all its
+/// choices, or, when `pointed`, only the one pointed at; the row the keys
+/// are on, with its verdicts and note; the item; the field.
+fn on_spot(form: &Form, spot: Spot, hit: Hit, pointed: bool) -> bool {
+    match (spot, hit) {
+        (Spot::Field(which), Hit::Field(field)) => which == field,
+        (Spot::Choices, Hit::Choice(n)) => !pointed || pointed_choice(form) == n,
+        (Spot::Choices, Hit::Mark(mark)) => !pointed || pointed_mark(form) == mark,
+        (
+            Spot::Rows,
+            Hit::ApprovalRow(at)
+            | Hit::Verdicts(at, _)
+            | Hit::Verdict(at, _)
+            | Hit::Field(Which::Row(at)),
+        ) => at == form.row,
+        (Spot::Items, Hit::LeftOut(at)) => at == form.item,
+        _ => false,
+    }
+}
+
+/// The decision's option the keys point at, on its choices: the one
+/// chosen, other, or else the first.
+fn pointed_choice(form: &Form) -> i64 {
+    form.choice
+        .or(form.other.then_some(form.options() + 1))
+        .unwrap_or(1)
+}
+
+/// The signoff's or the briefing's answer the keys point at: the one
+/// chosen, or else accept.
+fn pointed_mark(form: &Form) -> &'static str {
+    match form.kind {
+        Kind::Signoff => form.signoff,
+        _ => form.briefing,
+    }
+    .unwrap_or("accept")
+}
+
+/// Fills the part of the answer the keys are on, while they are in it,
+/// as a ring the pointer's light and a chosen answer's dot both differ
+/// from (TU-12): drawn before the toasts and anything over the screen. A
+/// button is pointed at by its own face, and a box to write in by its
+/// border.
+fn draw_focus(frame: &mut Frame, app: &App) {
+    let Some(form) = app.form.as_ref().filter(|form| form.act == Act::Answer) else {
+        return;
+    };
+    let spot = form.spot();
+    let area = frame.area();
+    let buffer = frame.buffer_mut();
+    for (rect, _) in app.hits.iter().filter(|(_, hit)| {
+        !matches!(hit, Hit::Field(Which::Text | Which::Note)) && on_spot(form, spot, *hit, true)
+    }) {
+        let rect = rect.intersection(area);
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.set_bg(FOCUS_BG);
+                }
+            }
+        }
+    }
+}
+
+/// The scroll nearest `scroll` that shows the lines `first` to `last` in
+/// `height` rows: their end, when they are taller than that.
+fn in_sight(scroll: u16, height: u16, first: usize, last: usize) -> u16 {
+    let line = |at: usize| u16::try_from(at).unwrap_or(u16::MAX);
+    let mut scroll = scroll.max(line(last + 1).saturating_sub(height));
+    if line(last) - line(first) < height {
+        scroll = scroll.min(line(first));
+    }
+    scroll
+}
+
+/// Where a line of a row's verdicts draws each: its column, its width,
+/// and the verdict, after an indent, two columns apart.
+fn verdict_cells(human: bool) -> Vec<(u16, u16, &'static str)> {
+    let mut x = 5;
+    let mut cells = Vec::new();
+    for verdict in ["approve", "hold", "reject"] {
+        let wide = 2 + verdict_word(verdict, human).chars().count();
+        let wide = u16::try_from(wide).unwrap_or(u16::MAX);
+        cells.push((x, wide, verdict));
+        x += wide + 2;
+    }
+    cells
 }
 
 /// The rule under the filters, or what is wrong with the store on it.
@@ -303,6 +1114,53 @@ fn draw_rule(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(line, area);
 }
 
+/// A region's title (TU-12): the list's, the case's or the answer's, with
+/// an accent edge and "keys here" on the one with the keys, and dim on
+/// the others.
+fn region_title(name: &str, keys: bool) -> Vec<Span<'static>> {
+    if keys {
+        let accent = Style::new().fg(ACCENT);
+        vec![
+            Span::styled("▍", accent),
+            Span::styled(name.to_string(), accent.add_modifier(Modifier::BOLD)),
+            Span::styled(" · keys here", accent),
+        ]
+    } else {
+        vec![Span::styled(
+            format!(" {name}"),
+            Style::new().fg(DIM).add_modifier(Modifier::BOLD),
+        )]
+    }
+}
+
+/// Which region has the keys: the list, the case, or its answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Region {
+    List,
+    Case,
+    Answer,
+}
+
+/// The region with the keys (TU-12): the answer while its form has them;
+/// the case while a park's or a withdraw's form, a message, or a button
+/// of the case's bar has them; or else the pane that has them.
+pub(crate) fn region(app: &App) -> Region {
+    match &app.form {
+        Some(form) if form.act == Act::Answer => Region::Answer,
+        None if app.compose.is_none() && app.focus == Focus::List => Region::List,
+        _ => Region::Case,
+    }
+}
+
+/// Draws a pane's title on the top row of its `area`.
+fn draw_title(frame: &mut Frame, area: Rect, name: &str, keys: bool) {
+    let row = Rect {
+        height: area.height.min(1),
+        ..area
+    };
+    frame.render_widget(Line::from(region_title(name, keys)), row);
+}
+
 fn urgency_style(urgency: Urgency) -> Style {
     match urgency {
         Urgency::Blocking => Style::new().fg(Color::Red),
@@ -326,6 +1184,7 @@ fn state_tag(state: State) -> Option<(&'static str, Style)> {
 }
 
 fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, side_by_side: bool) {
+    draw_title(frame, area, "List", region(app) == Region::List);
     let shown = app.shown(app.filter);
     // The briefings' tab heads its answered briefings with a line that
     // says how many there are, and how many no agent has picked up yet,
@@ -667,8 +1526,18 @@ fn follow_up(case: &Case) -> Option<(&Answer, Vec<&str>)> {
     (!notes.is_empty()).then_some((answer, notes))
 }
 
-fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_case(frame: &mut Frame, app: &mut App, area: Rect, verbs: &[Verb], buttons: Option<Flow>) {
     app.hits.push((area, Hit::Case));
+    draw_title(
+        frame,
+        Rect {
+            x: area.x.saturating_add(1),
+            width: area.width.saturating_sub(1),
+            ..area
+        },
+        "Case",
+        region(app) == Region::Case,
+    );
     let inner = inset(area, 2, 1);
     // The form or the message, fixed at the bottom of the pane.
     let selected = app.selected_case().map(|(key, _)| *key);
@@ -677,8 +1546,27 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         app.form
             .as_ref()
-            .filter(|form| Some(form.key) == selected)
+            .filter(|form| Some(form.key) == selected && form.act != Act::Answer)
             .map(form_paras)
+    };
+    let buttons = buttons.filter(|_| panel.is_none());
+    let inner = match buttons {
+        Some(buttons) => {
+            let case_area = scroll_area(app, verbs, inner, Some(&buttons));
+            let tall = u16::try_from(buttons.0.len()).unwrap_or(u16::MAX);
+            // A row under the case, then the buttons; under them, the gap
+            // above the footer, when [`scroll_area`] left room for it.
+            let buttons_area = Rect {
+                y: case_area.bottom().saturating_add(1),
+                height: tall,
+                ..inner
+            }
+            .intersection(inner);
+            let hits = draw_flow(frame, buttons, buttons_area);
+            app.hits.extend(hits);
+            case_area
+        }
+        None => inner,
     };
     let inner = match panel {
         Some(paras) => {
@@ -718,11 +1606,49 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
-    let paras = case_paras(app, *key, case);
-    let (lines, hits) = wrap::wrap_hits(paras, usize::from(inner.width));
+    let mut paras = case_paras_in(app, *key, case, usize::from(inner.width));
+    // The title and the meta stay at the top, with the bar under them, and
+    // the rest scrolls; on a pane with no room for that and some of the
+    // rest, the bar and then the title give way, as [`case_fit`] says.
+    let (bar, fixed) = case_fit(app, verbs, inner);
+    let rest = if fixed {
+        paras.split_off(2.min(paras.len()))
+    } else {
+        std::mem::take(&mut paras)
+    };
+    let head = wrap::wrap(paras, usize::from(inner.width));
+    let tall = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    let [head_area, bar_area, inner] = Layout::vertical([
+        Constraint::Length(tall(head.len())),
+        // The bar, and a row under it.
+        Constraint::Length(bar.as_ref().map_or(0, |(lines, _)| tall(lines.len() + 1))),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    frame.render_widget(Paragraph::new(head), head_area);
+    if let Some(bar) = bar {
+        // A row between the title and the bar, or under the bar.
+        let bar_area = Rect {
+            y: bar_area
+                .y
+                .saturating_add(u16::from(fixed))
+                .min(bar_area.bottom()),
+            ..bar_area
+        };
+        let hits = draw_flow(frame, bar, bar_area);
+        app.hits.extend(hits);
+    }
+    let (lines, hits) = wrap::wrap_hits(rest, usize::from(inner.width));
     let max =
         u16::try_from(lines.len().saturating_sub(usize::from(inner.height))).unwrap_or(u16::MAX);
     app.scroll = app.scroll.min(max);
+    let reveal = app
+        .form
+        .as_mut()
+        .is_some_and(|form| std::mem::take(&mut form.reveal));
+    if reveal && let Some((first, last)) = reveal_lines(app, &hits) {
+        app.scroll = in_sight(app.scroll, inner.height, first, last).min(max);
+    }
     line_hits(app, inner, &hits, usize::from(app.scroll));
     let more = app.scroll < max;
     frame.render_widget(Paragraph::new(lines).scroll((app.scroll, 0)), inner);
@@ -743,6 +1669,12 @@ fn draw_case(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The case as paragraphs (TU-03).
 fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
+    case_paras_in(app, key, case, usize::MAX)
+}
+
+/// The case as paragraphs, to be drawn `width` columns wide: its answer
+/// lays out to fit.
+fn case_paras_in(app: &App, key: Key, case: &Case, width: usize) -> Vec<Para> {
     let dim = Style::new().fg(DIM);
     let mut paras: Vec<Para> = vec![Para::plain(vec![Span::styled(
         case.title().to_string(),
@@ -836,24 +1768,16 @@ fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
         paras.extend(markdown::render(body));
     }
 
-    let picking = app
-        .form
-        .as_ref()
-        .filter(|form| form.key == key)
-        .and_then(|form| form.choice);
-    options_paras(
-        case,
-        follow.map(|(answer, _)| answer.choice),
-        picking,
-        &mut paras,
-    );
+    // An open case's options and left-out items are in its answer's
+    // panel, at its foot, to choose and tick.
+    let answerable = Act::Answer.fits(case);
+    if !answerable {
+        options_paras(case, &mut paras);
+    }
     rows_paras(case, &mut paras);
-    let filing = app
-        .form
-        .as_ref()
-        .filter(|form| form.key == key)
-        .map(|form| form.file.as_slice());
-    left_out_paras(case, filing, &mut paras);
+    if !answerable {
+        left_out_paras(case, &mut paras);
+    }
     if !case.links().is_empty() {
         section(&mut paras, "Links");
         for link in case.links() {
@@ -879,15 +1803,333 @@ fn case_paras(app: &App, key: Key, case: &Case) -> Vec<Para> {
         paras.extend(markdown::render(close.outcome.trim()));
     }
     thread_paras(app, case, &mut paras);
+    if answerable {
+        let fresh;
+        let form = if let Some(form) = app.answer_of(key) {
+            form
+        } else {
+            fresh = Form::new(key, case, Act::Answer);
+            &fresh
+        };
+        let focused = app
+            .form
+            .as_ref()
+            .is_some_and(|f| f.key == key && f.act == Act::Answer);
+        let last = follow.map(|(answer, _)| answer.choice);
+        paras.extend(panel_paras(form, case, focused, last, width));
+    }
     paras
 }
 
-fn options_paras(case: &Case, last_pick: Option<i64>, picking: Option<i64>, paras: &mut Vec<Para>) {
+/// The answer's panel at the foot of an open case (TU-05, TU-12): what
+/// its kind asks for, as radio rows to click, then the note. Its buttons
+/// are kept in sight under the case, by [`panel_chips`]. The part the
+/// keys are on, while they are in the panel, is pointed at.
+fn panel_paras(
+    form: &Form,
+    case: &Case,
+    focused: bool,
+    last: Option<i64>,
+    width: usize,
+) -> Vec<Para> {
+    let dim = Style::new().fg(DIM);
+    let spot = focused.then(|| form.spot());
+    let mut paras = vec![Para::blank()];
+    paras.push(Para::plain(if focused {
+        region_title("YOUR ANSWER", true)
+    } else {
+        vec![Span::styled(
+            " YOUR ANSWER",
+            Style::new().add_modifier(Modifier::BOLD),
+        )]
+    }));
+    // A radio row: pointed at while the keys are on it, its dot filled
+    // while it is chosen.
+    let radio = |here: bool, chosen: bool, label: Vec<Span<'static>>| {
+        let dot = if chosen {
+            Span::styled(
+                "● ",
+                Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled("○ ", dim)
+        };
+        let pointer = Span::styled(if here { "▸ " } else { "  " }, Style::new().fg(ACCENT));
+        Para::hanging(vec![pointer, dot], label)
+    };
+    let on_choices = spot == Some(Spot::Choices);
+    match form.kind {
+        Kind::Decision => {
+            let at = form.choice.or(form.other.then_some(form.options() + 1));
+            for (n, option) in (1i64..).zip(case.options()) {
+                let mut spans = vec![Span::styled(
+                    format!("{n}  "),
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                )];
+                spans.extend(markdown::inline(option));
+                if n == case.recommend() {
+                    spans.push(Span::styled(
+                        "  ★ recommended",
+                        Style::new().fg(Color::Yellow),
+                    ));
+                }
+                if last == Some(n) {
+                    spans.push(Span::styled(
+                        "  your last pick",
+                        Style::new().fg(Color::Green),
+                    ));
+                }
+                let here = on_choices && at.unwrap_or(1) == n;
+                paras.push(radio(here, form.choice == Some(n), spans).on(Hit::Choice(n)));
+            }
+            let other = form.options() + 1;
+            let spans = vec![
+                Span::styled(
+                    format!("{other}  "),
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Other, see note"),
+            ];
+            let here = on_choices && at == Some(other);
+            paras.push(radio(here, form.other, spans).on(Hit::Choice(other)));
+        }
+        Kind::Signoff | Kind::Briefing => {
+            let (picked, marks) = if form.kind == Kind::Signoff {
+                (
+                    form.signoff,
+                    [
+                        ("accept", "accept"),
+                        ("changes", "request changes (note required)"),
+                    ],
+                )
+            } else {
+                (
+                    form.briefing,
+                    [
+                        ("accept", "accept"),
+                        ("send_back", "send back (reason required)"),
+                    ],
+                )
+            };
+            for (n, (mark, label)) in marks.into_iter().enumerate() {
+                let here = on_choices && picked.map_or(n == 0, |p| p == mark);
+                paras.push(
+                    radio(here, picked == Some(mark), vec![Span::raw(label)]).on(Hit::Mark(mark)),
+                );
+            }
+            if form.kind == Kind::Briefing && !form.file.is_empty() {
+                paras.push(Para::plain(vec![Span::styled(
+                    "  file what was left out",
+                    dim,
+                )]));
+                for (at, item) in case.left_out().iter().enumerate() {
+                    let ticked = form.file.get(at).copied().unwrap_or(false);
+                    let here = spot == Some(Spot::Items) && form.item == at;
+                    let tick = if ticked {
+                        Span::styled(
+                            "[x] ",
+                            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        Span::styled("[ ] ", dim)
+                    };
+                    let pointer =
+                        Span::styled(if here { "▸ " } else { "  " }, Style::new().fg(ACCENT));
+                    let mut spans = vec![Span::styled(
+                        format!("{}  ", at + 1),
+                        Style::new().fg(ACCENT),
+                    )];
+                    spans.extend(markdown::inline(item));
+                    paras.push(Para::hanging(vec![pointer, tick], spans).on(Hit::LeftOut(at)));
+                }
+            }
+        }
+        Kind::Approval => {
+            for (at, (row, case_row)) in form.rows.iter().zip(case.rows()).enumerate() {
+                let here = spot == Some(Spot::Rows) && at == form.row;
+                let pointer = Span::styled(if here { "▸ " } else { "  " }, Style::new().fg(ACCENT));
+                paras.push(
+                    Para::hanging(
+                        vec![
+                            pointer,
+                            Span::styled(
+                                format!("{} ", row.id),
+                                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                            ),
+                        ],
+                        vec![Span::raw(case_row.label.clone())],
+                    )
+                    .on(Hit::ApprovalRow(at)),
+                );
+                let cells = verdict_cells(row.human);
+                // On a pane too narrow for the verdicts on one line, one
+                // to a line, so that each is where a click picks it.
+                let one_line = cells
+                    .last()
+                    .is_some_and(|(x, wide, _)| usize::from(x + wide) <= width);
+                let mut spans = vec![Span::raw("     ")];
+                for (n, (_, _, verdict)) in cells.into_iter().enumerate() {
+                    if n > 0 && one_line {
+                        spans.push(Span::raw("  "));
+                    }
+                    let chosen = row.verdict == Some(verdict);
+                    spans.push(if chosen {
+                        Span::styled(
+                            "● ",
+                            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        Span::styled("○ ", dim)
+                    });
+                    let word = verdict_word(verdict, row.human).to_string();
+                    spans.push(if chosen {
+                        Span::styled(word, Style::new().add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::raw(word)
+                    });
+                    if !one_line {
+                        let line = std::mem::replace(&mut spans, vec![Span::raw("     ")]);
+                        paras.push(Para::plain(line).on(Hit::Verdict(at, verdict)));
+                    }
+                }
+                if one_line {
+                    paras.push(Para::plain(spans).on(Hit::Verdicts(at, row.human)));
+                }
+                let editing = focused && form.being_edited() == Some(Which::Row(at));
+                if editing || !row.note.text().is_empty() {
+                    paras.extend(on(
+                        field_paras("  note", &row.note, editing),
+                        Hit::Field(Which::Row(at)),
+                    ));
+                }
+            }
+        }
+        Kind::Question | Kind::Stuck => {
+            let label = if form.kind == Kind::Question {
+                "reply"
+            } else {
+                "guidance"
+            };
+            let editing = focused && form.being_edited() == Some(Which::Text);
+            let here = spot == Some(Spot::Field(Which::Text));
+            let hint = if form.kind == Kind::Question {
+                "press i to write your reply"
+            } else {
+                "press i to write your guidance"
+            };
+            paras.extend(on(
+                textarea_paras(label, &form.text, editing, here, hint, width),
+                Hit::Field(Which::Text),
+            ));
+        }
+        _ => {}
+    }
+    let note = match (form.kind, form.briefing) {
+        (Kind::Briefing, Some("send_back")) => "reason",
+        (Kind::Signoff, _) => "comment",
+        _ => "note",
+    };
+    let editing = focused && form.being_edited() == Some(Which::Note);
+    let here = spot == Some(Spot::Field(Which::Note));
+    let hint = format!("press n to add a {note}");
+    paras.extend(on(
+        textarea_paras(note, &form.note, editing, here, &hint, width),
+        Hit::Field(Which::Note),
+    ));
+    paras
+}
+
+/// The answer's panel's buttons, kept in sight at the foot of the case
+/// pane under an open case, `width` wide; none while a park's or a
+/// withdraw's form or a message is there.
+fn panel_buttons(app: &App, width: u16) -> Option<Flow> {
+    if app.modal() {
+        return None;
+    }
+    let (key, case) = app
+        .selected_case()
+        .filter(|(_, case)| Act::Answer.fits(case))?;
+    let key = *key;
+    let focused = app
+        .form
+        .as_ref()
+        .filter(|f| f.key == key && f.act == Act::Answer);
+    let touched = app.answer_of(key).is_some_and(Form::touched);
+    let presses = Press::of(case.kind(), touched);
+    Some(flow(
+        panel_chips(app, case.kind(), &presses, focused),
+        width,
+        " ",
+        " ",
+    ))
+}
+
+/// The part of the case pane's `inner` area the case scrolls in, above
+/// the answer's panel's `buttons`, when they are drawn, and a row between
+/// it and them. A row under the buttons keeps them apart from the
+/// footer's keys, unless the case would lose its bar, its title held over
+/// it, or [`MIN_BODY`] rows for it: the gap gives way first.
+fn scroll_area(app: &App, verbs: &[Verb], inner: Rect, buttons: Option<&Flow>) -> Rect {
+    let Some((lines, _)) = buttons else {
+        return inner;
+    };
+    let tall = u16::try_from(lines.len() + 1).unwrap_or(u16::MAX);
+    let above = |rows: u16| Rect {
+        height: inner.height.saturating_sub(rows),
+        ..inner
+    };
+    let fit = |area: Rect| {
+        let (bar, fixed) = case_fit(app, verbs, area);
+        (bar.is_some(), fixed)
+    };
+    let snug = above(tall);
+    let spaced = above(tall.saturating_add(1));
+    if spaced.height >= MIN_BODY && fit(spaced) == fit(snug) {
+        spaced
+    } else {
+        snug
+    }
+}
+
+/// The answer's panel's buttons for a case of `kind`, each lit while the
+/// pointer is on it, or the keys of the `focused` form: send, which an fyi
+/// calls acknowledge, park on a stuck case, drop, and discard.
+fn panel_chips(app: &App, kind: Kind, presses: &[Press], focused: Option<&Form>) -> Vec<Chip> {
+    presses
+        .iter()
+        .copied()
+        .map(|press| {
+            let button = match press {
+                Press::Send if kind == Kind::Fyi => {
+                    Button::new("Acknowledge", Some(Hit::Press(press)))
+                        .key("⏎")
+                        .look(Look::Primary)
+                }
+                Press::Send => Button::new("Send", Some(Hit::Press(press)))
+                    .key("⏎")
+                    .look(Look::Primary),
+                Press::Park => Button::new("Park", Some(Hit::Press(press))),
+                Press::Drop => Button::new("Drop", Some(Hit::Press(press))).key("d"),
+                Press::Discard => Button::new("Discard", Some(Hit::Press(press))),
+            };
+            let here = focused.is_some_and(|f| f.spot() == Spot::Button(press));
+            Chip {
+                spans: button.spans_at(button.lit(app), here),
+                bar: false,
+                hit: button.hit,
+            }
+        })
+        .collect()
+}
+
+/// A decision's options, once it is no longer open: the one chosen
+/// marked. An open case has them in its answer, to choose.
+fn options_paras(case: &Case, paras: &mut Vec<Para>) {
     if case.options().is_empty() {
         return;
     }
     section(paras, "Options");
-    let chosen = picking.or_else(|| case.answer().map(|a| a.choice));
+    let chosen = case.answer().map(|a| a.choice);
     for (n, option) in (1i64..).zip(case.options()) {
         let number = if chosen == Some(n) {
             Style::new()
@@ -904,58 +2146,31 @@ fn options_paras(case: &Case, last_pick: Option<i64>, picking: Option<i64>, para
                 Style::new().fg(Color::Yellow),
             ));
         }
-        if last_pick == Some(n) {
-            spans.push(Span::styled(
-                "  your last pick",
-                Style::new().fg(Color::Green),
-            ));
-        }
-        let para = Para::hanging(
+        paras.push(Para::hanging(
             vec![Span::styled(format!(" {n} "), number), Span::raw(" ")],
             spans,
-        );
-        // Only an answerable case's options open its answer (TU-12).
-        paras.push(if Act::Answer.fits(case) {
-            para.on(Hit::Choice(n))
-        } else {
-            para
-        });
+        ));
     }
 }
 
-/// A briefing's left-out items, numbered as an answer files them, each
-/// marked while the form on this case ticks it to file (IN-14).
-fn left_out_paras(case: &Case, filing: Option<&[bool]>, paras: &mut Vec<Para>) {
+/// A briefing's left-out items, numbered as an answer files them, once it
+/// is no longer open (IN-14). An open one has them in its answer, to tick.
+fn left_out_paras(case: &Case, paras: &mut Vec<Para>) {
     if case.left_out().is_empty() {
         return;
     }
     section(paras, "Left out");
     for (at, item) in case.left_out().iter().enumerate() {
-        let ticked = filing.is_some_and(|file| file.get(at).copied().unwrap_or(false));
-        let number = if ticked {
-            Style::new()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        };
-        let mut spans = markdown::inline(item);
-        if ticked {
-            spans.push(Span::styled("  to file", Style::new().fg(Color::Green)));
-        }
-        let para = Para::hanging(
+        paras.push(Para::hanging(
             vec![
-                Span::styled(format!(" {} ", at + 1), number),
+                Span::styled(
+                    format!(" {} ", at + 1),
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
             ],
-            spans,
-        );
-        paras.push(if Act::Answer.fits(case) {
-            para.on(Hit::LeftOut(at))
-        } else {
-            para
-        });
+            markdown::inline(item),
+        ));
     }
 }
 
@@ -1134,9 +2349,6 @@ fn form_paras(form: &Form) -> Vec<Para> {
         heading,
         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
     )])];
-    if form.act == Act::Answer {
-        paras.extend(answer_part_paras(form));
-    }
     let note = match form.act {
         // Sending a briefing back gives the reason in the note.
         Act::Answer if form.briefing == Some("send_back") => "reason",
@@ -1148,151 +2360,7 @@ fn form_paras(form: &Form) -> Vec<Para> {
         field_paras(note, &form.note, form.being_edited() == Some(Which::Note)),
         Hit::Field(Which::Note),
     ));
-    if let Some(confirm) = form.confirm {
-        paras.push(confirm_para(form, confirm));
-    }
     paras
-}
-
-/// A line of the form: its label, then what it holds.
-fn form_line(label: &str, spans: Vec<Span<'static>>) -> Para {
-    Para::hanging(
-        vec![Span::styled(format!("{label:<9}"), Style::new().fg(DIM))],
-        spans,
-    )
-}
-
-/// The part of an answer its kind asks for, above the note.
-fn answer_part_paras(form: &Form) -> Vec<Para> {
-    let dim = Style::new().fg(DIM);
-    let chosen = Style::new().fg(Color::Green).add_modifier(Modifier::BOLD);
-    match form.kind {
-        cases_core::Kind::Decision => {
-            let pick = match (form.choice, form.other) {
-                (Some(n), _) => Span::styled(format!("option {n}"), chosen),
-                (None, true) => Span::styled("other, see the note", chosen),
-                (None, false) => Span::styled("none yet: a number to choose, o for other", dim),
-            };
-            vec![form_line("choice", vec![pick])]
-        }
-        cases_core::Kind::Signoff => {
-            let pick = match form.signoff {
-                Some("accept") => Span::styled("accept", chosen),
-                Some(_) => Span::styled("ask for changes, see the note", chosen),
-                None => Span::styled("none yet: y to accept, c to ask for changes", dim),
-            };
-            vec![form_line("signoff", vec![pick])]
-        }
-        cases_core::Kind::Briefing => {
-            let pick = match form.briefing {
-                Some("accept") => Span::styled("accept", chosen),
-                Some(_) => Span::styled("send back, with the reason below", chosen),
-                None => Span::styled("none yet: y to accept, s to send back", dim),
-            };
-            let mut paras = vec![form_line("briefing", vec![pick])];
-            if !form.file.is_empty() {
-                let ticked: Vec<String> = (1..)
-                    .zip(&form.file)
-                    .filter(|(_, tick)| **tick)
-                    .map(|(n, _)| n.to_string())
-                    .collect();
-                let file = if ticked.is_empty() {
-                    Span::styled("nothing yet: a number ticks a left-out item", dim)
-                } else {
-                    Span::styled(ticked.join(", "), chosen)
-                };
-                paras.push(form_line("file", vec![file]));
-            }
-            paras
-        }
-        cases_core::Kind::Fyi => vec![form_line(
-            "answer",
-            vec![Span::styled(
-                "acknowledge",
-                Style::new().add_modifier(Modifier::BOLD),
-            )],
-        )],
-        cases_core::Kind::Approval => approval_paras(form),
-        cases_core::Kind::Question => on(
-            field_paras("reply", &form.text, form.editing == Some(Which::Text)),
-            Hit::Field(Which::Text),
-        ),
-        cases_core::Kind::Stuck => on(
-            field_paras("guidance", &form.text, form.editing == Some(Which::Text)),
-            Hit::Field(Which::Text),
-        ),
-        _ => Vec::new(),
-    }
-}
-
-/// An approval's rows, each with its verdict, the one the keys act on
-/// pointed at, and its note while it has one or is being typed.
-fn approval_paras(form: &Form) -> Vec<Para> {
-    let mut paras = Vec::new();
-    for (at, row) in form.rows.iter().enumerate() {
-        let here = at == form.row;
-        let pointer = if here { "▸ " } else { "  " };
-        let id_style = if here {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(ACCENT)
-        };
-        paras.push(
-            Para::hanging(
-                vec![
-                    Span::styled(pointer, Style::new().fg(ACCENT)),
-                    Span::styled(format!("{:<7}", row.id), id_style),
-                ],
-                vec![row_verdict(row)],
-            )
-            .on(Hit::ApprovalRow(at)),
-        );
-        let editing = form.being_edited() == Some(Which::Row(at));
-        if editing || !row.note.text().is_empty() {
-            paras.extend(on(
-                field_paras("  note", &row.note, editing),
-                Hit::Field(Which::Row(at)),
-            ));
-        }
-    }
-    paras
-}
-
-/// A row's verdict as the form holds it: approve and reject in the words
-/// for who carries the step out, any other verdict as it is.
-fn row_verdict(row: &RowPick) -> Span<'static> {
-    let word = |verdict| verdict_word(verdict, row.human);
-    match row.verdict {
-        Some("approve") => Span::styled(
-            word("approve"),
-            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
-        ),
-        Some("reject") => Span::styled(
-            word("reject"),
-            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Some(other) => Span::styled(
-            other,
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
-        None => Span::styled("no verdict yet", Style::new().fg(DIM)),
-    }
-}
-
-/// The question the form asks before it goes on.
-fn confirm_para(form: &Form, confirm: Confirm) -> Para {
-    let ask = match confirm {
-        Confirm::Drop => format!("Drop {}? The agent stops the work.", form.key),
-        Confirm::Withdraw => format!("Withdraw {} from its agent?", form.key),
-        Confirm::Discard => "Throw away what you typed?".into(),
-    };
-    Para::plain(vec![
-        Span::styled(
-            ask,
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  y yes, any other key no", Style::new().fg(DIM)),
-    ])
 }
 
 /// The message being written (TU-07): who it is to, with the sessions
@@ -1373,15 +2441,6 @@ fn compose_paras(compose: &Compose, listeners: &[Listening]) -> Vec<Para> {
         &compose.body,
         compose.part == Some(Part::Body),
     ));
-    if compose.confirm {
-        paras.push(Para::plain(vec![
-            Span::styled(
-                "Throw away what you typed?",
-                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  y yes, any other key no", dim),
-        ]));
-    }
     paras
 }
 
@@ -1410,18 +2469,7 @@ fn field_paras(label: &str, field: &Field, editing: bool) -> Vec<Para> {
     let mut at = 0;
     for (n, line) in text.split('\n').enumerate() {
         let len = line.chars().count();
-        let mut spans = Vec::new();
-        if editing && (at..=at + len).contains(&field.cursor()) {
-            let split = field.cursor() - at;
-            let before: String = line.chars().take(split).collect();
-            let mut rest = line.chars().skip(split);
-            let under = rest.next().map_or(" ".to_string(), String::from);
-            spans.push(Span::raw(before));
-            spans.push(Span::styled(under, cursor));
-            spans.push(Span::raw(rest.collect::<String>()));
-        } else {
-            spans.push(Span::raw(line.to_string()));
-        }
+        let spans = field_line(line, at, field.cursor(), editing.then_some(cursor));
         let first = if n == 0 {
             format!("{label:<9}")
         } else {
@@ -1433,88 +2481,344 @@ fn field_paras(label: &str, field: &Field, editing: bool) -> Vec<Para> {
     paras
 }
 
-/// The footer: the keys, over as many lines as `width` needs, each where a
-/// click presses it (TU-12); or a line the screen says, wrapped.
-fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
+/// One line of a field, which starts at `at` in its text, with the
+/// cursor drawn in `cursor`'s style when it is given and on the line.
+fn field_line(
+    line: &str,
+    at: usize,
+    at_cursor: usize,
+    cursor: Option<Style>,
+) -> Vec<Span<'static>> {
+    let len = line.chars().count();
+    match cursor {
+        Some(style) if (at..=at + len).contains(&at_cursor) => {
+            let split = at_cursor - at;
+            let before: String = line.chars().take(split).collect();
+            let mut rest = line.chars().skip(split);
+            let under = rest.next().map_or(" ".to_string(), String::from);
+            vec![
+                Span::raw(before),
+                Span::styled(under, style),
+                Span::raw(rest.collect::<String>()),
+            ]
+        }
+        _ => vec![Span::raw(line.to_string())],
+    }
+}
+
+/// The widest a field of the answer's panel is drawn, borders and all.
+const TEXTAREA_MAX: usize = 100;
+/// The fewest lines inside a field of the answer's panel, so that it
+/// reads as a box to write in.
+const TEXTAREA_ROWS: usize = 3;
+
+/// A field of the answer's panel, drawn as a box to write in, `width`
+/// wide at most: its label in the top border, a `hint` of the key that
+/// writes in it while it is empty, the cursor while it has the keys, and
+/// pointed at, as an option is, while the keys are on it.
+fn textarea_paras(
+    label: &str,
+    field: &Field,
+    editing: bool,
+    here: bool,
+    hint: &str,
+    width: usize,
+) -> Vec<Para> {
+    let pointer = |first: bool| {
+        Span::styled(
+            if here && first { "▸ " } else { "  " },
+            Style::new().fg(ACCENT),
+        )
+    };
+    let total = width.min(TEXTAREA_MAX);
+    // Two for the pointer, four for the borders and their padding.
+    let Some(inner) = total.checked_sub(6).filter(|inner| *inner >= 8) else {
+        return field_paras(label, field, editing);
+    };
+    let edge = if editing || here {
+        Style::new().fg(ACCENT)
+    } else {
+        Style::new().fg(Color::Gray)
+    };
+    let title = if editing {
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let text = field.text();
+    let mut body: Vec<Line<'static>> = if text.is_empty() && !editing {
+        vec![Line::from(Span::styled(
+            hint.to_string(),
+            Style::new().fg(DIM).add_modifier(Modifier::ITALIC),
+        ))]
+    } else {
+        let cursor = Style::new().add_modifier(Modifier::REVERSED);
+        let mut at = 0;
+        let lines = text.split('\n').map(|line| {
+            let spans = field_line(line, at, field.cursor(), editing.then_some(cursor));
+            at += line.chars().count() + 1;
+            Para::plain(spans)
+        });
+        wrap::wrap(lines.collect(), inner)
+    };
+    body.resize_with(body.len().max(TEXTAREA_ROWS), Line::default);
+    let rule = "─".repeat(inner.saturating_sub(label.chars().count() + 1));
+    let mut paras = vec![Para::plain(vec![
+        pointer(true),
+        Span::styled("╭─ ", edge),
+        Span::styled(label.to_string(), title),
+        Span::styled(format!(" {rule}╮"), edge),
+    ])];
+    for line in body {
+        let pad = inner.saturating_sub(line.width());
+        let mut spans = vec![pointer(false), Span::styled("│ ", edge)];
+        spans.extend(line.spans);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(" │", edge));
+        paras.push(Para::plain(spans));
+    }
+    paras.push(Para::plain(vec![
+        pointer(false),
+        Span::styled(format!("╰{}╯", "─".repeat(inner + 2)), edge),
+    ]));
+    paras
+}
+
+/// The footer: the keys, over as many lines as `width` needs, each a
+/// button a click presses (TU-12); or a line the screen says, wrapped.
+fn footer_lines(app: &App, verbs: &[Verb], width: u16, side_by_side: bool, bar: bool) -> Flow {
     let said = |text: String, style: Style| {
         let para = Para::hanging(vec![Span::raw(" ")], vec![Span::styled(text, style)]);
         (wrap::wrap(vec![para], usize::from(width)), Vec::new())
     };
-    if app.confirm_quit {
-        return said(
-            "Quit and throw away what you typed? y yes, any other key no".into(),
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        );
-    }
-    if let Some((text, _)) = &app.flash {
-        return said(text.clone(), Style::new().fg(Color::Yellow));
+    // The question is in a dialog, with its buttons: the keys under it
+    // would only answer no.
+    if app.asking() {
+        return said("y yes, any other key no".into(), Style::new().fg(DIM));
     }
     if let Some(line) = app.sending_line() {
         return said(line, Style::new().fg(Color::Yellow));
     }
-    let form_keys;
-    let keys: &[(&str, &str)] = if let Some(form) = &app.form {
-        form_keys = keys_for(form);
-        &form_keys
+    // The keys that have a button on the screen are left to it: an answer
+    // and a park in the case's bar, a message at the right of the tabs. An
+    // answer is still offered when no button for it is drawn, as on a
+    // narrow screen showing the list.
+    let answer_shown = bar && verbs.contains(&Verb::Answer);
+    let park_shown = bar && verbs.contains(&Verb::Park);
+    let buttoned = |chip: &(&str, &str)| {
+        (chip.0 == "a" && answer_shown)
+            || (chip.0 == "p" && park_shown)
+            || (chip.0 == "m" && app.only.is_none())
+    };
+    let open = app.form.is_some() || app.compose.is_some();
+    let mut keys: Vec<(&str, &str)> = if let Some(form) = &app.form {
+        keys_for(form, app.newline == Newline::ShiftEnter)
     } else if let Some(compose) = &app.compose {
-        form_keys = compose_keys(compose);
-        &form_keys
-    } else if app.only.is_some() {
-        // A stuck case can be parked too, which ends the screen (TU-11).
-        let park = app
-            .selected_case()
-            .is_some_and(|(_, case)| Act::Park.fits(case));
-        form_keys = [("j/k", "scroll"), ("a", "answer")]
-            .into_iter()
-            .chain(park.then_some(("p", "park")))
-            .chain([("?", "keys"), ("q", "quit")])
-            .collect();
-        &form_keys
+        compose_keys(compose)
     } else {
-        match (app.focus, side_by_side) {
-            (Focus::List, true) => &[
-                ("j/k", "move"),
-                ("a", "answer"),
-                ("m", "message"),
-                ("tab", "filter"),
-                ("s", "stats"),
-                ("?", "keys"),
-                ("q", "quit"),
-            ],
+        // An answer to give comes first: its keys, from anywhere (TU-12).
+        let mut keys = app
+            .selected_case()
+            .filter(|(_, case)| Act::Answer.fits(case))
+            .map_or_default(|(_, case)| answer_keys(case));
+        let rest: &[(&str, &str)] = match (app.focus, side_by_side) {
+            // A stuck case can be parked too, which ends the screen
+            // (TU-11).
+            _ if app.only.is_some() => &[("j/k", "scroll"), ("p", "park")],
+            (Focus::List, true) => &[("j/k", "move"), ("m", "message"), ("[ ]", "filter")],
             (Focus::List, false) => &[
                 ("j/k", "move"),
-                ("⏎", "read"),
-                ("a", "answer"),
+                ("→", "read"),
                 ("m", "message"),
-                ("tab", "filter"),
-                ("s", "stats"),
-                ("?", "keys"),
-                ("q", "quit"),
+                ("[ ]", "filter"),
             ],
-            (Focus::Case, _) => &[
-                ("j/k", "scroll"),
-                ("a", "answer"),
-                ("esc", "back"),
-                ("s", "stats"),
-                ("?", "keys"),
-                ("q", "quit"),
-            ],
-        }
+            (Focus::Case, _) => &[("j/k", "scroll"), ("esc", "back")],
+            (Focus::Bar(_), _) => &[("⏎", "press"), ("esc", "back")],
+        };
+        keys.extend(rest);
+        let parks = app
+            .selected_case()
+            .is_some_and(|(_, case)| Act::Park.fits(case));
+        keys.retain(|key| *key != ("p", "park") || parks);
+        keys.extend([
+            ("s", "stats"),
+            ("^k", "commands"),
+            ("?", "keys"),
+            ("q", "quit"),
+        ]);
+        keys
     };
+    // One case's screen has no strip.
+    if app.only.is_some() {
+        keys.retain(|key| *key != ("s", "stats"));
+    }
+    let keys = &keys;
     // s does nothing on a screen with no room for the strip: not offered.
+    let lead = focus_line(app, verbs).map(|text| Chip {
+        spans: vec![Span::styled(
+            text,
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )],
+        bar: false,
+        hit: None,
+    });
+    let after_lead = lead.is_some();
     let chips = keys
         .iter()
         .filter(|chip| app.strip.room || **chip != ("s", "stats"))
-        .map(|(key, what)| Chip {
-            spans: vec![
-                Span::styled(*key, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" {what}"), Style::new().fg(DIM)),
-            ],
-            bar: false,
-            hit: pressed(key).map(Hit::Key),
-        })
-        .collect();
-    flow(chips, width, "   ", "  ")
+        .filter(|chip| open || !buttoned(chip))
+        .enumerate()
+        .map(|(n, (key, what))| {
+            let look = if *what == "send" {
+                Look::Primary
+            } else {
+                Look::Plain
+            };
+            let button = Button::new(what, pressed(key).map(Hit::Key))
+                .key(key)
+                .look(look);
+            Chip {
+                spans: button.spans(button.lit(app)),
+                bar: n == 0 && after_lead,
+                hit: button.hit,
+            }
+        });
+    flow(lead.into_iter().chain(chips).collect(), width, " ", " ")
+}
+
+/// The keys that answer `case` from the list or the case, before the
+/// rest (TU-12): a number for an option, an answer or a row, n for the
+/// note, and enter into the answer.
+fn answer_keys(case: &Case) -> Vec<(&'static str, &'static str)> {
+    let mut keys = match case.kind() {
+        // Other is the number after the last option.
+        Kind::Decision => vec![(numbers(case.options().len() + 1), "choose")],
+        Kind::Signoff => vec![("1", "accept"), ("2", "changes")],
+        Kind::Briefing => vec![("1", "accept"), ("2", "send back")],
+        Kind::Approval if !case.rows().is_empty() => {
+            let human = case.rows().first().is_some_and(|row| row.by == "human");
+            vec![
+                ("1", verdict_word("approve", human)),
+                ("2", "hold"),
+                ("3", verdict_word("reject", human)),
+            ]
+        }
+        _ => Vec::new(),
+    };
+    keys.extend([("n", "note"), ("⏎", "answer")]);
+    keys
+}
+
+/// The numbers from 1 to `n`, as far as 9, as the footer names them.
+fn numbers(n: usize) -> &'static str {
+    const NUMBERS: [&str; 9] = ["1", "1-2", "1-3", "1-4", "1-5", "1-6", "1-7", "1-8", "1-9"];
+    NUMBERS[n.clamp(1, 9) - 1]
+}
+
+/// Where the keys are, and where tab takes them next, as the footer leads
+/// with it (TU-12): "on: option 2 · tab → note". None while a park's or a
+/// withdraw's form, or a message, has them.
+fn focus_line(app: &App, verbs: &[Verb]) -> Option<String> {
+    let home = if app.only.is_some() { "case" } else { "list" };
+    let (here, next) = match &app.form {
+        Some(form) if form.act == Act::Answer => {
+            let spot = form.spot();
+            let parts = form.parts();
+            // The buttons are one stop, which tab reaches at send.
+            let stop = match spot {
+                Spot::Button(_) => Spot::Button(Press::Send),
+                spot => spot,
+            };
+            let next = parts
+                .iter()
+                .position(|part| *part == stop)
+                .and_then(|at| parts.get(at + 1))
+                .map(|part| part_name(form, *part));
+            let here = match spot {
+                Spot::Button(_) => format!("{} · ←→ buttons", spot_name(form, spot)),
+                _ => spot_name(form, spot),
+            };
+            (here, Some(next.unwrap_or_else(|| home.into())))
+        }
+        Some(_) => return None,
+        None if app.compose.is_some() => return None,
+        None => match app.focus {
+            // The bar is one stop: tab leaves it.
+            Focus::Bar(verb) => (format!("{} · ←→ buttons", verb.label()), Some(home.into())),
+            focus => {
+                let here = if focus == Focus::List { "list" } else { "case" };
+                let first = app.selected_case().and_then(|(key, case)| {
+                    if !Act::Answer.fits(case) {
+                        return (!verbs.is_empty()).then(|| "buttons".into());
+                    }
+                    let fresh;
+                    let form = if let Some(form) = app.answer_of(*key) {
+                        form
+                    } else {
+                        fresh = Form::new(*key, case, Act::Answer);
+                        &fresh
+                    };
+                    form.parts().first().map(|part| part_name(form, *part))
+                });
+                (here.into(), first)
+            }
+        },
+    };
+    Some(match next {
+        Some(next) => format!("on: {here} · tab → {next}"),
+        None => format!("on: {here}"),
+    })
+}
+
+/// A part of the answer as tab reaches it: its choices, rows or items as
+/// a whole, or else as [`spot_name`] names it.
+fn part_name(form: &Form, spot: Spot) -> String {
+    match spot {
+        Spot::Choices if form.kind == Kind::Decision => "options".into(),
+        Spot::Choices => "answers".into(),
+        Spot::Rows => "rows".into(),
+        Spot::Items => "items".into(),
+        Spot::Button(_) => "buttons".into(),
+        Spot::Field(_) => spot_name(form, spot),
+    }
+}
+
+/// The part of the answer the keys are on, as the footer names it: the
+/// option, answer, row or item pointed at, the field, or the button.
+fn spot_name(form: &Form, spot: Spot) -> String {
+    let row = |at: usize| form.rows.get(at).map_or("", |row| row.id.as_str());
+    match spot {
+        Spot::Choices if form.kind == Kind::Decision => {
+            let n = pointed_choice(form);
+            if n > form.options() {
+                "other".into()
+            } else {
+                format!("option {n}")
+            }
+        }
+        Spot::Choices => match pointed_mark(form) {
+            "send_back" => "send back".into(),
+            mark => mark.into(),
+        },
+        Spot::Rows => match form.being_edited() {
+            Some(Which::Row(at)) => format!("row {}'s note", row(at)),
+            _ => format!("row {}", row(form.row)),
+        },
+        Spot::Items => format!("item {}", form.item + 1),
+        Spot::Field(Which::Text) if form.kind == Kind::Stuck => "guidance".into(),
+        Spot::Field(Which::Text) => "reply".into(),
+        Spot::Field(Which::Row(at)) => format!("row {}'s note", row(at)),
+        Spot::Field(Which::Note) => match (form.kind, form.briefing) {
+            (Kind::Briefing, Some("send_back")) => "reason".into(),
+            (Kind::Signoff, _) => "comment".into(),
+            _ => "note".into(),
+        },
+        Spot::Button(Press::Send) if form.kind == Kind::Fyi => "Acknowledge".into(),
+        Spot::Button(Press::Send) => "Send".into(),
+        Spot::Button(Press::Park) => "Park".into(),
+        Spot::Button(Press::Drop) => "Drop".into(),
+        Spot::Button(Press::Discard) => "Discard".into(),
+    }
 }
 
 /// The key a footer's label names, for a click on it to press; none for a
@@ -1522,10 +2826,12 @@ fn footer_lines(app: &App, width: u16, side_by_side: bool) -> Flow {
 fn pressed(label: &str) -> Option<KeyEvent> {
     let (code, modifiers) = match label {
         "⏎" => (KeyCode::Enter, KeyModifiers::NONE),
+        "→" => (KeyCode::Right, KeyModifiers::NONE),
         "esc" => (KeyCode::Esc, KeyModifiers::NONE),
         "tab" => (KeyCode::Tab, KeyModifiers::NONE),
         "^s" => (KeyCode::Char('s'), KeyModifiers::CONTROL),
         "^e" => (KeyCode::Char('e'), KeyModifiers::CONTROL),
+        "^k" => (KeyCode::Char('k'), KeyModifiers::CONTROL),
         _ => {
             let mut chars = label.chars();
             match (chars.next(), chars.next()) {
@@ -1539,9 +2845,6 @@ fn pressed(label: &str) -> Option<KeyEvent> {
 
 /// The keys the footer shows while a message is being written.
 fn compose_keys(compose: &Compose) -> Vec<(&'static str, &'static str)> {
-    if compose.confirm {
-        return vec![("y", "yes"), ("any key", "no")];
-    }
     match compose.part {
         Some(Part::Body) => vec![
             ("esc", "leave the field"),
@@ -1569,108 +2872,144 @@ fn compose_keys(compose: &Compose) -> Vec<(&'static str, &'static str)> {
     }
 }
 
-/// The keys the footer shows while a form is open.
-fn keys_for(form: &Form) -> Vec<(&'static str, &'static str)> {
-    if form.confirm.is_some() {
-        return vec![("y", "yes"), ("any key", "no")];
-    }
+/// The keys the footer shows while a form is open, with the key for a
+/// new line in a field: shift+enter where the terminal tells it from
+/// enter, and alt+enter where it does not.
+fn keys_for(form: &Form, shift_enter: bool) -> Vec<(&'static str, &'static str)> {
+    let line = if shift_enter { "⇧⏎" } else { "alt+⏎" };
     if form.editing.is_some() {
         return vec![
-            ("esc", "leave the field"),
-            ("^s", "send"),
+            ("⏎", "send"),
+            (line, "new line"),
             ("^e", "editor"),
-            ("⏎", "new line"),
+            ("esc", "leave the field"),
         ];
     }
+    if form.act == Act::Answer {
+        return panel_keys(form);
+    }
+    vec![("n", "edit"), ("⏎", "send"), ("esc", "cancel")]
+}
+
+/// The keys the footer shows while the answer's panel has them, out of a
+/// field (TU-05): its kind's, enter to send or press the button the keys
+/// are on, n for the note, those of the part the keys are on, and esc to
+/// leave it. Where tab goes leads the footer.
+fn panel_keys(form: &Form) -> Vec<(&'static str, &'static str)> {
+    let spot = form.spot();
     let mut keys = Vec::new();
-    match (form.act, form.kind) {
-        (Act::Answer, cases_core::Kind::Decision) => {
-            keys.extend([("1-9", "choose"), ("o", "other")]);
-        }
-        (Act::Answer, cases_core::Kind::Signoff) => {
-            keys.extend([("y", "accept"), ("c", "changes")]);
-        }
-        (Act::Answer, cases_core::Kind::Briefing) => {
-            keys.extend([("y", "accept"), ("s", "send back")]);
+    match form.kind {
+        Kind::Decision => keys.extend([
+            (
+                numbers(usize::try_from(form.options()).unwrap_or(9) + 1),
+                "choose",
+            ),
+            ("o", "other"),
+        ]),
+        Kind::Signoff => keys.extend([("1", "accept"), ("2", "changes")]),
+        Kind::Briefing if spot == Spot::Items => {
+            keys.extend([("j/k", "move"), ("space", "file")]);
             match form.file.len() {
                 0 => {}
-                1..=9 => keys.push(("1-9", "file")),
+                1..=9 => keys.push((numbers(form.file.len()), "file")),
                 _ => keys.push(("1-9 0", "file")),
             }
         }
+        Kind::Briefing => keys.extend([("1", "accept"), ("2", "send back")]),
         // With no rows, the row keys have nothing to act on.
-        (Act::Answer, cases_core::Kind::Approval) if !form.rows.is_empty() => {
+        Kind::Approval if !form.rows.is_empty() => {
             let human = form.rows.get(form.row).is_some_and(|row| row.human);
             keys.extend([
-                ("j/k", "row"),
-                ("y", verdict_word("approve", human)),
-                ("h", "hold"),
-                ("x", verdict_word("reject", human)),
+                ("1", verdict_word("approve", human)),
+                ("2", "hold"),
+                ("3", verdict_word("reject", human)),
                 ("r", "row note"),
             ]);
         }
-        (Act::Answer, cases_core::Kind::Question | cases_core::Kind::Stuck) => {
-            keys.push(("i", "write"));
-        }
+        Kind::Question | Kind::Stuck => keys.push(("i", "write")),
         _ => {}
     }
-    keys.push((
-        "n",
-        if form.act == Act::Answer {
-            "note"
-        } else {
-            "edit"
-        },
-    ));
-    if form.act == Act::Answer {
-        keys.push(("d", "drop"));
-    }
-    // An approval with no rows has no answer to send, only a drop.
-    if form.act != Act::Answer || form.kind != cases_core::Kind::Approval || !form.rows.is_empty() {
+    // Enter sends from any part but a button, which it presses.
+    if matches!(spot, Spot::Button(_)) {
+        keys.push(("⏎", "press"));
+    } else {
         keys.push(("⏎", "send"));
     }
-    keys.push(("esc", "cancel"));
+    keys.push(("n", "note"));
+    match spot {
+        Spot::Choices if form.kind == Kind::Decision => keys.push(("j/k", "move")),
+        Spot::Choices => keys.push(("j/k", "choose")),
+        Spot::Rows => keys.push(("j/k", "row")),
+        _ => {}
+    }
+    keys.push(("esc", "leave"));
     keys
 }
 
 /// The keys (TU-08).
-pub(crate) const KEYS: [(&str, &str); 21] = [
+pub(crate) const KEYS: [(&str, &str); 28] = [
+    (
+        "1-9",
+        "answer: that option, answer (1 accept, 2 not) or verdict (1 approve, 2 hold, 3 reject)",
+    ),
+    ("n", "write the answer's note"),
+    ("⏎", "into the answer; in it, send, or press the button"),
+    ("⇧⏎ alt+⏎", "in a field: a new line (alt+⏎ in any terminal)"),
+    (
+        "tab ⇧tab",
+        "list, the answer's parts; ← → along a row of buttons",
+    ),
+    ("esc", "leave the field, then back to the list"),
+    ("a", "into the answer; esc keeps it, Discard empties it"),
     ("j k ↑ ↓", "move in the list, or scroll the case"),
     ("g G", "first or last case"),
-    ("⏎ l →", "read the case"),
-    ("esc h ←", "back to the list"),
+    ("l →", "read the case"),
+    ("h ←", "back to the list"),
     ("space J K", "scroll the case a page"),
     ("^d ^u", "scroll the case a page"),
-    ("tab ⇧tab", "next or previous filter"),
-    ("1 2 3 4", "inbox, in flight, done, all"),
-    ("5 f", "briefings, and fold the answered ones"),
-    ("a", "answer the case"),
+    ("[ ]", "previous or next filter"),
+    ("f", "fold the answered briefings"),
     ("p r", "park a stuck case, or resume a parked one"),
     ("w", "withdraw an answered case, or a message"),
     ("m e", "write a message, or edit one not picked up"),
-    ("^s ^e", "in a field: send, or open $EDITOR"),
-    ("esc", "in a form: leave the field, then cancel"),
+    ("^e ^s", "in a field: open $EDITOR, or send"),
     ("s", "show or hide the stats of the last 14 days"),
+    ("^k", "commands: what fits now, found by name"),
     ("?", "these keys"),
     ("q ^c", "quit"),
-    ("click", "a tab, a case, an option, a field or a key"),
+    ("click", "a tab, a case, a button, an option or a field"),
+    ("right-click", "a case: what can be done on it"),
+    ("point", "lights what a click acts on"),
     ("wheel", "move in the list, or scroll the case"),
     ("⇧ drag", "select text, in most terminals"),
 ];
 
 /// The keys one case's screen takes (TU-11): what [`KEYS`] lists less
 /// the list's, the filters', a withdraw's, a resume's and messages'.
-pub(crate) const ONE_KEYS: [(&str, &str); 12] = [
+pub(crate) const ONE_KEYS: [(&str, &str); 19] = [
+    (
+        "1-9",
+        "answer: that option, answer (1 accept, 2 not) or verdict (1 approve, 2 hold, 3 reject)",
+    ),
+    ("n", "write the answer's note"),
+    ("⏎", "into the answer; in it, send, or press the button"),
+    ("⇧⏎ alt+⏎", "in a field: a new line (alt+⏎ in any terminal)"),
+    (
+        "tab ⇧tab",
+        "the case, the answer's parts; ← → along buttons",
+    ),
+    ("esc", "leave the field, then the answer"),
+    ("a", "into the answer; esc keeps it, Discard empties it"),
     ("j k ↑ ↓", "scroll the case"),
     ("space J K", "scroll the case a page"),
     ("^d ^u", "scroll the case a page"),
-    ("a", "answer the case"),
     ("p", "park it, when it is stuck"),
-    ("^s ^e", "in a field: send, or open $EDITOR"),
-    ("esc", "in a form: leave the field, then cancel"),
+    ("^e ^s", "in a field: open $EDITOR, or send"),
+    ("^k", "commands: what fits now, found by name"),
     ("?", "these keys"),
     ("q ^c", "quit"),
-    ("click", "an option, a field or a key"),
+    ("click", "a button, an option or a field"),
+    ("point", "lights what a click acts on"),
     ("wheel", "scroll the case"),
     ("⇧ drag", "select text, in most terminals"),
 ];
@@ -1727,10 +3066,11 @@ mod tests {
     use ratatui::text::Span;
 
     use super::{
-        ACCENT, DIM, case_paras, compose_keys, compose_paras, field_paras, form_paras, inset,
-        keys_for, state_tag, thread_paras, truncate, urgency_style, zero_paras,
+        ACCENT, DIM, Look, case_paras, compose_keys, compose_paras, field_paras, form_paras, inset,
+        keys_for, panel_chips, panel_paras, question, state_tag, thread_paras, truncate,
+        urgency_style, verdict_cells, verdict_word, zero_paras,
     };
-    use crate::commands::tui::app::{App, Filter, Focus};
+    use crate::commands::tui::app::{App, Filter, Focus, Hit};
     use crate::commands::tui::compose::{Compose, Part};
     use crate::commands::tui::field::Field;
     use crate::commands::tui::form::{Act, Confirm, Form, Which};
@@ -1950,8 +3290,9 @@ mod tests {
         note.reopen = true;
         add(&mut case, Author::Agent, &Record::Note(note), 120);
         let paras = case_paras(&app(180), key(), &case.0);
+        let all = lines(&paras);
         assert_eq!(
-            lines(&paras)[2..18],
+            all[2..14],
             [
                 "",
                 "FOLLOW-UP, NEW SINCE YOUR ANSWER",
@@ -1965,11 +3306,16 @@ mod tests {
                 "",
                 "THE QUESTION",
                 "The body",
-                "",
-                "OPTIONS",
-                " 1  Ship  your last pick",
-                " 2  Wait",
             ]
+        );
+        // The options are the answer's, at the foot, the last pick marked.
+        let at = all
+            .iter()
+            .position(|line| [" YOUR ANSWER", "▍YOUR ANSWER · keys here"].contains(&line.as_str()))
+            .unwrap();
+        assert_eq!(
+            all[at + 1..at + 3],
+            ["  ○ 1  Ship  your last pick", "  ○ 2  Wait"]
         );
         assert_eq!(
             style_of(&paras, "  your last pick"),
@@ -2067,177 +3413,221 @@ mod tests {
         open.options = vec!["Ship".into(), "Wait".into()];
     }
 
-    #[test]
-    fn a_decision_form_shows_the_choice() {
-        let mut form = form("decision", Act::Answer, decision);
-        let paras = form_paras(&form);
-        assert_eq!(
-            lines(&paras),
-            [
-                format!("ANSWER {}", key()),
-                "choice   none yet: a number to choose, o for other".into(),
-                "note     empty".into(),
-            ]
-        );
-        assert_eq!(
-            style_of(&paras, &format!("ANSWER {}", key())),
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(
-            style_of(&paras, "none yet: a number to choose, o for other"),
-            dim()
-        );
-        form.other = true;
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1], "choice   other, see the note");
-        assert_eq!(style_of(&paras, "other, see the note"), green());
-        // A number clears other, as Form::key does.
-        form.other = false;
-        form.choice = Some(2);
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1], "choice   option 2");
-        assert_eq!(style_of(&paras, "option 2"), green());
+    /// The answer's panel of a case of `kind`, as `edit` leaves its form,
+    /// with the keys in it or not.
+    fn panel(
+        kind: &str,
+        with: impl FnOnce(&mut Open),
+        edit: impl FnOnce(&mut Form),
+        focused: bool,
+    ) -> Vec<Para> {
+        let case = open(kind, with);
+        let mut form = Form::new(key(), &case.0, Act::Answer);
+        edit(&mut form);
+        panel_paras(&form, &case.0, focused, None, 40)
+    }
+
+    /// A box to write in, 40 wide, as the answer's panel draws it.
+    fn textarea(here: bool, label: &str, body: &[&str]) -> Vec<String> {
+        let pointer = if here { "▸ " } else { "  " };
+        let rule = "─".repeat(34 - label.chars().count() - 1);
+        let mut lines = vec![format!("{pointer}╭─ {label} {rule}╮")];
+        let rows = body.iter().copied().chain(std::iter::repeat(""));
+        for line in rows.take(body.len().max(3)) {
+            lines.push(format!("  │ {line:<34} │"));
+        }
+        lines.push(format!("  ╰{}╯", "─".repeat(36)));
+        lines
     }
 
     #[test]
-    fn a_signoff_form_shows_the_verdict() {
-        let mut form = form("signoff", Act::Answer, |_| {});
-        let paras = form_paras(&form);
-        assert_eq!(
-            lines(&paras)[1],
-            "signoff  none yet: y to accept, c to ask for changes"
-        );
-        assert_eq!(
-            style_of(&paras, "none yet: y to accept, c to ask for changes"),
-            dim()
-        );
-        form.signoff = Some("accept");
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1], "signoff  accept");
-        assert_eq!(style_of(&paras, "accept"), green());
-        form.signoff = Some("changes");
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1], "signoff  ask for changes, see the note");
-        assert_eq!(style_of(&paras, "ask for changes, see the note"), green());
-    }
-
-    #[test]
-    fn an_fyi_form_acknowledges() {
-        let paras = form_paras(&form("fyi", Act::Answer, |_| {}));
+    fn a_decision_panel_has_its_options_as_radio_rows() {
+        let paras = panel("decision", decision, |_| {}, false);
         assert_eq!(
             lines(&paras),
             [
-                format!("ANSWER {}", key()),
-                "answer   acknowledge".into(),
-                "note     empty".into(),
+                "",
+                " YOUR ANSWER",
+                "  ○ 1  Ship",
+                "  ○ 2  Wait",
+                "  ○ 3  Other, see note",
             ]
+            .into_iter()
+            .map(String::from)
+            .chain(textarea(false, "note", &["press n to add a note"]))
+            .collect::<Vec<_>>()
         );
+        // Out of the panel, its heading is plain bold; in it, accented.
         assert_eq!(
-            style_of(&paras, "acknowledge"),
+            style_of(&paras, " YOUR ANSWER"),
             Style::new().add_modifier(Modifier::BOLD)
         );
-        assert_eq!(style_of(&paras, "answer   "), dim());
+        assert_eq!(paras[2].hit, Some(Hit::Choice(1)));
+        assert_eq!(paras[4].hit, Some(Hit::Choice(3)));
+        assert_eq!(paras[5].hit, Some(Hit::Field(Which::Note)));
+        let paras = panel("decision", decision, |f| f.other = true, true);
+        assert_eq!(
+            style_of(&paras, "YOUR ANSWER"),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        );
+        // With the keys, the heading has an edge and says so.
+        assert_eq!(lines(&paras)[1], "▍YOUR ANSWER · keys here");
+        assert_eq!(lines(&paras)[4], "▸ ● 3  Other, see note");
+        assert_eq!(style_of(&paras, "● "), green());
     }
 
     #[test]
-    fn an_approval_form_shows_each_row_with_its_verdict_and_note() {
-        let row = |id: &str, by: &str| {
-            let mut row = ApprovalRow::default();
-            id.clone_into(&mut row.id);
-            row.label = format!("Step {id}");
-            by.clone_into(&mut row.by);
-            "make it".clone_into(&mut row.script);
-            "https://x.test/run".clone_into(&mut row.link);
-            row
-        };
-        let mut form = form("approval", Act::Answer, |open| {
-            open.rows = vec![
-                row("a", "human"),
-                row("b", "human"),
-                row("c", ""),
-                row("d", ""),
-                row("e", ""),
-            ];
-        });
-        form.rows[0].verdict = Some("approve");
-        form.rows[1].verdict = Some("reject");
-        form.rows[2].verdict = Some("hold");
-        form.rows[3].verdict = Some("approve");
-        form.rows[1].note.set("not now".into());
-        form.row = 4;
-        form.editing = Some(Which::Row(4));
-        let paras = form_paras(&form);
+    fn a_signoff_or_a_briefing_panel_has_its_two_answers() {
+        let paras = panel("signoff", |_| {}, |f| f.signoff = Some("changes"), false);
+        assert_eq!(
+            lines(&paras)[2..],
+            ["  ○ accept", "  ● request changes (note required)",]
+                .into_iter()
+                .map(String::from)
+                .chain(textarea(false, "comment", &["press n to add a comment"]))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(paras[3].hit, Some(Hit::Mark("changes")));
+        let paras = panel(
+            "briefing",
+            |open| {
+                "The work.".clone_into(&mut open.body);
+                open.left_out = vec!["docs".into(), "bench".into()];
+            },
+            |f| {
+                f.briefing = Some("send_back");
+                f.file[1] = true;
+            },
+            false,
+        );
+        assert_eq!(
+            lines(&paras)[2..],
+            [
+                "  ○ accept",
+                "  ● send back (reason required)",
+                "  file what was left out",
+                "  [ ] 1  docs",
+                "  [x] 2  bench",
+            ]
+            .into_iter()
+            .map(String::from)
+            .chain(textarea(false, "reason", &["press n to add a reason"]))
+            .collect::<Vec<_>>()
+        );
+        assert_eq!(paras[6].hit, Some(Hit::LeftOut(1)));
+    }
+
+    #[test]
+    fn an_fyi_panel_is_its_note_and_acknowledge() {
+        let case = open("fyi", |_| {});
+        let form = Form::new(key(), &case.0, Act::Answer);
+        let paras = panel_paras(&form, &case.0, false, None, 40);
         assert_eq!(
             lines(&paras),
-            [
-                format!("ANSWER {}", key()),
-                "  a      done".into(),
-                "  b      won't do".into(),
-                "  note   not now".into(),
-                "  c      hold".into(),
-                "  d      approve".into(),
-                "▸ e      no verdict yet".into(),
-                "  note    ".into(),
-                "note     empty".into(),
-            ]
+            [String::new(), " YOUR ANSWER".into()]
+                .into_iter()
+                .chain(textarea(false, "note", &["press n to add a note"]))
+                .collect::<Vec<_>>()
         );
-        assert_eq!(style_of(&paras, "done"), green());
-        assert_eq!(style_of(&paras, "approve"), green());
+        // Out of the panel, its heading still reads as the thing to do.
         assert_eq!(
-            style_of(&paras, "won't do"),
-            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
+            style_of(&paras, " YOUR ANSWER"),
+            Style::new().add_modifier(Modifier::BOLD)
         );
-        assert_eq!(
-            style_of(&paras, "hold"),
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(style_of(&paras, "no verdict yet"), dim());
-        // The row the keys act on is pointed at and bold.
-        assert_eq!(style_of(&paras, "▸ "), Style::new().fg(ACCENT));
-        assert_eq!(
-            style_of(&paras, "e      "),
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(style_of(&paras, "a      "), Style::new().fg(ACCENT));
-        // The note being typed has the keys; the other is dim.
-        assert_eq!(
-            paras[7].first[0].style,
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(paras[3].first[0].style, dim());
-        assert_eq!(
-            paras[7].spans[1].style,
-            Style::new().add_modifier(Modifier::REVERSED)
+        let chips = panel_chips(&app(0), form.kind, &form.presses(), None);
+        let labels: Vec<String> = chips.iter().map(|chip| text(&chip.spans)).collect();
+        assert_eq!(labels, [" ⏎ Acknowledge ", " d Drop "]);
+        // With the keys on a button, it is pointed at and underlined.
+        let mut form = form;
+        form.go(super::Spot::Button(super::Press::Drop));
+        let chips = panel_chips(&app(0), form.kind, &form.presses(), Some(&form));
+        let labels: Vec<String> = chips.iter().map(|chip| text(&chip.spans)).collect();
+        assert_eq!(labels, [" ⏎ Acknowledge ", "▸ d Drop "]);
+        assert!(
+            chips[1].spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
         );
     }
 
     #[test]
-    fn a_question_or_stuck_form_takes_text_first() {
-        let mut form = form("question", Act::Answer, |_| {});
-        form.text.set("yes\nno".into());
-        let paras = form_paras(&form);
+    fn an_approval_panel_has_each_rows_verdicts_where_a_click_picks_them() {
+        let paras = panel(
+            "approval",
+            |open| open.rows = vec![row("a", "human", "x"), row("b", "", "y")],
+            |f| {
+                f.rows[0].verdict = Some("approve");
+                f.rows[1].verdict = Some("reject");
+                f.rows[1].note.set("not now".into());
+                f.row = 1;
+            },
+            true,
+        );
+        let all = lines(&paras);
         assert_eq!(
-            lines(&paras),
+            all[2..],
             [
-                format!("ANSWER {}", key()),
-                "reply    yes".into(),
-                "         no ".into(),
-                "note     empty".into(),
+                "  a Step a",
+                "     ● done  ○ hold  ○ won't do",
+                "▸ b Step b",
+                "     ○ approve  ○ hold  ● reject",
+                "  note   not now",
             ]
+            .into_iter()
+            .map(String::from)
+            .chain(textarea(false, "note", &["press n to add a note"]))
+            .collect::<Vec<_>>()
+        );
+        assert_eq!(paras[3].hit, Some(Hit::Verdicts(0, true)));
+        // Each verdict's cells are where it is drawn.
+        for (line, human) in [(&all[3], true), (&all[5], false)] {
+            for (x, wide, verdict) in verdict_cells(human) {
+                let drawn: String = line
+                    .chars()
+                    .skip(usize::from(x))
+                    .take(usize::from(wide))
+                    .collect();
+                assert_eq!(
+                    &drawn[drawn.len() - verdict_word(verdict, human).len()..],
+                    verdict_word(verdict, human)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_question_or_stuck_panel_takes_text_first() {
+        let paras = panel("question", |_| {}, |f| f.text.set("yes\nno".into()), true);
+        assert_eq!(
+            lines(&paras)[2..],
+            [
+                textarea(true, "reply", &["yes", "no"]),
+                textarea(false, "note", &["press n to add a note"])
+            ]
+            .concat()
         );
         let editing = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
-        assert_eq!(style_of(&paras, "reply    "), editing);
-        assert_eq!(style_of(&paras, "note     "), dim());
-
-        let mut form = self::form("stuck", Act::Answer, |_| {});
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1..], ["guidance  ", "note     empty"]);
-        assert_eq!(style_of(&paras, "guidance "), editing);
-        form.editing = Some(Which::Note);
-        let paras = form_paras(&form);
-        assert_eq!(lines(&paras)[1..], ["guidance empty", "note      "]);
-        assert_eq!(style_of(&paras, "guidance "), dim());
-        assert_eq!(style_of(&paras, "note     "), editing);
+        assert_eq!(style_of(&paras, "reply"), editing);
+        assert_eq!(
+            style_of(&paras, "note"),
+            Style::new().add_modifier(Modifier::BOLD)
+        );
+        // Out of the panel, no field has the keys, and each says how to
+        // write in it.
+        let paras = panel("stuck", |_| {}, |_| {}, false);
+        assert_eq!(
+            lines(&paras)[2..],
+            [
+                textarea(false, "guidance", &["press i to write your guidance"]),
+                textarea(false, "note", &["press n to add a note"])
+            ]
+            .concat()
+        );
+        assert_eq!(
+            style_of(&paras, "guidance"),
+            Style::new().add_modifier(Modifier::BOLD)
+        );
     }
 
     #[test]
@@ -2256,47 +3646,91 @@ mod tests {
         );
     }
 
+    /// A button is its label on a face, its key before it or a letter of
+    /// it underlined, lit under the pointer; without a hit, no face.
     #[test]
-    fn a_form_asks_before_it_drops_withdraws_or_discards() {
-        let mut form = form("fyi", Act::Answer, |_| {});
-        let ask = |form: &Form| {
-            let paras = form_paras(form);
-            let last = paras.last().unwrap();
-            assert_eq!(
-                last.spans[0].style,
-                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            );
-            assert_eq!(last.spans[1].style, dim());
-            text(&last.spans)
-        };
-        form.confirm = Some(Confirm::Drop);
-        assert_eq!(
-            ask(&form),
-            format!(
-                "Drop {}? The agent stops the work.  y yes, any other key no",
-                key()
-            )
+    fn a_button_draws_its_key_its_label_and_its_face() {
+        use super::{BUTTON_BG, Button, HOVER_BG};
+        let hit = Some(Hit::Key(KeyEvent::from(KeyCode::Char('p'))));
+        let park = Button::new("Park", hit).accel('p');
+        let spans = park.spans(false);
+        assert_eq!(text(&spans), " Park ");
+        assert_eq!(park.width(), 6);
+        let underlined: String = spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::UNDERLINED))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(underlined, "P");
+        assert!(spans.iter().all(|s| s.style.bg == Some(BUTTON_BG)));
+        assert!(
+            park.spans(true)
+                .iter()
+                .all(|s| s.style.bg == Some(HOVER_BG))
         );
-        form.confirm = Some(Confirm::Withdraw);
-        assert_eq!(
-            ask(&form),
-            format!(
-                "Withdraw {} from its agent?  y yes, any other key no",
-                key()
-            )
+        let send = Button::new("send", hit).key("⏎").look(Look::Danger);
+        assert_eq!(text(&send.spans(false)), " ⏎ send ");
+        assert!(
+            send.spans(false)
+                .iter()
+                .all(|s| s.style.bg == Some(Color::Red))
         );
-        form.confirm = Some(Confirm::Discard);
-        assert_eq!(
-            ask(&form),
-            "Throw away what you typed?  y yes, any other key no"
-        );
+        let moves = Button::new("move", None).key("j/k");
+        assert!(moves.spans(true).iter().all(|s| s.style.bg.is_none()));
     }
 
-    fn selected() -> Style {
-        Style::new()
-            .fg(Color::Black)
-            .bg(Color::Green)
-            .add_modifier(Modifier::BOLD)
+    #[test]
+    fn a_form_asks_before_it_drops_withdraws_or_discards() {
+        let mut app = App::new("s".into());
+        app.form = Some(form("fyi", Act::Answer, |_| {}));
+        let ask = |app: &mut App, confirm| {
+            if let Some(form) = &mut app.form {
+                form.confirm = Some(confirm);
+            }
+            let dialog = question(app).unwrap();
+            let buttons: Vec<_> = dialog
+                .buttons
+                .iter()
+                .map(|b| (b.key.unwrap(), b.label, b.look))
+                .collect();
+            (dialog.title, dialog.body, buttons)
+        };
+        // The safe answer first, on esc; the other on y.
+        let keep = |label| ("esc", label, Look::Primary);
+        let yes = |label| ("y", label, Look::Danger);
+        assert_eq!(
+            ask(&mut app, Confirm::Drop),
+            (
+                format!("Drop {}?", key()),
+                Some("The agent stops the work.".into()),
+                vec![keep("Keep it"), yes("Drop")]
+            )
+        );
+        assert_eq!(
+            ask(&mut app, Confirm::Withdraw),
+            (
+                format!("Withdraw {} from its agent?", key()),
+                None,
+                vec![keep("Keep it"), yes("Withdraw")]
+            )
+        );
+        assert_eq!(
+            ask(&mut app, Confirm::Discard),
+            (
+                "Throw away what you typed?".into(),
+                None,
+                vec![keep("Keep typing"), yes("Discard")]
+            )
+        );
+        // No question, no dialog; and the form draws none of its own.
+        app.form.as_mut().unwrap().confirm = None;
+        assert!(question(&app).is_none());
+        app.form.as_mut().unwrap().confirm = Some(Confirm::Drop);
+        assert!(
+            !lines(&form_paras(app.form.as_ref().unwrap()))
+                .iter()
+                .any(|l| l.contains("Drop"))
+        );
     }
 
     #[test]
@@ -2307,17 +3741,30 @@ mod tests {
         form.choice = Some(2);
         app.form = Some(form);
         let paras = case_paras(&app, key(), &case.0);
-        assert_eq!(style_of(&paras, " 2 "), selected());
+        let all = lines(&paras);
+        let at = all
+            .iter()
+            .position(|line| [" YOUR ANSWER", "▍YOUR ANSWER · keys here"].contains(&line.as_str()))
+            .unwrap();
+        // The keys are on the choices: the one chosen is pointed at.
         assert_eq!(
-            style_of(&paras, " 1 "),
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            all[at + 1..at + 4],
+            ["  ○ 1  Ship", "▸ ● 2  Wait", "  ○ 3  Other, see note"]
         );
-        // A form on another case marks nothing here.
+        assert!(all[at + 4].starts_with("  ╭─ note ─"), "{all:?}");
+        assert_eq!(style_of(&paras, "● "), green());
+        // A form on another case marks nothing here; nor is the panel's
+        // part pointed at with the keys out of it.
         let other = Key::new(8).unwrap();
-        let paras = case_paras(&app, other, &case.0);
-        assert_eq!(
-            style_of(&paras, " 2 "),
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        let all = lines(&case_paras(&app, other, &case.0));
+        let at = all
+            .iter()
+            .position(|line| [" YOUR ANSWER", "▍YOUR ANSWER · keys here"].contains(&line.as_str()))
+            .unwrap();
+        assert!(
+            all[at..]
+                .iter()
+                .all(|line| !line.contains('●') && !line.contains('▸'))
         );
     }
 
@@ -2623,7 +4070,6 @@ mod tests {
                 "to       worker".into(),
                 "title    The title".into(),
                 "body     Do it ".into(),
-                "Throw away what you typed?  y yes, any other key no".into(),
             ]
         );
         // An edit with no title shows the empty field, not the body's line.
@@ -2664,62 +4110,85 @@ mod tests {
     #[test]
     fn the_footer_keys_follow_the_form() {
         let mut decision = form("decision", Act::Answer, self::decision);
+        let tail = "⏎ send, n note";
+        // Other is the number after the last option.
         assert_eq!(
-            pairs(&keys_for(&decision)),
-            "1-9 choose, o other, n note, d drop, ⏎ send, esc cancel"
+            pairs(&keys_for(&decision, false)),
+            format!("1-3 choose, o other, {tail}, j/k move, esc leave")
         );
+        // In a field, enter sends; the new line is shift+enter where the
+        // terminal tells it from enter, and alt+enter where it does not.
         decision.editing = Some(Which::Note);
         assert_eq!(
-            pairs(&keys_for(&decision)),
-            "esc leave the field, ^s send, ^e editor, ⏎ new line"
+            pairs(&keys_for(&decision, false)),
+            "⏎ send, alt+⏎ new line, ^e editor, esc leave the field"
         );
-        decision.confirm = Some(Confirm::Drop);
-        assert_eq!(pairs(&keys_for(&decision)), "y yes, any key no");
         assert_eq!(
-            pairs(&keys_for(&form("signoff", Act::Answer, |_| {}))),
-            "y accept, c changes, n note, d drop, ⏎ send, esc cancel"
+            pairs(&keys_for(&decision, true)),
+            "⏎ send, ⇧⏎ new line, ^e editor, esc leave the field"
+        );
+        // On a button, enter presses it.
+        decision.editing = None;
+        decision.tab(1);
+        decision.tab(1);
+        assert_eq!(
+            pairs(&keys_for(&decision, false)),
+            "1-3 choose, o other, ⏎ press, n note, esc leave"
+        );
+        assert_eq!(
+            pairs(&keys_for(&form("signoff", Act::Answer, |_| {}), false)),
+            format!("1 accept, 2 changes, {tail}, j/k choose, esc leave")
         );
         let mut approval = form("approval", Act::Answer, |open| {
             open.rows = vec![row("a", "", "x"), row("b", "human", "y")];
         });
         assert_eq!(
-            pairs(&keys_for(&approval)),
-            "j/k row, y approve, h hold, x reject, r row note, n note, d drop, ⏎ send, esc cancel"
+            pairs(&keys_for(&approval, false)),
+            format!("1 approve, 2 hold, 3 reject, r row note, {tail}, j/k row, esc leave")
         );
         approval.row = 1;
         assert_eq!(
-            pairs(&keys_for(&approval)),
-            "j/k row, y done, h hold, x won't do, r row note, n note, d drop, ⏎ send, esc cancel"
+            pairs(&keys_for(&approval, false)),
+            format!("1 done, 2 hold, 3 won't do, r row note, {tail}, j/k row, esc leave")
         );
         for kind in ["question", "stuck"] {
             let mut text = form(kind, Act::Answer, |_| {});
             text.editing = None;
             assert_eq!(
-                pairs(&keys_for(&text)),
-                "i write, n note, d drop, ⏎ send, esc cancel"
+                pairs(&keys_for(&text, false)),
+                format!("i write, {tail}, esc leave")
             );
         }
-        let mut park = form("stuck", Act::Park, |_| {});
+        let park = form("stuck", Act::Park, |_| {});
+        let mut park = park;
         park.editing = None;
-        assert_eq!(pairs(&keys_for(&park)), "n edit, ⏎ send, esc cancel");
+        assert_eq!(pairs(&keys_for(&park, false)), "n edit, ⏎ send, esc cancel");
         assert_eq!(
-            pairs(&keys_for(&form("fyi", Act::Answer, |_| {}))),
-            "n note, d drop, ⏎ send, esc cancel"
+            pairs(&keys_for(&form("fyi", Act::Answer, |_| {}), false)),
+            format!("{tail}, esc leave")
         );
-        // A briefing offers the number keys only for the items it has.
+        // A briefing answers by number on its answers, and on its items
+        // offers the number keys only for the items it has.
         for (items, keys) in [
-            (0, "y accept, s send back, n note"),
-            (9, "y accept, s send back, 1-9 file, n note"),
-            (10, "y accept, s send back, 1-9 0 file, n note"),
+            (0, None),
+            (9, Some("j/k move, space file, 1-9 file")),
+            (10, Some("j/k move, space file, 1-9 0 file")),
         ] {
-            let briefing = form("briefing", Act::Answer, |open| {
+            let mut briefing = form("briefing", Act::Answer, |open| {
                 "The work.".clone_into(&mut open.body);
                 open.left_out = (0..items).map(|n| format!("item {n}")).collect();
             });
             assert_eq!(
-                pairs(&keys_for(&briefing)),
-                format!("{keys}, d drop, ⏎ send, esc cancel")
+                pairs(&keys_for(&briefing, false)),
+                format!("1 accept, 2 send back, {tail}, j/k choose, esc leave")
             );
+            briefing.tab(1);
+            if let Some(keys) = keys {
+                assert_eq!(
+                    pairs(&keys_for(&briefing, false)),
+                    format!("{keys}, {tail}, esc leave")
+                );
+            }
         }
     }
 
@@ -2742,8 +4211,6 @@ mod tests {
         );
         compose.editing = Some((key(), 1));
         assert_eq!(pairs(&compose_keys(&compose)), "b body, ⏎ send, esc cancel");
-        compose.confirm = true;
-        assert_eq!(pairs(&compose_keys(&compose)), "y yes, any key no");
     }
 
     #[test]
@@ -2921,16 +4388,18 @@ mod tests {
     fn a_narrow_screen_draws_each_state_of_case_in_the_list() {
         let mut app = many();
         let keys: Vec<String> = (1..=5).map(|n| Key::new(n).unwrap().to_string()).collect();
-        let buffer = screen(&mut app, 50, 22);
+        let buffer = screen(&mut app, 50, 24);
         assert_eq!(
             rows(&buffer),
             [
                 " cases   cases.db        ● 1 waiting · 1 blocking ".to_string(),
-                // The tabs wrap rather than lose Briefings off the end.
-                " 1 Inbox 2  2 In flight 1  3 Done 2  4 All 5      ".into(),
-                " 5 Briefings 0                                    ".into(),
+                // The tabs wrap rather than lose Briefings off the end,
+                // beside the message button.
+                " Inbox 2   In flight 1   Done 2         + Message ".into(),
+                " All 5  │ Briefings 0                             ".into(),
                 "─".repeat(50),
-                " ".repeat(50),
+                // The list has the keys, and says so.
+                format!("▍List · keys here{}", " ".repeat(33)),
                 "▌● Ship it                                        ".into(),
                 format!("   {} · decision · worker                  2h  ", keys[0]),
                 " ".repeat(50),
@@ -2946,17 +4415,21 @@ mod tests {
                 " ✓ Done one with a long title that is cut to t…   ".into(),
                 format!("   {} · fyi · worker                       1h  ", keys[3]),
                 " ".repeat(50),
-                // And so do the keys: not s, with no room for the strip.
-                " j/k move  ⏎ read  a answer  m message  tab filter".into(),
-                " ? keys  q quit                                   ".into(),
+                " ".repeat(50),
+                // And so do the keys: where they are and where tab takes
+                // them, the selected case's answer's first, then the rest,
+                // but not m, with its button.
+                "on: list · tab → options │ 1-3 choose   n note    ".into(),
+                " ⏎ answer   j/k move   → read   [ ] filter        ".into(),
+                " s stats   ^k commands   ? keys   q quit          ".into(),
             ]
         );
         // The blocking count is red, and so is the dot before it.
         assert_eq!(buffer[(col(&buffer, 0, "●"), 0)].fg, Color::Red);
         assert_eq!(buffer[(col(&buffer, 0, "1 blocking"), 0)].fg, Color::Red);
-        // The chosen filter is accented.
-        assert_eq!(buffer[(col(&buffer, 1, "All"), 1)].fg, ACCENT);
-        assert_eq!(buffer[(col(&buffer, 1, "Inbox"), 1)].fg, Color::Reset);
+        // The chosen filter is a filled pill; the others are not filled.
+        assert_eq!(buffer[(col(&buffer, 2, "All"), 2)].bg, ACCENT);
+        assert_eq!(buffer[(col(&buffer, 1, "Inbox"), 1)].bg, Color::Reset);
         // A done case's title recedes; the others are bold.
         assert_eq!(buffer[(col(&buffer, 17, "Done"), 17)].fg, DIM);
         let ship = col(&buffer, 5, "Ship");
@@ -2970,39 +4443,47 @@ mod tests {
     fn a_wide_screen_draws_the_list_beside_the_case() {
         let mut app = many();
         let key = Key::new(1).unwrap();
-        let buffer = screen(&mut app, 100, 12);
+        let buffer = screen(&mut app, 100, 13);
         let rows = rows(&buffer);
         assert_eq!(
             rows[3..],
             [
-                format!("{}│{}", " ".repeat(38), " ".repeat(61)),
-                format!("▌● Ship it{}│  Ship it{}", " ".repeat(28), " ".repeat(52)),
+                // The list has the keys: its title says so, and the case's
+                // is dim.
                 format!(
-                    "   {key} · decision · worker      2h  │  ● blocking · decision · worker · 2h ago · {key}            "
+                    "▍List · keys here{}│  Case{}",
+                    " ".repeat(21),
+                    " ".repeat(55)
                 ),
-                format!("{}│{}", " ".repeat(38), " ".repeat(61)),
+                // The bar, its answer the footer's no more; on a pane this
+                // short, the title scrolls under it.
                 format!(
-                    " ◌ Stuck here                         │  OPTIONS{}",
-                    " ".repeat(52)
-                ),
-                format!(
-                    "   {} · stuck · parked · work… 1h  │   1  Ship{}",
-                    Key::new(2).unwrap(),
+                    "▌● Ship it                            │   Answer {}",
                     " ".repeat(51)
                 ),
-                format!("{}│   2  Wait{}", " ".repeat(38), " ".repeat(51)),
-                format!("{}│{} more ↓  ", " ".repeat(38), " ".repeat(52)),
+                format!("   {key} · decision · worker      2h  │{}", " ".repeat(61)),
+                format!("{}│  Ship it{}", " ".repeat(38), " ".repeat(52)),
                 format!(
-                    " j/k move   a answer   m message   tab filter   ? keys   q quit{}",
-                    " ".repeat(37)
+                    " ◌ Stuck here                         │  ● blocking · decision · worker · 2h ago · {key}            "
                 ),
+                format!(
+                    "   {} · stuck · parked · work… 1h  │{}more ↓  ",
+                    Key::new(2).unwrap(),
+                    " ".repeat(53)
+                ),
+                format!("{}│{}", " ".repeat(38), " ".repeat(61)),
+                // The answer's buttons, kept in sight.
+                format!("{}│   ⏎ Send   d Drop{}", " ".repeat(38), " ".repeat(43)),
+                "on: list · tab → options │ 1-3 choose   n note   ⏎ answer   j/k move   [ ] filter   ^k commands     "
+                    .to_string(),
+                format!(" ? keys   q quit{}", " ".repeat(84)),
             ]
         );
         // Scrolled past the end, the scroll stops at the last line, and
         // there is no more to show.
         app.scroll = u16::MAX;
         let scrolled = super::tests::rows(&screen(&mut app, 100, 12));
-        assert_eq!(app.scroll, 2);
+        assert!(app.scroll > 0 && app.scroll < u16::MAX);
         assert!(!scrolled.concat().contains("more"));
     }
 
@@ -3091,7 +4572,7 @@ mod tests {
     }
 
     #[test]
-    fn a_form_takes_at_most_two_thirds_of_the_case_pane() {
+    fn an_answer_scrolls_with_the_case_and_its_buttons_stay_in_sight() {
         let case = open("approval", |open| {
             open.rows = (0..12).map(|n| row(&format!("r{n}"), "", "x")).collect();
         });
@@ -3099,39 +4580,74 @@ mod tests {
         app.update(vec![(key(), case.0.clone())], 0, Actors::default(), at(60));
         app.focus = Focus::Case;
         app.form = Some(Form::new(key(), &case.0, Act::Answer));
-        let rows = rows(&screen(&mut app, 100, 20));
-        // The case pane's inner area is rows 4 to 18; the form's rule is at 9.
-        let pane = |y: usize| rows[y].chars().skip(41).take(10).collect::<String>();
-        assert_eq!(pane(8), " r0  Step ");
-        assert_eq!(pane(9), "─".repeat(10));
-        assert!(pane(10).starts_with("ANSWER"), "{}", pane(10));
+        for scroll in [0, u16::MAX] {
+            app.scroll = scroll;
+            let rows = rows(&screen(&mut app, 100, 20));
+            // Over the pane's last row, above the footer, the buttons;
+            // that row is blank, to keep them apart from the footer's keys.
+            assert!(rows[16].contains("⏎ Send   d Drop"), "{rows:#?}");
+            assert!(rows[17].trim_end().ends_with('│'), "{rows:#?}");
+        }
+        let all = rows(&screen(&mut app, 100, 20)).concat();
+        assert!(all.contains("note     "), "the foot of the answer: {all}");
+    }
+
+    #[test]
+    fn the_gap_under_the_answers_buttons_gives_way_on_a_short_terminal() {
+        let case = open("approval", |open| {
+            open.rows = (0..12).map(|n| row(&format!("r{n}"), "", "x")).collect();
+        });
+        let mut app = app(0);
+        app.update(vec![(key(), case.0.clone())], 0, Actors::default(), at(60));
+        app.focus = Focus::Case;
+        app.form = Some(Form::new(key(), &case.0, Act::Answer));
+        // At 16 rows, the case keeps its title and bar with the gap: a
+        // blank row between the buttons and the footer, which is on rows 14
+        // and 15.
+        let rows = rows(&screen(&mut app, 100, 16));
+        assert!(rows[12].contains("⏎ Send   d Drop"), "{rows:#?}");
+        assert!(rows[13].trim_end().ends_with('│'), "{rows:#?}");
+        // At 15, the gap would cost the case its title held over the bar,
+        // so it goes: the buttons sit on the footer.
+        let rows = self::rows(&screen(&mut app, 100, 15));
+        assert!(rows[12].contains("⏎ Send   d Drop"), "{rows:#?}");
+        assert!(rows[5].contains("● today"), "the title held: {rows:#?}");
+        assert!(rows[7].contains("Answer"), "the bar: {rows:#?}");
     }
 
     #[test]
     fn a_pane_with_no_room_draws_no_more_marker() {
         let mut app = many();
         let rows = rows(&screen(&mut app, 100, 5));
-        assert_eq!(rows[3], format!("{}│{}", " ".repeat(38), " ".repeat(61)));
+        assert_eq!(
+            rows[3],
+            format!(
+                "▍List · keys here{}│  Case{}",
+                " ".repeat(21),
+                " ".repeat(55)
+            )
+        );
     }
 
     #[test]
     fn help_is_a_box_in_the_middle() {
         let mut app = app(0);
         app.help = true;
-        let buffer = screen(&mut app, 80, 31);
-        assert_eq!(buffer[(10, 3)].symbol(), "╭");
-        assert_eq!(buffer[(69, 27)].symbol(), "╯");
-        assert_eq!(buffer[(10, 3)].fg, ACCENT);
+        let buffer = screen(&mut app, 80, 40);
+        assert_eq!(buffer[(10, 4)].symbol(), "╭");
+        assert_eq!(buffer[(69, 35)].symbol(), "╯");
+        assert_eq!(buffer[(10, 4)].fg, ACCENT);
         let rows = rows(&buffer);
         // The box is drawn over the empty inbox's line, from column 10.
         assert_eq!(
-            rows[3].chars().skip(10).collect::<String>(),
+            rows[4].chars().skip(10).collect::<String>(),
             format!("╭ keys ─{}╮{}", "─".repeat(51), " ".repeat(10))
         );
+        // The answer's keys first.
         assert!(
-            rows[5].contains("   j k ↑ ↓  move in the list, or scroll the case"),
+            rows[6].contains("       1-9  answer: that option"),
             "{}",
-            rows[5]
+            rows[6]
         );
     }
 
@@ -3163,10 +4679,10 @@ mod tests {
         let mut app = many();
         let wide = rows(&screen(&mut app, 96, 10));
         assert_eq!(wide[3].chars().nth(36), Some('│'));
-        assert!(!wide[9].contains("⏎ read"), "{}", wide[9]);
+        assert!(!wide[8..].concat().contains("→ read"), "{}", wide[8]);
         let narrow = rows(&screen(&mut app, 95, 10));
         assert!(!narrow[3].contains('│'), "{}", narrow[3]);
-        assert!(narrow[9].contains("⏎ read"), "{}", narrow[9]);
+        assert!(narrow[8..].concat().contains("→ read"), "{}", narrow[8]);
     }
 
     #[test]
@@ -3194,6 +4710,6 @@ mod tests {
         });
         // An approval is opened with rows; a form can still hold none.
         form.rows.clear();
-        assert_eq!(pairs(&keys_for(&form)), "n note, d drop, esc cancel");
+        assert_eq!(pairs(&keys_for(&form, false)), "⏎ send, n note, esc leave");
     }
 }

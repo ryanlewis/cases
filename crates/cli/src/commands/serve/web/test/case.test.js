@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { render } from "preact-render-to-string";
 import { html } from "../static/html.ts";
-import { CaseView, drawnFrom, redrawn, verdictOf } from "../static/case.ts";
-import { body, decision, steps } from "./case.js";
+import { CaseView, drawnFrom, redrawn, response, verdictOf } from "../static/case.ts";
+import { body, decision, fields, steps } from "./case.js";
 import { thread } from "../static/thread.ts";
 
 const { open, answer, pickup, note } = steps;
@@ -602,4 +602,40 @@ test("an open or amend whose body is the case's (body_in_case) is read from the 
   const c = { ...decision("open"), body: "A", events };
   const said = thread(c).map(({ lines }) => lines.filter((l) => l.text === "replaced the body").map((l) => l.previous));
   assert.deepEqual(said, [[], [{ body: "A" }], [{ body: "B" }]]);
+});
+
+// An event whose record has no data reads as one with none of its fields,
+// as the thread reads it, and leaves the page drawn.
+test("a follow-up whose pickup or note has no data still draws, naming the pickup's actor", () => {
+  const page = draw(decision("open", open, answer, { ...pickup, data: null }, note));
+  assert.ok(at(page, "your previous answer") < at(page, "picked up by gift-agent"), page);
+  const blank = { ...note, data: null };
+  const noted = draw(decision("open", open, answer, pickup, blank));
+  assert.ok(at(noted, "new since your answer") < at(noted, "your previous answer"), noted);
+});
+
+test("a withdrawn message whose withdraw has no data says who withdrew it, and no reason", () => {
+  const withdrawEvent = { seq: 3, author: "human", event: "withdraw", file: "", at: "2026-09-25T13:50:00Z", actor: human, data: null };
+  const page = drawWith(message("withdrawn", sentEvent, pickupEvent, withdrawEvent));
+  assert.ok(page.includes('<p class="taken withdrawn">withdrawn by <strong>ryan</strong>, '), page);
+  assert.ok(!page.includes('class="reason"'), page);
+});
+
+
+test("the form sends other only with a note, as the store wants (IN-03)", () => {
+  const c = decision("open", open);
+  for (const note of ["", "   "]) {
+    assert.deepEqual(response(c, fields({ choice: "other", note }), false), { problem: "other needs a note: say what you want instead" });
+  }
+  assert.deepEqual(response(c, fields({ choice: "other", note: " a print " }), false), { answer: { note: "a print", other: true } });
+  assert.deepEqual(response(c, fields({ choice: "1" }), false), { answer: { choice: 1 } });
+});
+
+test("the form sends request changes only with a comment, as the store wants (IN-03)", () => {
+  const c = { ...decision("open", open), kind: "signoff", options: undefined };
+  for (const note of ["", "   "]) {
+    assert.deepEqual(response(c, fields({ signoff: "changes", note }), false), { problem: "requesting changes needs a comment: say what to change" });
+  }
+  assert.deepEqual(response(c, fields({ signoff: "changes", note: "rename it" }), false), { answer: { note: "rename it", signoff: "changes" } });
+  assert.deepEqual(response(c, fields({ signoff: "accept" }), false), { answer: { signoff: "accept" } });
 });

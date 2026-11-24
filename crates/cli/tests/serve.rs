@@ -149,20 +149,8 @@ fn serve_stops_on_ctrl_c_and_removes_its_record() {
 #[test]
 fn a_second_ctrl_c_ends_a_slow_stop_at_once() {
     let env = Env::new();
-    let id = env.open_fyi("Heads up");
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A write whose body stops a few bytes in holds the stop for its whole
-    // grace period.
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(
-        stalled,
-        "POST /v1/cases/{id}/answer HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"revision\"",
-        serve.addr
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     std::thread::sleep(Duration::from_millis(300));
     let second = Instant::now();
@@ -321,22 +309,11 @@ fn a_second_serve_on_the_same_store_is_refused() {
 /// counts as no serve, and a new serve replaces it.
 #[test]
 fn a_stale_record_is_replaced() {
-    let closed = common::listen("127.0.0.1:0");
-    let closed_addr = closed.local_addr().unwrap().to_string();
-    drop(closed);
     let mut gone = common::spawn(&mut std::process::Command::new("true"));
     gone.wait().unwrap();
     for pid in [gone.id(), std::process::id()] {
         let env = Env::new();
-        let stale = serde_json::json!({
-            "pid": pid,
-            "url": format!("http://{closed_addr}/"),
-            "addr": closed_addr,
-            "store": std::path::absolute(&env.store).unwrap(),
-            "started_at": "2026-09-25T12:00:00Z",
-            "version": "0.0.0",
-        });
-        write_file(&env.instance_file(), &stale.to_string());
+        env.stale_instance(pid);
         let serve = env.serve(&[]);
         let info = json(&fs::read_to_string(env.instance_file()).unwrap());
         assert_eq!(info["pid"], serve.pid(), "pid {pid}");
@@ -360,6 +337,30 @@ fn serve_runs_without_a_state_directory_it_can_write() {
             .contains("could not record the instance for cases status: "),
         "{out:?}"
     );
+}
+
+/// With neither `$XDG_STATE_HOME` nor `$HOME` there is no state directory
+/// to find: serve is not refused for it, serves, and says it could not
+/// record itself, and status says why it cannot look.
+#[test]
+fn serve_runs_with_no_state_directory_to_find() {
+    let mut env = Env::new();
+    env.unset("XDG_STATE_HOME");
+    env.unset("HOME");
+    let want = "cannot find the state directory";
+    let serve = env.serve(&[]);
+    assert_eq!(serve.get("/v1").status, 200);
+    let out = serve.stop();
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "could not record the instance for cases status: {want}"
+        )),
+        "{out:?}"
+    );
+    let status = env.cases(&["status"]);
+    assert_eq!(status.code, 1, "{status:?}");
+    assert!(status.stderr.contains(want), "{status:?}");
 }
 
 #[test]
@@ -657,6 +658,10 @@ const SERVE: &str = r#""$CASES" --store "$STORE" serve --listen 127.0.0.1:0 --no
 /// What the status screen shows once serve reads keys.
 const KEYS: &str = "\x1b[32mq\x1b[0m quit";
 
+/// The end of the status screen's last line, after [`KEYS`] when it has
+/// them.
+const LAST: &str = "\x1b[32mCtrl-C\x1b[0m quit";
+
 /// How `pid` stands: its `ps` state, such as `S` or `T`, with its CPU time
 /// in seconds, or `None` once it has ended.
 fn standing(pid: i32) -> Option<(String, f64)> {
@@ -776,11 +781,14 @@ fn serve_started_in_the_background_reads_no_keys() {
     terminal.type_keys(&format!("{SERVE} & echo \"pid\"=$!\n"));
     let pid = terminal.pid();
     let _reap = Reap(pid);
-    let shown = terminal.wait_for("cases serve");
+    // The first frame, all of it, however it comes in chunks: the keys
+    // would be on its last line.
+    terminal.wait_for("cases serve");
+    let frame = terminal.wait_for(LAST);
+    assert!(!frame.contains(KEYS), "{frame:?}");
     std::thread::sleep(Duration::from_millis(1000));
     let (state, _) = standing(pid).expect("serve ended");
     assert!(!state.starts_with('T'), "serve stopped: {state}");
-    assert!(!shown.contains(KEYS) && !terminal.seen.contains(KEYS));
     rustix::process::kill_process(rustix::process::Pid::from_raw(pid).unwrap(), Signal::TERM)
         .unwrap();
     assert!(
@@ -859,10 +867,7 @@ fn serve_on_ipv6_brackets_its_address() {
 fn a_stop_closes_what_is_still_open_after_its_grace() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    let mut stalled = common::serve::connect(&serve.addr);
-    write!(stalled, "{}", stalled_send(&serve.addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The grace is 5 s.
     let out = serve.exit_within(Duration::from_secs(15));
@@ -873,15 +878,6 @@ fn a_stop_closes_what_is_still_open_after_its_grace() {
         "{out:?}"
     );
     drop(stalled);
-}
-
-/// A message whose body stops a few bytes in, which holds a stop for its
-/// whole grace.
-fn stalled_send(addr: &str, token: &str) -> String {
-    format!(
-        "POST /v1/cases HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\n\r\n{{\"kind\""
-    )
 }
 
 /// The address and pid of the serve that `env`'s instance file records,
@@ -991,10 +987,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
     terminal.wait_for(KEYS);
     let (addr, pid) = running(&env);
     let _reap = Reap(pid);
-    let token = csrf(&addr);
-    let mut stalled = common::serve::connect(&addr);
-    write!(stalled, "{}", stalled_send(&addr, &token)).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let stalled = held(&addr, &csrf(&addr));
     // Sent until it lands, as two that come closer than serve takes the
     // first are one signal. The stalled write holds the stop for its 5 s
     // grace, so an exit before then is a forced one.
@@ -1025,27 +1018,7 @@ fn a_second_ctrl_c_on_a_terminal_puts_it_back() {
 fn a_second_ctrl_c_straight_after_the_first_ends_serve() {
     let env = Env::new();
     let serve = env.serve(&[]);
-    let token = serve.csrf();
-    // A message whose body serve is reading, which it says with `100
-    // Continue`, and never gets: it holds the stop for its 5 s grace.
-    let mut stalled = common::serve::connect(&serve.addr);
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    write!(
-        stalled,
-        "POST /v1/cases HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n",
-        serve.addr
-    )
-    .unwrap();
-    let mut continued = [0; 25];
-    std::io::Read::read_exact(&mut stalled, &mut continued).unwrap();
-    assert!(
-        continued.starts_with(b"HTTP/1.1 100 Continue"),
-        "{:?}",
-        String::from_utf8_lossy(&continued)
-    );
+    let stalled = held(&serve.addr, &serve.csrf());
     serve.raise(Signal::INT);
     // The stop has begun once serve takes no new connection, and the second
     // comes straight after. (Two that come closer than serve can take the
@@ -1127,6 +1100,86 @@ fn serve_closes_a_stale_briefing_when_it_starts() {
     assert_eq!(env.case(&young).state(), cases_core::State::PickedUp);
 }
 
+/// A stop waits for a pass over the briefings that is under way, longer
+/// than the 1 s it gives what is left on blocking threads, so that the
+/// close the pass is making is made and logged (AG-19).
+#[test]
+fn a_stop_waits_for_the_briefing_pass_under_way() {
+    let env = Env::new();
+    let id = env.open(&[
+        "--kind",
+        "briefing",
+        "--urgency",
+        "today",
+        "--title",
+        "Old",
+        "--body",
+        "Done.",
+    ]);
+    env.write(&id, "human", "answer", r#"{"briefing": "accept"}"#);
+    let at = format!(
+        r#"{{"picked_up_at": "{}"}}"#,
+        common::from_now(-8 * 24 * 3600)
+    );
+    env.write(&id, "agent", "pickup", &at);
+
+    // Holding the store's write lock holds the pass in its close, for up to
+    // the store's 5 s wait on the lock.
+    let lock = rusqlite::Connection::open(&env.store).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let serve = env.serve(&[]);
+    // A stop that came before the pass began could skip it.
+    store_held(&serve.addr);
+    let pid = i32::try_from(serve.pid()).unwrap();
+    serve.raise(Signal::TERM);
+    assert!(
+        !ends_within(pid, Duration::from_millis(1_500)),
+        "serve left the pass under way"
+    );
+    lock.execute_batch("COMMIT").unwrap();
+    let out = serve.exit_within(Duration::from_secs(10));
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("closed briefing {id}: closed after 7 days")),
+        "{out:?}"
+    );
+    assert_eq!(env.case(&id).state(), cases_core::State::Closed);
+}
+
+/// Waits until a write by serve at `addr` is held on the store's lock: a
+/// read of the store then queues behind it, and takes no answer. Reads made
+/// before the write begins are answered, and made again.
+fn store_held(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut stream = common::serve::connect(addr);
+        stream
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /v1/cases HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut text = Vec::new();
+        match std::io::Read::read_to_end(&mut stream, &mut text) {
+            Err(error)
+                if text.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return;
+            }
+            read => assert!(read.is_ok(), "{read:?}"),
+        }
+        assert!(Instant::now() < deadline, "no write held the store");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// With briefing-close-after off, serve leaves the briefings alone; with a
 /// value that is not a duration, it does not start.
 #[test]
@@ -1161,4 +1214,294 @@ fn serve_leaves_briefings_when_the_setting_is_off() {
     std::thread::sleep(Duration::from_millis(200));
     serve.stop();
     assert_eq!(env.case(&id).state(), cases_core::State::PickedUp);
+}
+
+/// A store-tokens-file that is only white space counts as not given: serve
+/// starts, with no tokens, rather than reading a file named by nothing.
+#[test]
+fn a_blank_store_tokens_file_is_not_read() {
+    let env = Env::new();
+    env.config("store-tokens-file = \"  \"\n");
+    let serve = env.serve(&[]);
+    assert_eq!(serve.get("/v1").status, 200);
+    assert_eq!(serve.stop().code, 0);
+}
+
+/// Against a remote store serve starts nothing, says where its inbox is,
+/// and on a terminal opens it, unless `--no-open` says not to.
+#[cfg(feature = "remote")]
+#[test]
+fn on_a_terminal_a_remote_stores_inbox_is_opened_unless_no_open() {
+    let env = Env::new();
+    let bin = env.path("bin");
+    let opened = env.path("opened.log");
+    for opener in ["open", "xdg-open"] {
+        write_file(
+            &bin.join(opener),
+            &format!("#!/bin/sh\necho \"$@\" >> {}\n", opened.display()),
+        );
+        fs::set_permissions(bin.join(opener), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let remote = format!(
+        r#"PATH="{}" CASES_SERVER=http://127.0.0.1:9 CASES_TOKEN=t "$CASES" serve"#,
+        bin.display()
+    );
+    let mut terminal = Terminal::start(
+        &env,
+        &format!(r#"{remote}; code=$?; sleep 1; echo "exit=$code""#),
+    );
+    terminal.wait_for("http://127.0.0.1:9/");
+    terminal.wait_for("exit=0");
+    // The opener runs on after serve has ended; the shell stays up a
+    // moment so that the terminal's hangup does not end it first.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(&opened).is_ok_and(|text| text == "http://127.0.0.1:9/\n") {
+        assert!(Instant::now() < deadline, "the browser was not opened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut terminal = Terminal::start(
+        &env,
+        &format!(r#"{remote} --no-open; code=$?; sleep 1; echo "exit=$code""#),
+    );
+    terminal.wait_for("http://127.0.0.1:9/");
+    terminal.wait_for("exit=0");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        fs::read_to_string(&opened).unwrap(),
+        "http://127.0.0.1:9/\n",
+        "--no-open opened the browser"
+    );
+}
+
+/// On a terminal whose stderr goes elsewhere, the log still goes to stderr
+/// as well as to the status screen.
+#[test]
+fn on_a_terminal_with_stderr_redirected_the_log_goes_to_stderr() {
+    let env = Env::new();
+    env.config("allow-hosts = [\"inbox.example\"]\n");
+    let err = env.path("err.log");
+    let run = format!(
+        r#"XDG_CONFIG_HOME="{}" "$CASES" --store "$STORE" serve --listen 127.0.0.1:0 --no-open 2>"{}""#,
+        env.path("config").display(),
+        err.display()
+    );
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (_, pid) = running(&env);
+    let _reap = Reap(pid);
+    terminal.type_keys("q");
+    assert!(ends_within(pid, Duration::from_secs(5)));
+    let log = fs::read_to_string(&err).unwrap();
+    assert!(
+        log.contains("also serving https://inbox.example/ through a proxy"),
+        "{log}"
+    );
+}
+
+/// Opens a message on serve at `addr` whose body serve is reading, which it
+/// says with `100 Continue`, and never gets: it holds a stop for its 5 s
+/// grace. Gives the connection once serve has taken it up.
+fn held(addr: &str, token: &str) -> std::net::TcpStream {
+    let mut stream = common::serve::connect(addr);
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /v1/cases HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         X-Cases-CSRF: {token}\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n"
+    )
+    .unwrap();
+    let mut continued = [0; 25];
+    std::io::Read::read_exact(&mut stream, &mut continued).unwrap();
+    assert!(
+        continued.starts_with(b"HTTP/1.1 100 Continue"),
+        "{:?}",
+        String::from_utf8_lossy(&continued)
+    );
+    stream
+}
+
+/// Waits until serve at `addr` takes no new connection: its stop has
+/// begun.
+fn stop_begun(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::net::TcpStream::connect(addr) {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => return,
+            // One that came as the listener closed.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            Err(error) => panic!("{error}"),
+            Ok(_) => {}
+        }
+        assert!(Instant::now() < deadline, "the stop did not begin");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The number of the `write` system call, as `/proc` gives it.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const WRITE: u32 = 1;
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const WRITE: u32 = 64;
+
+/// Whether a thread of `pid` is held in a write to stdout within `within`,
+/// as on a terminal whose output is stopped: `/proc` gives the call a
+/// thread is in, by its number and its first argument (the fd).
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn held_writing(pid: i32, within: Duration) -> bool {
+    let call = format!("{WRITE} 0x1 ");
+    let deadline = Instant::now() + within;
+    loop {
+        let tasks = fs::read_dir(format!("/proc/{pid}/task")).unwrap();
+        if tasks.flatten().any(|task| {
+            fs::read_to_string(task.path().join("syscall"))
+                .is_ok_and(|text| text.starts_with(&call))
+        }) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A second SIGTERM during a slow stop ends serve at once, with the status
+/// a shell gives a process SIGTERM ended, 143, as a service manager sends
+/// it: not Ctrl-C's 130.
+#[test]
+fn a_second_sigterm_ends_a_slow_stop_with_143() {
+    let env = Env::new();
+    let serve = env.serve(&[]);
+    let token = serve.csrf();
+    let stalled = held(&serve.addr, &token);
+    serve.raise(Signal::TERM);
+    stop_begun(&serve.addr);
+    let second = Instant::now();
+    serve.raise(Signal::TERM);
+    let out = serve.exit_within(Duration::from_secs(4));
+    assert_eq!(out.code, 143, "{out:?}");
+    assert!(
+        second.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        second.elapsed()
+    );
+    drop(stalled);
+}
+
+/// A stop forced by a second signal removes serve's record, as one that
+/// runs its course does (SV-02).
+#[test]
+fn a_forced_stop_removes_the_record() {
+    let env = Env::new();
+    let serve = env.serve(&[]);
+    let file = env.instance_file();
+    assert!(file.exists(), "serve recorded nothing");
+    let stalled = held(&serve.addr, &serve.csrf());
+    serve.raise(Signal::INT);
+    stop_begun(&serve.addr);
+    serve.raise(Signal::INT);
+    let out = serve.exit_within(Duration::from_secs(4));
+    assert_eq!(out.code, 130, "{out:?}");
+    assert!(!file.exists(), "the record outlived serve");
+    drop(stalled);
+}
+
+/// On a terminal, the status screen's last frame comes after the stop, so
+/// that it shows what the stop logged: the connections it closed, which
+/// the screen alone shows when stderr is the terminal too.
+#[test]
+fn on_a_terminal_the_last_frame_shows_what_the_stop_closed() {
+    let env = Env::new();
+    let run = format!(r#"{SERVE}; echo "exit=$?""#);
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (addr, pid) = running(&env);
+    let reap = Reap(pid);
+    let stalled = held(&addr, &csrf(&addr));
+    terminal.type_keys("q");
+    // The grace is 5 s, within wait_for's 10.
+    terminal.wait_for("closed 1 connections still open 5 s after the stop");
+    terminal.wait_for("exit=0");
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
+    drop(stalled);
+}
+
+/// A second Ctrl-C ends serve on a terminal whose output is stopped
+/// (Ctrl-S), where the write that puts the terminal back cannot finish: it
+/// exits a moment later whatever that write does. On Linux, where `/proc`
+/// shows that serve's output is held.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn a_second_ctrl_c_ends_serve_on_a_stopped_terminal() {
+    let env = Env::new();
+    let run = format!(r#"{SERVE}; echo "exit=$?"; stty -a; echo "stty done""#);
+    let mut terminal = Terminal::start(&env, &run);
+    terminal.wait_for(KEYS);
+    let (addr, pid) = running(&env);
+    let reap = Reap(pid);
+    let token = csrf(&addr);
+    terminal.type_keys("\x13");
+    // A load of the page is counted and logged on the screen, so serve draws
+    // a frame within a tick, which the stopped terminal holds. Loaded again
+    // if a frame went out before the Ctrl-S was in force.
+    let mut loads = 0;
+    loop {
+        let mut page = common::serve::connect(&addr);
+        write!(
+            page,
+            "GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        std::io::Read::read_to_end(&mut page, &mut Vec::new()).unwrap();
+        loads += 1;
+        if held_writing(pid, Duration::from_secs(2)) {
+            break;
+        }
+        assert!(loads < 3, "no write of {pid} was held");
+    }
+    let stalled = held(&addr, &token);
+    let signal = |pid: i32| {
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process(pid, Signal::INT);
+        }
+    };
+    signal(pid);
+    stop_begun(&addr);
+    signal(pid);
+    // Before the 5 s grace is out: the exit is the forced one.
+    assert!(
+        ends_within(pid, Duration::from_secs(3)),
+        "serve did not end on a stopped terminal"
+    );
+    // The held write shows the cursor, and does not hold this up.
+    assert!(
+        !env.instance_file().exists(),
+        "the record outlived a forced stop"
+    );
+    // Ctrl-Q lets the terminal show what was held.
+    terminal.type_keys("\x11");
+    terminal.wait_for("exit=130");
+    // The keys are put back though the write that shows the cursor is held.
+    let modes = terminal.wait_for("stty done");
+    let modes: Vec<&str> = modes.split_whitespace().collect();
+    for mode in ["icanon", "echo"] {
+        assert!(modes.contains(&mode), "{mode} is off: {modes:?}");
+    }
+    // It has ended: no SIGKILL for whatever has its pid next.
+    std::mem::forget(reap);
+    drop(stalled);
 }

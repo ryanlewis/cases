@@ -123,28 +123,47 @@ impl Ctx {
     ///
     /// When no case, or more than one, matches, or the store fails.
     pub(crate) fn find_case(&self, text: &str) -> Result<Key, Error> {
+        Ok(self.named(text)?.0)
+    }
+
+    /// The case a human names by `text`, as [`Ctx::find_case`] finds it, and
+    /// the case as read then: one read of the store, not one to find it and
+    /// another to fold it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Ctx::find_case`], and as [`Ctx::case`] when the case does not
+    /// fold.
+    pub(crate) fn find(&self, text: &str) -> Result<(Key, Case), Error> {
+        match self.named(text)? {
+            (key, Some(case)) => Ok((key, case)),
+            // A case that does not fold is read again for its error.
+            (key, None) => Ok((key, self.case(key)?)),
+        }
+    }
+
+    /// [`Ctx::find_case`], with the case as it was folded to find it, when
+    /// it folds.
+    fn named(&self, text: &str) -> Result<(Key, Option<Case>), Error> {
         if let Ok(key) = exact(text) {
-            self.case(key)?;
-            return Ok(key);
+            return Ok((key, Some(self.case(key)?)));
         }
         let (part, _slug) = cases_id::split(text);
         let mut matches = Vec::new();
         if !part.is_empty() {
             for (key, rows) in self.rows()? {
                 if key.to_string().contains(part) {
-                    let title = Case::fold(&rows)
-                        .map(|case| case.title().to_owned())
-                        .unwrap_or_default();
-                    matches.push((key, title));
+                    matches.push((key, Case::fold(&rows).ok()));
                 }
             }
         }
         match matches.as_slice() {
             [] => Err(Error::new(format!("no case id contains {text:?}"))),
-            [(key, _)] => Ok(*key),
+            [_] => Ok(matches.swap_remove(0)),
             _ => {
                 let mut message = format!("{text:?} matches {} cases:", matches.len());
-                for (key, title) in &matches {
+                for (key, case) in &matches {
+                    let title = case.as_ref().map_or("", Case::title);
                     let _ = write!(message, "\n  {key}  {title}");
                 }
                 Err(Error::new(message))

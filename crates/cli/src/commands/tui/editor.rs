@@ -56,16 +56,14 @@ pub(crate) fn edit_with(editor: &str, text: &str) -> Result<Option<String>, Stri
 mod tests {
     use super::*;
 
-    /// An editor that appends a line, and says the file's mode.
+    /// An editor command that runs `body` as a shell script. `sh` reads the
+    /// script rather than the kernel executing it: a child forked by another
+    /// test can still hold the script open for writing, and executing a file
+    /// in that state fails with "Text file busy".
     fn script(dir: &std::path::Path, body: &str) -> String {
         let path = dir.join("editor.sh");
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        path.display().to_string()
+        fs::write(&path, format!("{body}\n")).unwrap();
+        format!("sh {}", path.display())
     }
 
     #[test]

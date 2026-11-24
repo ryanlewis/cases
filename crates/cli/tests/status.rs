@@ -66,10 +66,10 @@ fn status_without_serve_is_not_running() {
 #[test]
 fn a_stale_instance_file_is_not_running() {
     // Nothing accepts on the address: serve stopped without removing its
-    // file, and the system may have given its pid to another process.
+    // file, and the system may have given its pid to another process, here
+    // this test's.
     let env = Env::new();
-    let (listener, _) = env.fake_serve("127.0.0.1:0");
-    drop(listener);
+    env.stale_instance(std::process::id());
     assert_not_running(&env);
 
     // A process that is gone, with something else on the address.

@@ -32,6 +32,15 @@ export interface Data {
   listeners: Listener[] | null;
 }
 
+// What page `was` shows once a send of the case shown is refused with the
+// case as serve gave it, `current`: that case in its place, while it is the
+// one shown and no older than it. A refusal that comes back after the page
+// moved on, or after a later write showed a newer case, leaves the page as
+// it is.
+export function withRefused(was: Data | null, current: Case): Data | null {
+  return was && was.shown && was.shown.case && was.shown.case.id === current.id && current.revision >= was.shown.case.revision ? { ...was, shown: { ...was.shown, case: current } } : was;
+}
+
 // The list under its filter beside its first case or the case chosen. The
 // inbox filter with nothing in it has the inbox-zero panel beside it, in the
 // same split, so the first case to arrive takes the panel's place and the

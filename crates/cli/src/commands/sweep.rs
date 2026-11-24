@@ -227,8 +227,7 @@ fn stale_briefings(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
 fn pickup_by(case: &Case) -> String {
     case.pickup()
         .filter(|pickup| !pickup.by.is_empty())
-        .map(|pickup| format!(" by {}", pickup.by))
-        .unwrap_or_default()
+        .map_or_default(|pickup| format!(" by {}", pickup.by))
 }
 
 /// Withdraws each case in `read` as the human `writer`, with `reason`, at the

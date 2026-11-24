@@ -152,7 +152,7 @@ fn the_inbox_s_modules_strip() {
         }
         stripped += 1;
     }
-    assert_eq!(stripped, 23);
+    assert_eq!(stripped, 24);
 }
 
 #[test]

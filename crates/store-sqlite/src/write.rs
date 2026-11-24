@@ -20,9 +20,9 @@ impl From<Error> for StoreError<Error> {
 
 impl Db {
     /// Opens a new case as [`Store::create`] does, and gives its key and its
-    /// rows, read in the write's own transaction: what the open stored, with
-    /// no later writer's rows and no second read that can fail after the
-    /// open was stored.
+    /// rows: the one row the open stored, as a read would give it, with no
+    /// later writer's rows and no second read that can fail after the open
+    /// was stored.
     ///
     /// # Errors
     ///
@@ -32,11 +32,13 @@ impl Db {
         open: &Append,
         writer: &Writer,
     ) -> Result<(Key, Vec<Row>), StoreError<Error>> {
-        self.create_then(open, writer, |tx, key, _| Ok((key, self.rows_in(tx, key)?)))
+        let (key, _, row) = self.create_in(open, writer)?;
+        Ok((key, vec![row]))
     }
 
-    /// Appends an event as [`Store::append`] does, and gives the case's rows,
-    /// read in the write's own transaction, as [`Db::create_rows`] does.
+    /// Appends an event as [`Store::append`] does, and gives the case's rows
+    /// as a read would give them after it: those read in the write's own
+    /// transaction, with the row it stored, as [`Db::create_rows`] does.
     ///
     /// # Errors
     ///
@@ -48,27 +50,17 @@ impl Db {
         writer: &Writer,
         at_revision: Option<u64>,
     ) -> Result<Vec<Row>, StoreError<Error>> {
-        self.append_then(*key, append, writer, at_revision, |tx, _| {
-            self.rows_in(tx, *key)
-        })
-    }
-
-    /// The rows of the case `key`, read in `tx`, which has just stored one.
-    fn rows_in(&self, tx: &Transaction<'_>, key: Key) -> Result<Vec<Row>, StoreError<Error>> {
-        let (_, rows) = load_cases(tx, self.path(), Some(&[key]))?
-            .pop()
-            .ok_or(StoreError::NoCase)?;
+        let (_, rows) = self.append_in(*key, append, writer, at_revision)?;
         Ok(rows)
     }
 
-    /// Opens a new case, and gives what `then` makes of it in the same
-    /// transaction, before it commits.
-    fn create_then<T>(
+    /// Opens a new case, and gives its key, the case, and the row the open
+    /// stored, exactly as stored: a read gives it back the same.
+    fn create_in(
         &self,
         open: &Append,
         writer: &Writer,
-        then: impl FnOnce(&Transaction<'_>, Key, Case) -> Result<T, StoreError<Error>>,
-    ) -> Result<T, StoreError<Error>> {
+    ) -> Result<(Key, Case, Row), StoreError<Error>> {
         // Only a case the writer takes makes the store (AG-01, ST-08). The
         // time and the actor it is written with do not change whether it is
         // taken, so it is checked with a stand-in time and no actor before
@@ -90,22 +82,24 @@ impl Db {
                 what: "it has no key left for another case".into(),
             })?;
             self.insert(tx, key, &row, &case)?;
-            then(tx, key, case)
+            Ok((key, case, row))
         })
     }
 
-    /// Appends an event to the case `key`, and gives what `then` makes of
-    /// the case after it in the same transaction, before it commits.
-    fn append_then<T>(
+    /// Appends an event to the case `key`, and gives the case after it and
+    /// its rows as a read in the same transaction would give them after the
+    /// insert: those read before it, in order of seq, then the new row, whose
+    /// seq is past every one of theirs. The row is stored exactly as it is
+    /// held, so it reads back the same.
+    fn append_in(
         &self,
         key: Key,
         append: &Append,
         writer: &Writer,
         at_revision: Option<u64>,
-        then: impl FnOnce(&Transaction<'_>, Case) -> Result<T, StoreError<Error>>,
-    ) -> Result<T, StoreError<Error>> {
+    ) -> Result<(Case, Vec<Row>), StoreError<Error>> {
         self.write(false, |tx| {
-            let (_, rows) = load_cases(tx, self.path(), Some(&[key]))?
+            let (_, mut rows) = load_cases(tx, self.path(), Some(&[key]))?
                 .pop()
                 .ok_or(StoreError::NoCase)?;
             let mut case = Case::fold(&rows)?;
@@ -117,7 +111,8 @@ impl Db {
             let actor = actor_for(tx, &append.author, writer, now)?;
             let row = case.append(append, now, actor.as_ref(), at_revision)?;
             self.insert(tx, key, &row, &case)?;
-            then(tx, case)
+            rows.push(row);
+            Ok((case, rows))
         })
     }
 }
@@ -131,7 +126,8 @@ impl Store for Db {
     /// stored in one transaction, which makes the store first when there is
     /// none. An open the writer refuses does not make the store.
     fn create(&self, open: &Append, writer: &Writer) -> Result<(Key, Case), StoreError<Error>> {
-        self.create_then(open, writer, |_, key, case| Ok((key, case)))
+        let (key, case, _) = self.create_in(open, writer)?;
+        Ok((key, case))
     }
 
     /// Appends an event to the case `key`, in a transaction that holds the
@@ -144,7 +140,8 @@ impl Store for Db {
         writer: &Writer,
         at_revision: Option<u64>,
     ) -> Result<Case, StoreError<Error>> {
-        self.append_then(*key, append, writer, at_revision, |_, case| Ok(case))
+        let (case, _) = self.append_in(*key, append, writer, at_revision)?;
+        Ok(case)
     }
 
     fn rows(&self, key: &Key) -> Result<Option<Vec<Row>>, Error> {

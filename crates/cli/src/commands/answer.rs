@@ -88,10 +88,9 @@ pub(crate) struct Args {
 
 /// Answers the case.
 pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
-    let key = ctx.find_case(&args.id)?;
     // The case as read now: its kind says which verdict --accept is, and
     // its amend seq goes with the answer.
-    let case = ctx.case(key)?;
+    let (key, case) = ctx.find(&args.id)?;
     let mut answer = Answer::default();
     // The core reads empty text as no response, which is not what an empty
     // file is.

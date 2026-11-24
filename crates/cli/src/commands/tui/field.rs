@@ -62,6 +62,15 @@ impl Field {
         at
     }
 
+    /// Takes a paste: its text at the cursor, a new line as one, or as a
+    /// space when the field is `one_line`.
+    pub(crate) fn paste(&mut self, text: &str, one_line: bool) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        for c in text.chars() {
+            self.insert(if one_line && c == '\n' { ' ' } else { c });
+        }
+    }
+
     /// Takes a key the field understands, and says whether it did. Enter
     /// starts a new line.
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {

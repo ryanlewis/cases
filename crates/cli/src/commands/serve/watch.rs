@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
-use cases_core::Case;
+use cases_core::{Case, Refolded};
 use cases_store_sqlite::{Cases, Db, Key, Poller};
 use tokio::sync::watch;
 
@@ -31,8 +31,12 @@ use crate::output::{self, Actors, CaseJson};
 /// The store's cases as one read found them, and their version.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
-    /// The cases that fold, in the order they were opened.
-    pub(crate) cases: Vec<(Key, Case)>,
+    /// The cases that fold, in the order they were opened. A case the
+    /// poller did not fold again since the snapshot before is the one that
+    /// snapshot held, shared, not a copy. After a read of every case, such
+    /// as one after a failed read, so is each case equal to the one that
+    /// snapshot held; the rest are new copies.
+    pub(crate) cases: Vec<(Key, Arc<Case>)>,
     /// The store's version, as the poller read it with the cases, in the
     /// same read transaction: so it names this moment of the store and no
     /// other. Every event written moves it, as does a case taken out of the
@@ -84,6 +88,11 @@ struct Reader<'a> {
     /// The warnings logged, each once: a case that does not fold is read
     /// again on every change.
     warned: HashSet<String>,
+    /// The keys of the cases folded again since the snapshot published
+    /// last, by every poll since, which the next snapshot holds anew; the
+    /// rest it shares with that snapshot. `None` when every case was, so
+    /// that the next snapshot shares only the cases that came out equal.
+    refolded: Option<HashSet<Key>>,
 }
 
 impl Watch {
@@ -115,6 +124,7 @@ impl Watch {
                 read: false,
                 engine: Engine::default(),
                 warned: HashSet::new(),
+                refolded: None,
             };
             for answer in received {
                 // A reader that asked and went away needs no answer.
@@ -191,8 +201,11 @@ impl Shared {
 impl Reader<'_> {
     /// Reads the store, and publishes what moved.
     fn read(&mut self) -> Read {
-        let missing = match self.poller.poll() {
-            Ok(_) => false,
+        let polled = self.poller.poll().map(|_| ());
+        // Taken from a failed poll too, which folds every case again next.
+        self.note_refolded();
+        let missing = match polled {
+            Ok(()) => false,
             Err(cases_store_sqlite::Error::Missing { .. }) => true,
             Err(error) => return Err(error),
         };
@@ -208,14 +221,7 @@ impl Reader<'_> {
         if self.read && version == current.version {
             return Ok(current);
         }
-        for (key, case) in cases {
-            if let Err(error) = case {
-                let warning = format!("warning: {key}: {error}");
-                if self.warned.insert(warning.clone()) {
-                    self.log.line(warning);
-                }
-            }
-        }
+        warn_unfolded(&mut self.warned, &self.log, cases);
         // A store that goes missing leaves the engine as it was: were the
         // file put back, its cases would all be new again. A first read
         // that finds none still counts, so the first case to come is new.
@@ -226,16 +232,74 @@ impl Reader<'_> {
             }
         }
         self.read = true;
+        // Each case the poller did not fold again since the last snapshot
+        // is the one that snapshot holds: shared, rather than copied with
+        // all its events, and not looked at. When every case was folded
+        // again since that snapshot, one that came out equal is shared too:
+        // comparing it allocates nothing, where a copy clones its events.
+        let refolded = self.refolded.replace(HashSet::new());
         let snapshot = Arc::new(Snapshot {
-            cases: cases
-                .iter()
-                .filter_map(|(key, case)| Some((*key, case.as_ref().ok()?.clone())))
-                .collect(),
+            cases: merged(&current, cases, refolded.as_ref()),
             version,
         });
         self.shared.snapshots.send_replace(Arc::clone(&snapshot));
         Ok(snapshot)
     }
+
+    /// Adds the cases the last poll folded again to those folded since the
+    /// snapshot published last, or notes that every case was.
+    fn note_refolded(&mut self) {
+        match self.poller.refolded() {
+            Refolded::Changed { folded, .. } => {
+                if let Some(refolded) = &mut self.refolded {
+                    refolded.extend(folded);
+                }
+            }
+            _ => self.refolded = None,
+        }
+    }
+}
+
+/// Logs each case in `cases` that does not fold, once, as `warned` keeps.
+fn warn_unfolded(warned: &mut HashSet<String>, log: &Log, cases: &Cases) {
+    for (key, case) in cases {
+        if let Err(error) = case {
+            let warning = format!("warning: {key}: {error}");
+            if warned.insert(warning.clone()) {
+                log.line(warning);
+            }
+        }
+    }
+}
+
+/// The cases of the next snapshot: each case in `cases` that folds. One
+/// whose key is not in `refolded` is the `current` snapshot's, shared; when
+/// every case was folded again, `refolded` is `None`, and one that came out
+/// equal to the current snapshot's is shared. The rest are new copies.
+fn merged(
+    current: &Snapshot,
+    cases: &Cases,
+    refolded: Option<&HashSet<Key>>,
+) -> Vec<(Key, Arc<Case>)> {
+    // Both the snapshot and the poller's cases are in key order.
+    let mut before = current.cases.iter().peekable();
+    cases
+        .iter()
+        .filter_map(|(key, case)| {
+            let case = case.as_ref().ok()?;
+            while before.next_if(|(was, _)| was < key).is_some() {}
+            let was = before.next_if(|(was, _)| was == key).map(|(_, was)| was);
+            let kept = |was: &Case| match refolded {
+                Some(refolded) => !refolded.contains(key),
+                None => was == case,
+            };
+            let shared = match was {
+                Some(was) if kept(was) => Arc::clone(was),
+                _ => Arc::new(case.clone()),
+            };
+            Some((*key, shared))
+        })
+        .collect()
 }
 
 /// Queues a notification for each case in `landed`, with the case as
@@ -263,7 +327,9 @@ fn queue(db: &Db, url: &str, shared: &Shared, cases: &Cases, landed: &[super::no
 
 #[cfg(test)]
 mod tests {
-    use cases_core::{Append, Store};
+    use std::cell::RefCell;
+
+    use cases_core::{Append, Changes, Store, Version};
     use cases_store_sqlite::Writer;
 
     use super::*;
@@ -372,6 +438,398 @@ mod tests {
             "the copy was not published"
         );
         assert_eq!(body(&snapshots.borrow_and_update()), body(&after));
+    }
+
+    /// A read after a write shares each case that did not change with the
+    /// snapshot before, and holds the changed one anew; a case added is
+    /// new, and a case taken out is gone.
+    #[test]
+    fn a_read_shares_the_cases_that_did_not_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, watch) = watch(&dir.path().join("cases.db"));
+        let keys: Vec<Key> = (0..3)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        let before = watch.read().unwrap();
+        amend(&db, keys[1], "amended");
+        let after = watch.read().unwrap();
+        let shared = |snapshot: &Snapshot, key: Key| {
+            let (_, case) = snapshot.cases.iter().find(|(k, _)| *k == key).unwrap();
+            Arc::clone(case)
+        };
+        assert!(Arc::ptr_eq(
+            &shared(&before, keys[0]),
+            &shared(&after, keys[0])
+        ));
+        assert!(Arc::ptr_eq(
+            &shared(&before, keys[2]),
+            &shared(&after, keys[2])
+        ));
+        assert!(!Arc::ptr_eq(
+            &shared(&before, keys[1]),
+            &shared(&after, keys[1])
+        ));
+        assert_eq!(shared(&after, keys[1]).body(), "amended");
+        let added = fyi(&db);
+        db.archive(&keys[0], None).unwrap();
+        let last = watch.read().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared(&after, keys[1]),
+            &shared(&last, keys[1])
+        ));
+        assert!(Arc::ptr_eq(
+            &shared(&after, keys[2]),
+            &shared(&last, keys[2])
+        ));
+        assert!(!last.cases.iter().any(|(key, _)| *key == keys[0]));
+        assert_eq!(shared(&last, added).title(), "Heads up");
+    }
+
+    /// A read that publishes nothing leaves the next one sharing what did
+    /// not change since the snapshot published last. A store gone missing
+    /// and put back is read anew, sharing nothing with the snapshot from
+    /// before, and the read after it shares again.
+    #[test]
+    fn a_read_shares_across_reads_that_publish_nothing_and_none_after_a_missing_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let (db, watch) = watch(&path);
+        let keys: Vec<Key> = (0..2)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        let shared = |snapshot: &Snapshot, key: Key| {
+            let (_, case) = snapshot.cases.iter().find(|(k, _)| *k == key).unwrap();
+            Arc::clone(case)
+        };
+        let first = watch.read().unwrap();
+        assert!(Arc::ptr_eq(&watch.read().unwrap(), &first));
+        amend(&db, keys[1], "amended");
+        let second = watch.read().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared(&first, keys[0]),
+            &shared(&second, keys[0])
+        ));
+        assert!(!Arc::ptr_eq(
+            &shared(&first, keys[1]),
+            &shared(&second, keys[1])
+        ));
+
+        let aside = dir.path().join("aside.db");
+        std::fs::rename(&path, &aside).unwrap();
+        assert!(watch.read().unwrap().cases.is_empty());
+        std::fs::rename(&aside, &path).unwrap();
+        let back = watch.read().unwrap();
+        assert_eq!(body(&back), body(&second));
+        for key in &keys {
+            assert!(!Arc::ptr_eq(&shared(&second, *key), &shared(&back, *key)));
+        }
+
+        amend(&db, keys[0], "again");
+        let last = watch.read().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared(&back, keys[1]),
+            &shared(&last, keys[1])
+        ));
+        assert_eq!(shared(&last, keys[0]).body(), "again");
+    }
+
+    /// How many of the cases in `after` are the very ones `before` holds.
+    fn shared_with(before: &Snapshot, after: &Snapshot) -> usize {
+        after
+            .cases
+            .iter()
+            .filter(|(_, case)| before.cases.iter().any(|(_, was)| Arc::ptr_eq(was, case)))
+            .count()
+    }
+
+    /// The key `n`.
+    fn key(n: u64) -> Key {
+        Key::new(n).unwrap()
+    }
+
+    /// The case an open with `data` gives, or why it does not fold.
+    fn open(data: String) -> Result<Case, cases_core::Error> {
+        let open = Append {
+            author: "agent".into(),
+            event: "open".into(),
+            data,
+        };
+        let now = "2026-11-01T09:00:00Z".parse().unwrap();
+        Case::open(&open, now, None).map(|(case, _)| case)
+    }
+
+    /// A case that folds, an fyi titled `title`.
+    fn folded(title: &str) -> Case {
+        open(format!(
+            r#"{{"kind":"fyi","urgency":"today","title":"{title}"}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Why a case that opens with no kind does not fold.
+    fn unfolded() -> cases_core::Error {
+        open("{}".into()).unwrap_err()
+    }
+
+    /// Serve logs a case that does not fold once for its error, as `warning:
+    /// KEY: WHY`, and not again at a later read that still finds it so;
+    /// another case that does not fold is logged when it appears.
+    #[test]
+    fn a_case_that_does_not_fold_is_logged_once() {
+        let log = Log::new(false, 10);
+        let mut warned = HashSet::new();
+        let mut cases = Cases::new();
+        cases.insert(key(1), Ok(folded("Fine")));
+        cases.insert(key(2), Err(unfolded()));
+        let two = format!("warning: {}: {}", key(2), unfolded());
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        warn_unfolded(&mut warned, &log, &cases);
+        assert_eq!(log.last(), std::slice::from_ref(&two));
+
+        cases.insert(key(3), Err(unfolded()));
+        warn_unfolded(&mut warned, &log, &cases);
+        let three = format!("warning: {}: {}", key(3), unfolded());
+        assert_eq!(log.last(), [two, three]);
+    }
+
+    /// Each case `merged` gives for `cases` and `refolded`, in its order: its
+    /// key, its title, and whether it is the very case `current` holds.
+    fn merge(
+        current: &Snapshot,
+        cases: &Cases,
+        refolded: Option<&HashSet<Key>>,
+    ) -> Vec<(u64, String, bool)> {
+        merged(current, cases, refolded)
+            .iter()
+            .map(|(key, case)| {
+                let shared = current.cases.iter().any(|(_, was)| Arc::ptr_eq(was, case));
+                (key.get(), case.title().to_owned(), shared)
+            })
+            .collect()
+    }
+
+    /// The rules of the next snapshot's cases, from the snapshot before and
+    /// a read. A case not folded again since is the snapshot's, shared, even
+    /// when the read's differs, and
+    /// one folded again is a new copy, even when equal; after a read of every
+    /// case, an equal case is shared and a changed one is a new copy. A case
+    /// new to the snapshot is a new copy; one that does not fold is left
+    /// out, and one gone from the read is dropped; the order is the read's.
+    #[test]
+    fn the_next_snapshot_shares_the_cases_its_rules_say() {
+        let current = Snapshot {
+            cases: [1, 2, 3, 4, 6, 7]
+                .into_iter()
+                .map(|n| (key(n), Arc::new(folded(&format!("case {n}")))))
+                .collect(),
+            version: "before".into(),
+        };
+        let mut cases = Cases::new();
+        for n in [2, 7] {
+            cases.insert(key(n), Ok(folded(&format!("case {n}"))));
+        }
+        // Changed, and not folded again: as a snapshot that missed it.
+        cases.insert(key(1), Ok(folded("changed")));
+        cases.insert(key(3), Ok(folded("changed")));
+        cases.insert(key(5), Ok(folded("new")));
+        cases.insert(key(6), Err(unfolded()));
+        let row = |n: u64, title: &str, shared: bool| (n, title.to_owned(), shared);
+
+        // Folded again since, by key: 2 and 3.
+        let refolded = HashSet::from([key(2), key(3)]);
+        assert_eq!(
+            merge(&current, &cases, Some(&refolded)),
+            [
+                row(1, "case 1", true),
+                row(2, "case 2", false),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
+
+        // Every case folded again.
+        assert_eq!(
+            merge(&current, &cases, None),
+            [
+                row(1, "changed", false),
+                row(2, "case 2", true),
+                row(3, "changed", false),
+                row(5, "new", false),
+                row(7, "case 7", true),
+            ]
+        );
+    }
+
+    thread_local! {
+        /// What the next read of a [`scripted`] reader gives, in place of
+        /// the store's answer.
+        static SCRIPT: RefCell<Option<Result<Changes<Key>, cases_store_sqlite::Error>>> =
+            const { RefCell::new(None) };
+    }
+
+    /// A reader of `db` on this thread, whose next poll gives [`SCRIPT`]
+    /// when it is set, and the store's answer otherwise.
+    fn scripted(db: &Db) -> Reader<'_> {
+        SCRIPT.set(None);
+        let empty = Snapshot {
+            cases: Vec::new(),
+            version: MISSING.into(),
+        };
+        Reader {
+            db,
+            poller: Poller::with_read(db, |db, since| {
+                SCRIPT.take().unwrap_or_else(|| db.rows_since(since))
+            }),
+            url: "http://127.0.0.1:7337/".into(),
+            log: Arc::new(Log::new(false, 0)),
+            shared: Arc::new(Shared {
+                snapshots: watch::Sender::new(Arc::new(empty)),
+                feed: Mutex::new(Feed::new("boot".into())),
+            }),
+            read: false,
+            engine: Engine::default(),
+            warned: HashSet::new(),
+            refolded: None,
+        }
+    }
+
+    /// A read the store answers with every case, here because an older copy
+    /// of it was put at its path, shares each case that came out equal to
+    /// the one the snapshot before held, and holds the one that differs
+    /// anew.
+    #[test]
+    fn a_read_of_every_case_shares_the_cases_that_are_equal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let copy = dir.path().join("copy.db");
+        let (db, watch) = watch(&path);
+        let keys: Vec<Key> = (0..3)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+            .unwrap();
+        amend(&db, keys[1], "amended");
+        let before = watch.read().unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            let from = dir.path().join(format!("cases.db{suffix}"));
+            if from.exists() {
+                std::fs::rename(&from, dir.path().join(format!("aside.db{suffix}"))).unwrap();
+            }
+        }
+        std::fs::rename(&copy, &path).unwrap();
+        let after = watch.read().unwrap();
+        assert_ne!(after.version, before.version);
+        assert_eq!(after.cases[1].1.body(), "body 1", "the copy was not read");
+        assert_eq!(shared_with(&before, &after), 2);
+        assert!(!Arc::ptr_eq(&before.cases[1].1, &after.cases[1].1));
+    }
+
+    /// A poll that fails on a store that has not moved costs the next
+    /// snapshot nothing: the read after it publishes nothing, and the one
+    /// after a write still shares every case but the one written to.
+    #[test]
+    fn a_failed_read_of_an_unmoved_store_leaves_the_next_snapshot_sharing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let keys: Vec<Key> = (0..3)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        let mut reader = scripted(&db);
+        let first = reader.read().unwrap();
+        SCRIPT.set(Some(Err(cases_store_sqlite::Error::Io(io::Error::other(
+            "a passing failure",
+        )))));
+        assert!(reader.read().is_err());
+        assert!(Arc::ptr_eq(&reader.read().unwrap(), &first));
+        amend(&db, keys[1], "amended");
+        let next = reader.read().unwrap();
+        assert_eq!(shared_with(&first, &next), 2);
+        assert_eq!(next.cases[1].1.body(), "amended");
+    }
+
+    /// The next snapshot holds anew every case folded again since the last
+    /// one, by every poll since: here one that published nothing, as a read
+    /// may answer, and one that did.
+    #[test]
+    fn a_snapshot_holds_anew_the_cases_every_poll_since_the_last_folded() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("cases.db"));
+        let keys: Vec<Key> = (0..3)
+            .map(|n| question(&db, &format!("body {n}")))
+            .collect();
+        let mut reader = scripted(&db);
+        let first = reader.read().unwrap();
+        let Changes::All { cases, .. } = db.rows_since(None).unwrap() else {
+            panic!("not every case");
+        };
+        SCRIPT.set(Some(Ok(Changes::Since {
+            version: Version::new(first.version.clone()),
+            cases: cases
+                .into_iter()
+                .filter(|(key, _)| *key == keys[0])
+                .collect(),
+            removed: Vec::new(),
+        })));
+        assert!(Arc::ptr_eq(&reader.read().unwrap(), &first));
+        amend(&db, keys[1], "amended");
+        let next = reader.read().unwrap();
+        assert!(!Arc::ptr_eq(&first.cases[0].1, &next.cases[0].1));
+        assert!(!Arc::ptr_eq(&first.cases[1].1, &next.cases[1].1));
+        assert!(Arc::ptr_eq(&first.cases[2].1, &next.cases[2].1));
+    }
+
+    /// A copy of the store put at its path whose case went apart and then
+    /// took the very same last row, at the very same time, as the case serve
+    /// read: the case has the same counts, open time and last event, and
+    /// another history. The next read shows the copy's case, not the one
+    /// the snapshot before held.
+    #[test]
+    fn a_copy_whose_case_went_apart_and_ends_alike_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cases.db");
+        let copy = dir.path().join("copy.db");
+        let db = Db::new(&path).with_clock(at("2026-11-01T09:00:00Z"));
+        let key = question(&db, "original");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+            .unwrap();
+        let note = Append {
+            author: "agent".into(),
+            event: "note".into(),
+            data: r#"{"body":"Same last word."}"#.into(),
+        };
+        // Apart, then alike, at the same time; and the store serve reads
+        // has a case more, so that the copy is behind it and is read whole.
+        let other = Db::new(&copy).with_clock(at("2026-11-01T09:05:00Z"));
+        amend(&other, key, "branch B");
+        let other = other.with_clock(at("2026-11-01T09:10:00Z"));
+        other.append(&key, &note, &Writer::new(None), None).unwrap();
+        drop(other);
+        let db = db.with_clock(at("2026-11-01T09:04:00Z"));
+        amend(&db, key, "branch A");
+        let db = db.with_clock(at("2026-11-01T09:10:00Z"));
+        db.append(&key, &note, &Writer::new(None), None).unwrap();
+        fyi(&db);
+
+        let (_db, watch) = watch_db(db);
+        let before = watch.read().unwrap();
+        assert_eq!(body(&before)[0], (key, 3, "branch A".into()));
+        for suffix in ["", "-wal", "-shm"] {
+            let from = dir.path().join(format!("cases.db{suffix}"));
+            if from.exists() {
+                std::fs::rename(&from, dir.path().join(format!("aside.db{suffix}"))).unwrap();
+            }
+        }
+        std::fs::rename(&copy, &path).unwrap();
+        let after = watch.read().unwrap();
+        assert_ne!(after.version, before.version);
+        assert_eq!(body(&after), [(key, 3, "branch B".into())]);
     }
 
     /// A read that finds the store as it was gives the snapshot it has, and

@@ -5,9 +5,11 @@
 //! The HTTP client opens one child for each connection it makes, and keeps
 //! it while it is idle, as it would keep a socket: a later request reuses
 //! it, and a connection that fails is dropped and the next request starts a
-//! new child. A child's stdout is read on a thread of its own, so a read
-//! can time out as a socket's does. Its stderr is kept, the last part of
-//! it, to say why a child ended with no answer.
+//! new child. A child's stdout is read, and its stdin written, on threads
+//! of their own, so a read or a write can time out as a socket's does: a
+//! request larger than the pipe holds, to a child that does not read it,
+//! would otherwise wait for as long as the child lasts. Its stderr is
+//! kept, the last part of it, to say why a child ended with no answer.
 //!
 //! A [`Hold`](crate::Hold) is a child of its own, outside the HTTP client,
 //! sent one request and kept open after its answer, for what the far side
@@ -19,7 +21,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,7 +46,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(2);
 const STDERR_GRACE: Duration = Duration::from_millis(200);
 
 /// How long a child is given to exit after its stdin is closed, when its
-/// connection is dropped, before it is killed.
+/// connection is dropped with no write stuck, before it is killed.
 const CLOSE_GRACE: Duration = Duration::from_millis(200);
 
 /// The most an answer's head may hold, read by [`Pipe::exchange`].
@@ -198,12 +200,51 @@ impl Resolver for NoAddress {
 /// end, with the sender dropped, is the end of the child's stdout.
 type Chunk = io::Result<Vec<u8>>;
 
+/// A child's stdin, written on a thread of its own: each request is sent
+/// to the thread, and its result sent back, so that it can be waited for
+/// with a time limit. Dropped, it ends the thread once a write on its way
+/// is done, which closes the stdin.
+struct Stdin {
+    requests: Sender<Vec<u8>>,
+    /// In a mutex for the same reason as the pipe's `stdout`.
+    written: Mutex<Receiver<io::Result<()>>>,
+    /// Set once a write was not done in time. Its bytes may be in the pipe
+    /// in part, so the child cannot take another request: each later write
+    /// fails at once.
+    stuck: bool,
+}
+
+impl Stdin {
+    fn new(mut stdin: ChildStdin) -> Stdin {
+        let (requests, to_write) = mpsc::channel::<Vec<u8>>();
+        let (done, written) = mpsc::channel();
+        thread::spawn(move || {
+            // A write that fails ends the thread, and the connection: the
+            // child closed its stdin, or ended. A write the child does not
+            // read ends when it is killed, as its pipe is dropped.
+            for bytes in to_write {
+                let result = stdin.write_all(&bytes).and_then(|()| stdin.flush());
+                let failed = result.is_err();
+                if done.send(result).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Stdin {
+            requests,
+            written: Mutex::new(written),
+            stuck: false,
+        }
+    }
+}
+
 /// One connection: a child, its stdin, what it has written to stdout and
 /// not been read yet, and its stderr.
 pub(crate) struct Pipe {
     dial: Arc<Dial>,
     child: Child,
-    stdin: Option<ChildStdin>,
+    /// Boxed, to keep the pipe as small as a stdin alone left it.
+    stdin: Option<Box<Stdin>>,
     /// In a mutex only so that the pipe is `Sync`, as a transport must be:
     /// it is reached through `&mut self` alone.
     stdout: Mutex<Receiver<Chunk>>,
@@ -240,7 +281,7 @@ impl Pipe {
                 format!("could not run {}: {error}", dial.program.to_string_lossy()),
             ))
         })?;
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().map(|stdin| Box::new(Stdin::new(stdin)));
         let mut stdout = child.stdout.take().ok_or_else(|| no_pipe("stdout"))?;
         let mut stderr = child.stderr.take().ok_or_else(|| no_pipe("stderr"))?;
         let (send, stdout_chunks) = mpsc::channel();
@@ -294,6 +335,46 @@ impl Pipe {
             buffers: LazyBuffers::new(input, output),
             ended: false,
         })
+    }
+
+    /// Writes `bytes` to the child's stdin, within `within` (no limit for
+    /// `None`), or fails as a timeout for `reason`. A write that fails
+    /// says why the child closed its stdin, when it exits.
+    fn write(
+        &mut self,
+        bytes: Vec<u8>,
+        within: Option<Duration>,
+        reason: ureq::Timeout,
+    ) -> Result<(), ureq::Error> {
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(self.closed());
+        };
+        if stdin.stuck {
+            return Err(ureq::Error::Timeout(reason));
+        }
+        let written = if stdin.requests.send(bytes).is_ok() {
+            let written = stdin
+                .written
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner);
+            match within {
+                Some(within) => written.recv_timeout(within),
+                None => written.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            }
+        } else {
+            Err(RecvTimeoutError::Disconnected)
+        };
+        match written {
+            Ok(Ok(())) => Ok(()),
+            Err(RecvTimeoutError::Timeout) => {
+                stdin.stuck = true;
+                Err(ureq::Error::Timeout(reason))
+            }
+            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                self.stdin = None;
+                Err(self.closed())
+            }
+        }
     }
 
     /// The child's status, once it has exited, waiting up to `grace`.
@@ -359,17 +440,7 @@ impl Pipe {
         limit: u64,
     ) -> Result<(u16, Vec<u8>), ureq::Error> {
         let deadline = Instant::now() + timeout;
-        let Some(stdin) = self.stdin.as_mut() else {
-            return Err(self.closed());
-        };
-        if stdin
-            .write_all(request)
-            .and_then(|()| stdin.flush())
-            .is_err()
-        {
-            self.stdin = None;
-            return Err(self.closed());
-        }
+        self.write(request.to_vec(), Some(timeout), ureq::Timeout::Global)?;
         let mut got = Vec::new();
         loop {
             if let Some(answer) = answer_in(&got, limit)? {
@@ -410,21 +481,7 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
     };
     let head =
         std::str::from_utf8(&got[..end]).map_err(|_| bad("the answer's head is not UTF-8"))?;
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .and_then(|line| {
-            let mut parts = line.split(' ');
-            let version = parts.next()?;
-            version.starts_with("HTTP/1.").then_some(())?;
-            parts.next()?.parse::<u16>().ok()
-        })
-        .ok_or_else(|| bad("the answer's status line is not one"))?;
-    let length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
-        .ok_or_else(|| bad("the answer has no length"))?;
+    let (status, length) = answer_head(head).map_err(bad)?;
     if length > limit {
         return Err(ureq::Error::BodyExceedsLimit(limit));
     }
@@ -434,6 +491,69 @@ fn answer_in(got: &[u8], limit: u64) -> Result<Option<(u16, Vec<u8>)>, ureq::Err
         return Ok(None);
     }
     Ok(Some((status, got[start..start + length].to_vec())))
+}
+
+/// The status and the body's length the answer's `head` gives, read
+/// strictly: each line ended by CRLF alone, the version 1.0 or 1.1, a
+/// status of three digits, each header's name a token, no transfer coding,
+/// and one length, of digits alone; or why it gives none.
+fn answer_head(head: &str) -> Result<(u16, u64), &'static str> {
+    // A bare CR or LF would end a line for some readers and not for
+    // others, so it could hide a header in the one before (RFC 9112, 2.2).
+    if head.split("\r\n").any(|line| line.contains(['\r', '\n'])) {
+        return Err("the answer's line has a bare CR or LF");
+    }
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| {
+            let mut parts = line.split(' ');
+            matches!(parts.next()?, "HTTP/1.0" | "HTTP/1.1").then_some(())?;
+            // Three digits (RFC 9112, 4), of a final answer: an interim
+            // one (1xx) would leave the real answer to be read as the next
+            // one's, and none is below 100 (RFC 9110, 15).
+            let status = parts.next()?;
+            (status.len() == 3 && status.bytes().all(|b| b.is_ascii_digit())).then_some(())?;
+            status
+                .parse::<u16>()
+                .ok()
+                .filter(|s| (200..=599).contains(s))
+        })
+        .ok_or("the answer's status line is not one")?;
+    let mut length = None;
+    for line in lines {
+        // A name is a token (RFC 9110, 5.6.2), so not one with space
+        // before it or its colon, nor a line that goes on from the last
+        // (RFC 9112, 5.2).
+        let Some((name, value)) = line.split_once(':').filter(|(name, _)| is_token(name)) else {
+            return Err("the answer's header is not one");
+        };
+        // A transfer coding with a length is an error (RFC 9112, 6.3), and
+        // without one the body's end is not known.
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("the answer has a transfer coding");
+        }
+        if !name.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        // One, of digits alone (RFC 9112, 6.3), with spaces and tabs
+        // alone around it.
+        let value = value.trim_matches([' ', '\t']);
+        if length.is_some() || value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("the answer's length is not one");
+        }
+        length = Some(value.parse::<u64>().unwrap_or(u64::MAX));
+    }
+    Ok((status, length.ok_or("the answer has no length")?))
+}
+
+/// Whether `text` is a token (RFC 9110, 5.6.2): one or more of the
+/// letters, digits and marks a header's name may hold.
+fn is_token(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// The error for a pipe the child was not given.
@@ -510,21 +630,12 @@ impl Transport for Pipe {
         if timeout.after.is_zero() {
             return Err(ureq::Error::Timeout(timeout.reason));
         }
-        let Some(stdin) = self.stdin.as_mut() else {
-            return Err(self.closed());
-        };
-        let output = &self.buffers.output()[..amount];
-        // A write fails when the child closed its stdin: it says why when
-        // it exits.
-        if stdin
-            .write_all(output)
-            .and_then(|()| stdin.flush())
-            .is_err()
-        {
-            self.stdin = None;
-            return Err(self.closed());
-        }
-        Ok(())
+        let output = self.buffers.output()[..amount].to_vec();
+        self.write(
+            output,
+            timeout.not_zero().map(|after| *after),
+            timeout.reason,
+        )
     }
 
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
@@ -573,8 +684,9 @@ impl Transport for Pipe {
     /// Whether the connection can take another request. A pipe that
     /// failed is never asked: the HTTP client drops it.
     fn is_open(&mut self) -> bool {
-        // Bytes the child sent past its answer close it.
-        if !self.pending.is_empty() {
+        // Bytes the child sent past its answer close it, as does a write
+        // not done in time.
+        if !self.pending.is_empty() || self.stdin.as_ref().is_none_or(|stdin| stdin.stuck) {
             return false;
         }
         // So do bytes it sent since, and its stdout's end.
@@ -601,9 +713,15 @@ impl Drop for Pipe {
     /// exec the last. The group is killed before the child is reaped, while
     /// its id cannot be another's, and the child itself too, in case it
     /// left the group.
+    ///
+    /// A child with a write not done in time is killed at once: the write's
+    /// thread holds its stdin, so the child would not see it close, and any
+    /// grace is only time in which a request given up on could still land.
     fn drop(&mut self) {
+        let stuck = self.stdin.as_ref().is_some_and(|stdin| stdin.stuck);
         self.stdin = None;
-        if self.exited(CLOSE_GRACE).is_none() {
+        let grace = if stuck { Duration::ZERO } else { CLOSE_GRACE };
+        if self.exited(grace).is_none() {
             #[cfg(unix)]
             let _ = rustix::process::kill_process_group(
                 rustix::process::Pid::from_child(&self.child),
@@ -619,6 +737,57 @@ impl Drop for Pipe {
 mod tests {
     use super::*;
 
+    /// A write not done in time holds the child's stdin on its thread, so
+    /// the child cannot see it close: it is killed, with no grace in which
+    /// it could yet read what the request's caller has given up on.
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_pipe_s_child_is_killed_at_once() {
+        let dial = Arc::new(Dial::new("sleep", "exec:sleep").args(["30"]));
+        // A grace is never shorter than itself, so one drop inside it is
+        // enough, and a busy machine gets three goes at one.
+        let inside = (0..3).any(|_| {
+            let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+            let written = pipe.write(
+                vec![0; 1 << 20],
+                Some(Duration::from_millis(50)),
+                ureq::Timeout::Global,
+            );
+            assert!(
+                matches!(written, Err(ureq::Error::Timeout(_))),
+                "{written:?}"
+            );
+            let start = Instant::now();
+            drop(pipe);
+            start.elapsed() < CLOSE_GRACE
+        });
+        assert!(inside);
+    }
+
+    /// A pipe that is not stuck closes the child's stdin, and gives it its
+    /// grace to end as it will.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_not_stuck_gives_its_child_time_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let ended = dir.path().join("ended");
+        let dial = Arc::new(
+            Dial::new("sh", "exec:sh")
+                .args(["-c", ": > \"$READY\"; cat > /dev/null; : > \"$ENDED\""])
+                .env("READY", &ready)
+                .env("ENDED", &ended),
+        );
+        let pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(Instant::now() < until, "the child did not start");
+            thread::sleep(Duration::from_millis(5));
+        }
+        drop(pipe);
+        assert!(ended.exists());
+    }
+
     #[test]
     fn an_answer_is_read_once_all_of_it_is_there() {
         let answer = b"HTTP/1.1 409 Conflict\r\ncontent-length: 2\r\n\r\n{}";
@@ -628,6 +797,164 @@ mod tests {
         assert_eq!(answer_in(answer, 10).unwrap(), Some((409, b"{}".to_vec())));
         let empty = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
         assert_eq!(answer_in(empty, 10).unwrap(), Some((200, Vec::new())));
+    }
+
+    #[test]
+    fn an_answer_s_head_is_read_strictly() {
+        let (status, header, length) = (
+            "the answer's status line is not one",
+            "the answer's header is not one",
+            "the answer's length is not one",
+        );
+        for (bad, why) in [
+            // The version is 1.0 or 1.1, as it is written.
+            (&b"HTTP/1.x 200 OK\r\nContent-Length: 0\r\n\r\n"[..], status),
+            (b"HTTP/1. 200 OK\r\nContent-Length: 0\r\n\r\n", status),
+            (b"HTTP/1.10 200 OK\r\nContent-Length: 0\r\n\r\n", status),
+            // A name is a token: not a line that goes on from the last
+            // (RFC 9112, 5.2), nor one with space before it or its colon.
+            // Each has a length of its own as well, so that it is refused
+            // for its name and not for want of one.
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n Content-Length: 5\r\n\r\nhello",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\tContent-Length: 5\r\n\r\nhello",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\n X: a\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nX : a\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\n:x\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\na b: 1\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            // A line with no colon is no header.
+            (
+                b"HTTP/1.1 200 OK\r\njunk\r\nContent-Length: 0\r\n\r\n",
+                header,
+            ),
+            // One length, of digits alone (RFC 9112, 6.3), with spaces and
+            // tabs alone around it.
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
+                length,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ncontent-length: 2\r\n\r\n{}",
+                length,
+            ),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: +2\r\n\r\n{}", length),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 2, 2\r\n\r\n{}", length),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n", length),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: \x0b2\r\n\r\n{}",
+                length,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: \u{3000}2\r\n\r\n{}".as_bytes(),
+                length,
+            ),
+        ] {
+            match answer_in(bad, 10) {
+                Err(ureq::Error::Io(error)) => {
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+                    assert_eq!(error.to_string(), why, "{:?}", String::from_utf8_lossy(bad));
+                }
+                other => panic!("{:?}: {other:?}", String::from_utf8_lossy(bad)),
+            }
+        }
+        // A length too long for a u64 is over the limit.
+        let huge = b"HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999999\r\n\r\n";
+        assert!(matches!(
+            answer_in(huge, 10),
+            Err(ureq::Error::BodyExceedsLimit(10))
+        ));
+        // HTTP/1.0, a name of every character a token may hold, and spaces
+        // and tabs around a length, are taken.
+        let fine = b"HTTP/1.0 200 OK\r\nX-a_1.2~!#$%&'*+^`|: v\r\nContent-Length: \t2 \r\n\r\n{}";
+        assert_eq!(answer_in(fine, 10).unwrap(), Some((200, b"{}".to_vec())));
+    }
+
+    /// Asserts that `answer_in` refuses each of `bads` as a malformed
+    /// answer, for the reason `why`.
+    fn refused(bads: &[&[u8]], why: &str) {
+        for bad in bads {
+            match answer_in(bad, 10) {
+                Err(ureq::Error::Io(error)) => {
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+                    assert_eq!(error.to_string(), why, "{:?}", String::from_utf8_lossy(bad));
+                }
+                other => panic!("{:?}: {other:?}", String::from_utf8_lossy(bad)),
+            }
+        }
+    }
+
+    #[test]
+    fn an_answer_s_status_is_three_digits_of_a_final_answer() {
+        refused(
+            &[
+                b"HTTP/1.1 +200 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 0200 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 1 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 20 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 65535 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 042 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 100 Continue\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 199 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 600 OK\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 2\xd9\xa000 OK\r\nContent-Length: 0\r\n\r\n",
+            ],
+            "the answer's status line is not one",
+        );
+        // Any final status, with or without a reason, is taken.
+        for (fine, status) in [
+            (&b"HTTP/1.1 599 Odd\r\nContent-Length: 0\r\n\r\n"[..], 599),
+            (b"HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n", 200),
+            (b"HTTP/1.1 409 \r\nContent-Length: 0\r\n\r\n", 409),
+        ] {
+            assert_eq!(answer_in(fine, 10).unwrap(), Some((status, Vec::new())));
+        }
+    }
+
+    #[test]
+    fn an_answer_with_a_transfer_coding_fails() {
+        // A transfer coding with a length is an error (RFC 9112, 6.3), and
+        // the reader knows no coding without one.
+        refused(
+            &[
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\ntransfer-encoding: identity\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nTRANSFER-ENCODING:\r\nContent-Length: 2\r\n\r\n{}",
+            ],
+            "the answer has a transfer coding",
+        );
+    }
+
+    #[test]
+    fn an_answer_s_head_ends_its_lines_with_crlf_alone() {
+        // A bare LF or CR is neither a line's end nor in one, so it can't
+        // hide a header in the value of the last.
+        refused(
+            &[
+                b"HTTP/1.1 200 OK\r\nX: a\nContent-Length: 9\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nX: a\rContent-Length: 9\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\nX: a\r\nContent-Length: 2\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\r\n\r\n{}",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\n\r\n\r\n{}",
+            ],
+            "the answer's line has a bare CR or LF",
+        );
     }
 
     #[test]
@@ -658,6 +985,78 @@ mod tests {
             answer_in(&endless[..ANSWER_HEAD_LIMIT], 10)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_not_done_in_time_leaves_the_pipe_stuck() {
+        // The child reads nothing for 1 s, and then all it is sent.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 1; cat > /dev/null"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let large = vec![b'x'; 200 * 1024];
+        let start = Instant::now();
+        let written = pipe.write(
+            large,
+            Some(Duration::from_millis(100)),
+            ureq::Timeout::SendBody,
+        );
+        assert!(
+            matches!(written, Err(ureq::Error::Timeout(ureq::Timeout::SendBody))),
+            "{written:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            start.elapsed()
+        );
+        // Part of the request is in the pipe, so the child cannot take
+        // another.
+        assert!(!Transport::is_open(&mut pipe));
+        // A later write fails at once: it does not wait, nor take the
+        // timed-out write's result, which comes once the child reads, as
+        // its own.
+        let start = Instant::now();
+        let again = pipe.write(
+            b"GET".to_vec(),
+            Some(Duration::from_secs(5)),
+            ureq::Timeout::Global,
+        );
+        assert!(
+            matches!(again, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{again:?}"
+        );
+        let exchanged = pipe.exchange(b"GET / HTTP/1.1\r\n\r\n", Duration::from_secs(5), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(_))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(!Transport::is_open(&mut pipe));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exchange_with_a_child_that_does_not_read_times_out() {
+        // A hold's request, renewal and release: a request larger than
+        // the pipe, to a child that never reads, fails at its timeout and
+        // not when the child exits, at 3 s.
+        let dial = Arc::new(Dial::new("sh", "far").args(["-c", "sleep 3"]));
+        let mut pipe = Pipe::start(&dial, 1024, 1024).unwrap();
+        let start = Instant::now();
+        let exchanged = pipe.exchange(&vec![b'x'; 200 * 1024], Duration::from_millis(300), 10);
+        assert!(
+            matches!(exchanged, Err(ureq::Error::Timeout(ureq::Timeout::Global))),
+            "{exchanged:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 

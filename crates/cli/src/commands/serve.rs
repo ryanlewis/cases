@@ -34,6 +34,8 @@ use std::time::{Duration, Instant};
 
 use cases_core::Time;
 use cases_store_sqlite::Db;
+#[cfg(unix)]
+use tokio::signal::unix::SignalKind;
 use tokio::sync::{mpsc, watch as channel};
 use tokio::time::MissedTickBehavior;
 
@@ -41,7 +43,7 @@ use self::app::App;
 use self::binary::Binary;
 use self::http::Timeouts;
 use self::log::{Log, Rotating};
-use self::screen::{Screen, Stats, View};
+use self::screen::{Counts, Screen, View};
 use self::watch::Watch;
 use crate::ctx::Ctx;
 use crate::error::Error;
@@ -97,10 +99,8 @@ pub(crate) struct Args {
 
 /// Serves the inbox until it is told to stop.
 pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
-    // A remote store's inbox is the hosted one: serve starts nothing, says
-    // where it is, and on a terminal opens it (ST-11).
-    let store = match &ctx.target {
-        Target::Local { path } => path.clone(),
+    let named = match ctx.target.clone() {
+        Target::Local { path } => path,
         // A forwarded store's inbox is served where the store is.
         Target::Forward { forward } => {
             return Err(Error::new(format!(
@@ -109,107 +109,38 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
             )));
         }
         Target::Remote { server, .. } | Target::Server { server } => {
-            let url = store::inbox_url(server);
-            writeln!(ctx.out, "{url}")?;
-            if io::stdout().is_terminal() && !no_open(args.no_open, ctx.config.get("no-open")) {
-                browser::open(&url)?;
-            }
-            return Ok(());
+            return hosted(args, ctx, &server);
         }
     };
     // On a terminal the status screen owns stdout, and shows the log
     // rather than let it scroll the screen away.
     let terminal = io::stdout().is_terminal();
-    let mut log = if terminal {
-        Log::new(!io::stderr().is_terminal(), LOG_LINES)
-    } else {
-        Log::new(true, 0)
-    };
-    // The log file comes first, so that an error that stops serve from
-    // here on goes to it with stderr.
-    if let Some(path) = &args.log {
-        match Rotating::open(path, !io::stderr().is_terminal()) {
-            Ok(file) => log = log.with_file(file),
-            Err(error) => log.line(format!(
-                "could not open the log file {}: {error}",
-                path.display()
-            )),
-        }
-    }
-    let log = Arc::new(log);
-    let listen = args
-        .listen
-        .clone()
-        .or_else(|| ctx.config.get("listen").map(str::to_owned))
-        .unwrap_or_else(|| config::DEFAULT_LISTEN.to_owned());
-    listen::check_loopback(&listen)?;
+    let log = Arc::new(open_log(args, terminal));
+    let listen = listen_address(args, ctx)?;
     let no_open = no_open(args.no_open, ctx.config.get("no-open"));
     let close_after = crate::briefings::close_after(&ctx.config)?;
-    let store_tokens = match ctx.config.get("store-tokens-file") {
-        Some(path) if !path.trim().is_empty() => Tokens::new(tokens::read(
-            path.trim(),
-            "the config file's store-tokens-file",
-        )?),
-        _ => Tokens::default(),
-    };
-    let named = store;
+    let store_tokens = store_tokens(ctx)?;
     let store = std::path::absolute(&named)?;
-    // A file that cannot be read counts as a serve that is not running, and
-    // is replaced.
-    if let Ok(Some(running)) = instance::running(&store) {
-        return Err(Error::new(format!(
-            "cases serve is already running for {} at {} (pid {})",
-            running.store, running.url, running.pid
-        )));
-    }
-    let listener = TcpListener::bind(&listen)
-        .map_err(|error| Error::new(format!("listen on {listen}: {error}")))?;
-    let port = listener.local_addr()?.port();
-    // The host as given, so localhost stays localhost, with the port bound,
-    // which differs from the one asked for when that is 0.
-    let (host, _) = listen::split(&listen).unwrap_or_default();
-    let addr = if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
+    refuse_if_running(&store)?;
+    let (listener, host, port, addr) = bind(&listen)?;
     let url = format!("http://{addr}/");
     let proxied = ctx.config.list("allow-hosts").to_vec();
     let link = instance::link(&url, &proxied);
 
     let started = output::now()?;
-    let db = Db::new(&store);
-    #[cfg(debug_assertions)]
-    let db = crate::dial::test_clock(&db);
-    let db = Arc::new(db);
-    let watch = Watch::new(Arc::clone(&db), token(8)?, link.clone(), Arc::clone(&log))?;
-    // The first read is the notifications' baseline: the cases in the store
-    // when serve started (IN-08). It comes before serve says it is up, in its
-    // instance file and its address line, so that a case opened once it is
-    // up is new. A read that fails leaves the baseline to the next one.
-    let _ = watch.read();
+    let (db, watch) = follow(&store, &link, &log)?;
     let pid = i32::try_from(std::process::id()).unwrap_or_default();
     let info = Info {
         pid,
         url: url.clone(),
         link: link.clone(),
-        addr: addr.clone(),
+        addr,
         // Absolute and with each `..` taken off, for status to show.
         store: instance::clean(&store).display().to_string(),
         started_at: output::stamp(Some(started)),
         version: env!("CARGO_PKG_VERSION").into(),
     };
-    // serve runs without the file, as when the state directory cannot be
-    // written; status then does not find it.
-    let recorded = match instance::write(&store, &info) {
-        Ok(()) => true,
-        Err(error) => {
-            log.line(format!(
-                "could not record the instance for cases status: {error}"
-            ));
-            false
-        }
-    };
+    let recorded = record(&store, &info, &log);
     let serving = Serving {
         store: &named,
         db,
@@ -228,6 +159,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         started,
         terminal,
         open: terminal && !no_open,
+        recorded: recorded.then(|| (store.clone(), pid)),
         // The binary as it is now, before serve says it is up: a test that
         // replaces it once serve is up must find it watched.
         binary: super::service::executable().ok().and_then(Binary::new),
@@ -237,6 +169,125 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         let _ = instance::remove(&store, pid);
     }
     result
+}
+
+/// A remote store's inbox is the hosted one: serve starts nothing, says
+/// where it is, and on a terminal opens it (ST-11).
+fn hosted(args: &Args, ctx: &mut Ctx, server: &store::Server) -> Result<(), Error> {
+    let url = store::inbox_url(server);
+    writeln!(ctx.out, "{url}")?;
+    if io::stdout().is_terminal() && !no_open(args.no_open, ctx.config.get("no-open")) {
+        browser::open(&url)?;
+    }
+    Ok(())
+}
+
+/// The log: on a terminal it is kept for the status screen, and goes to
+/// stderr only when that is not the terminal too. The log file comes first,
+/// so that an error that stops serve from here on goes to it with stderr.
+fn open_log(args: &Args, terminal: bool) -> Log {
+    let mut log = if terminal {
+        Log::new(!io::stderr().is_terminal(), LOG_LINES)
+    } else {
+        Log::new(true, 0)
+    };
+    if let Some(path) = &args.log {
+        match Rotating::open(path, !io::stderr().is_terminal()) {
+            Ok(file) => log = log.with_file(file),
+            Err(error) => log.line(format!(
+                "could not open the log file {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    log
+}
+
+/// The address to listen on: the flag, else the config file's `listen`,
+/// else the default, which must be a loopback one.
+fn listen_address(args: &Args, ctx: &Ctx) -> Result<String, Error> {
+    let listen = args
+        .listen
+        .clone()
+        .or_else(|| ctx.config.get("listen").map(str::to_owned))
+        .unwrap_or_else(|| config::DEFAULT_LISTEN.to_owned());
+    listen::check_loopback(&listen)?;
+    Ok(listen)
+}
+
+/// Refuses to start beside a serve that runs on `store`. A file that cannot
+/// be read counts as a serve that is not running, and is replaced.
+fn refuse_if_running(store: &Path) -> Result<(), Error> {
+    instance::path(store).map_or(Ok(()), |path| refuse_if_running_at(&path))
+}
+
+/// [`refuse_if_running`], for the instance file at `path`.
+fn refuse_if_running_at(path: &Path) -> Result<(), Error> {
+    if let Ok(Some(running)) = instance::running_at(path) {
+        return Err(Error::new(format!(
+            "cases serve is already running for {} at {} (pid {})",
+            running.store, running.url, running.pid
+        )));
+    }
+    Ok(())
+}
+
+/// The tokens of the config file's `store-tokens-file`, none when it is
+/// not given or blank.
+fn store_tokens(ctx: &Ctx) -> Result<Tokens, Error> {
+    match ctx.config.get("store-tokens-file") {
+        Some(path) if !path.trim().is_empty() => Ok(Tokens::new(tokens::read(
+            path.trim(),
+            "the config file's store-tokens-file",
+        )?)),
+        _ => Ok(Tokens::default()),
+    }
+}
+
+/// Binds `listen`, and gives the listener, the host as given (so localhost
+/// stays localhost), the port bound (which differs from the one asked for
+/// when that is 0) and the address with the two.
+fn bind(listen: &str) -> Result<(TcpListener, &str, u16, String), Error> {
+    let listener = TcpListener::bind(listen)
+        .map_err(|error| Error::new(format!("listen on {listen}: {error}")))?;
+    let port = listener.local_addr()?.port();
+    let (host, _) = listen::split(listen).unwrap_or_default();
+    let addr = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    Ok((listener, host, port, addr))
+}
+
+/// Opens the store and follows it, read once already.
+fn follow(store: &Path, link: &str, log: &Arc<Log>) -> Result<(Arc<Db>, Watch), Error> {
+    let db = Db::new(store);
+    #[cfg(debug_assertions)]
+    let db = crate::dial::test_clock(&db);
+    let db = Arc::new(db);
+    let watch = Watch::new(Arc::clone(&db), token(8)?, link.to_owned(), Arc::clone(log))?;
+    // The first read is the notifications' baseline: the cases in the store
+    // when serve started (IN-08). It comes before serve says it is up, in its
+    // instance file and its address line, so that a case opened once it is
+    // up is new. A read that fails leaves the baseline to the next one.
+    let _ = watch.read();
+    Ok((db, watch))
+}
+
+/// Records the instance for status, and whether it did. serve runs without
+/// the file, as when the state directory cannot be written; status then
+/// does not find it.
+fn record(store: &Path, info: &Info, log: &Log) -> bool {
+    match instance::write(store, info) {
+        Ok(()) => true,
+        Err(error) => {
+            log.line(format!(
+                "could not record the instance for cases status: {error}"
+            ));
+            false
+        }
+    }
 }
 
 /// Whether serve leaves the browser alone: the flag, else the config
@@ -276,6 +327,9 @@ struct Serving<'a> {
     open: bool,
     /// The binary serve runs, watched for an upgrade.
     binary: Option<Binary>,
+    /// The store and process of the instance file, when serve wrote one:
+    /// what a stop forced by a signal removes as it exits.
+    recorded: Option<(PathBuf, i32)>,
 }
 
 impl Serving<'_> {
@@ -331,7 +385,7 @@ impl Serving<'_> {
         let (quit, mut quits) = mpsc::unbounded_channel();
         let begun = Arc::new(AtomicBool::new(false));
         let forced: Restore = Arc::default();
-        let signals = signals(Arc::clone(&begun), Arc::clone(&forced))?;
+        let signals = signals(Arc::clone(&begun), Arc::clone(&forced), self.recorded)?;
         if self.terminal {
             if self.open
                 && let Err(error) = browser::open(&self.url)
@@ -344,31 +398,8 @@ impl Serving<'_> {
             writeln!(out, "Serving {} at {}", self.store.display(), self.url)?;
             out.flush()?;
         }
-        let keys = self.terminal && term::can_read_keys();
-        let raw = keys.then(|| {
-            let raw = Arc::new(term::keys_raw());
-            std::thread::spawn(move || {
-                if term::wait_for_q(term::ForegroundStdin) {
-                    let _ = quit.send(());
-                }
-            });
-            raw
-        });
-        // What a stop forced by a second signal puts back on the terminal
-        // before it exits, in place before the screen is drawn.
-        let restore: Box<dyn FnOnce() + Send> = Box::new({
-            let raw = raw.clone();
-            let screen = self.terminal;
-            move || {
-                if screen {
-                    show(Screen::END);
-                }
-                if let Some(raw) = &raw {
-                    raw.restore();
-                }
-            }
-        });
-        *forced.lock().unwrap_or_else(PoisonError::into_inner) = Some(restore);
+        let raw = arm(&forced, self.terminal, || take_keys(self.terminal, quit));
+        let keys = raw.is_some();
         let painter = self
             .terminal
             .then(|| Painter::start(self.store.display().to_string(), self.started, keys));
@@ -380,20 +411,7 @@ impl Serving<'_> {
         // serve stops when its binary is replaced, run by a service manager
         // or by hand: a service manager starts the new one, and by hand the
         // log line says why it stopped.
-        let replaced = {
-            let log = Arc::clone(&self.log);
-            let binary = self.binary;
-            async move {
-                let Some(binary) = binary else {
-                    return std::future::pending().await;
-                };
-                let path = binary.watch().await;
-                log.line(format!(
-                    "{} was replaced: stopping, so that the new version can start",
-                    path.display()
-                ));
-            }
-        };
+        let replaced = replaced(self.binary, Arc::clone(&self.log));
         // Without a keyboard to read, nothing sends on `quits`, and it ends
         // at once: that is no reason to stop.
         let stop = async move {
@@ -432,6 +450,65 @@ impl Serving<'_> {
     }
 }
 
+/// On a terminal whose keys serve can read, takes them, each as it is
+/// typed, and sends on `quit` when `q` is: gives the keys, to put back.
+/// Without a keyboard to read it takes nothing, and `quit` is dropped.
+fn take_keys(terminal: bool, quit: mpsc::UnboundedSender<()>) -> Option<Arc<term::Keys>> {
+    let keys = terminal && term::can_read_keys();
+    keys.then(|| {
+        let raw = Arc::new(term::keys_raw());
+        std::thread::spawn(move || {
+            if term::wait_for_q(term::ForegroundStdin) {
+                let _ = quit.send(());
+            }
+        });
+        raw
+    })
+}
+
+/// Takes the keys with `take` and installs what a forced stop puts back,
+/// holding the slot throughout: a forced stop that comes between the two
+/// waits for it, rather than find nothing to put back.
+fn arm(
+    forced: &Restore,
+    screen: bool,
+    take: impl FnOnce() -> Option<Arc<term::Keys>>,
+) -> Option<Arc<term::Keys>> {
+    let mut slot = forced.lock().unwrap_or_else(PoisonError::into_inner);
+    let raw = take();
+    *slot = Some(forced_restore(screen, raw.clone()));
+    raw
+}
+
+/// What a stop forced by a second signal puts back on the terminal before
+/// it exits: the cursor and line wrapping, when serve drew its `screen`,
+/// and the keys it took (`raw`).
+fn forced_restore(screen: bool, raw: Option<Arc<term::Keys>>) -> Box<dyn FnOnce() + Send> {
+    Box::new(move || {
+        // The keys first: a terminal whose output is stopped (Ctrl-S) holds
+        // the write of the screen's end, and serve exits while it waits.
+        if let Some(raw) = &raw {
+            raw.restore();
+        }
+        if screen {
+            show(Screen::END);
+        }
+    })
+}
+
+/// Resolves once `binary` is replaced, and logs it; never without a binary
+/// to watch.
+async fn replaced(binary: Option<Binary>, log: Arc<Log>) {
+    let Some(binary) = binary else {
+        return std::future::pending().await;
+    };
+    let path = binary.watch().await;
+    log.line(format!(
+        "{} was replaced: stopping, so that the new version can start",
+        path.display()
+    ));
+}
+
 /// Writes `text` to the terminal on stdout at once, from any thread.
 fn show(text: &str) {
     let _ = term::Out.write_all(text.as_bytes());
@@ -459,29 +536,29 @@ type Restore = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 /// Once serve is stopping (`begun`), a second Ctrl-C or SIGTERM ends it at
 /// once, as the default would, rather than wait out the stop, which waits
 /// for the writes in flight, each of which can wait 5 s on the store's
-/// lock. `restore` puts the terminal back first. The signals are caught on
-/// a thread and a runtime of their own from now until serve exits, so that
-/// a second signal counts however soon it follows the first, and while
-/// serve's runtime, as it drops, waits for those writes and runs nothing
-/// else.
+/// lock. It removes the instance file that `recorded` names, and `restore`
+/// puts the terminal back, first. The signals are caught on a thread and a
+/// runtime of their own from now until serve exits, so that a second signal
+/// counts however soon it follows the first, and while serve's runtime, as
+/// it drops, waits for those writes and runs nothing else.
 #[cfg(unix)]
-fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Output = ()>, Error> {
-    use tokio::signal::unix::{SignalKind, signal};
+fn signals(
+    begun: Arc<AtomicBool>,
+    restore: Restore,
+    recorded: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     let (first, stop) = tokio::sync::oneshot::channel();
     let (ready, caught) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-        let handlers = runtime.as_ref().map_err(|_| ()).and_then(|runtime| {
-            let _entered = runtime.enter();
-            let interrupt = signal(SignalKind::interrupt()).map_err(|_| ())?;
-            Ok((interrupt, signal(SignalKind::terminate()).map_err(|_| ())?))
-        });
-        let (Ok(runtime), Ok((mut interrupt, mut terminate))) = (runtime, handlers) else {
-            return;
-        };
-        let _ = ready.send(());
+        let (runtime, mut interrupt, mut terminate) =
+            match handlers(SignalKind::interrupt(), SignalKind::terminate()) {
+                Ok(handlers) => handlers,
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+            };
+        let _ = ready.send(Ok(()));
         let mut first = Some(first);
         runtime.block_on(async {
             loop {
@@ -491,34 +568,17 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
                     _ = interrupt.recv() => 130,
                     _ = terminate.recv() => 143,
                 };
-                // The first signal begins the stop, unless something else
-                // has, and any after it forces the exit.
-                if !begun.swap(true, Ordering::SeqCst)
-                    && first.take().is_some_and(|first| first.send(()).is_ok())
-                {
+                if begins_stop(&begun, &mut first) {
                     continue;
                 }
-                // A terminal whose output is stopped (Ctrl-S) holds the
-                // write that puts it back: serve exits after a moment
-                // whatever it does.
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(200));
-                    std::process::exit(code);
-                });
-                let restore = restore
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
-                if let Some(restore) = restore {
-                    restore();
-                }
-                std::process::exit(code);
+                force_exit(code, recorded.as_ref(), &restore);
             }
         });
     });
     caught
         .recv()
-        .map_err(|_| Error::new("could not catch Ctrl-C or SIGTERM"))?;
+        .map_err(|_| Error::new("could not catch Ctrl-C or SIGTERM"))?
+        .map_err(|error| Error::new(format!("could not catch Ctrl-C or SIGTERM: {error}")))?;
     Ok(async move {
         if stop.await.is_err() {
             std::future::pending::<()>().await;
@@ -526,8 +586,65 @@ fn signals(begun: Arc<AtomicBool>, restore: Restore) -> Result<impl Future<Outpu
     })
 }
 
+/// A runtime of its own, with handlers of `interrupt` and `terminate` in
+/// place on it, or why either cannot be had.
+#[cfg(unix)]
+fn handlers(
+    interrupt: SignalKind,
+    terminate: SignalKind,
+) -> io::Result<(
+    tokio::runtime::Runtime,
+    tokio::signal::unix::Signal,
+    tokio::signal::unix::Signal,
+)> {
+    use tokio::signal::unix::signal;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (interrupt, terminate) = {
+        let _entered = runtime.enter();
+        let interrupt = signal(interrupt)?;
+        (interrupt, signal(terminate)?)
+    };
+    Ok((runtime, interrupt, terminate))
+}
+
+/// Whether a signal begins the stop: the first signal does, unless
+/// something else has begun it, and says so on `first`. Any after it, or
+/// one whose stop nothing waits for any more, forces the exit.
+#[cfg(unix)]
+fn begins_stop(begun: &AtomicBool, first: &mut Option<tokio::sync::oneshot::Sender<()>>) -> bool {
+    !begun.swap(true, Ordering::SeqCst) && first.take().is_some_and(|first| first.send(()).is_ok())
+}
+
+/// Ends serve at once with `code`, after it removes the instance file that
+/// `recorded` names and `restore` puts the terminal back. A terminal whose
+/// output is stopped (Ctrl-S) holds the write that shows the cursor, so the
+/// file goes first: serve exits after a moment whatever the write does.
+#[cfg(unix)]
+fn force_exit(code: i32, recorded: Option<&(PathBuf, i32)>, restore: &Restore) -> ! {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        std::process::exit(code);
+    });
+    if let Some((store, pid)) = recorded {
+        let _ = instance::remove(store, *pid);
+    }
+    // Held until the exit: keys taken after this found nothing to put back
+    // would be left raw, so `arm` waits here until serve is gone.
+    let mut slot = restore.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(restore) = slot.take() {
+        restore();
+    }
+    std::process::exit(code);
+}
+
 #[cfg(not(unix))]
-fn signals(_: Arc<AtomicBool>, _: Restore) -> Result<impl Future<Output = ()>, Error> {
+fn signals(
+    _: Arc<AtomicBool>,
+    _: Restore,
+    _: Option<(PathBuf, i32)>,
+) -> Result<impl Future<Output = ()>, Error> {
     Ok(async {
         let _ = tokio::signal::ctrl_c().await;
     })
@@ -592,7 +709,7 @@ async fn step(app: &Arc<App>, painter: Option<Painter>) -> Option<Painter> {
 /// Draws the status screen.
 struct Painter {
     store: String,
-    started: Time,
+    counts: Counts,
     since: Instant,
     keys: bool,
     color: bool,
@@ -606,7 +723,7 @@ impl Painter {
         show(Screen::START);
         Painter {
             store,
-            started,
+            counts: Counts::new(started),
             since: Instant::now(),
             keys,
             color: std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()),
@@ -619,7 +736,7 @@ impl Painter {
         let view = View {
             store: &self.store,
             url: &app.url,
-            stats: read.map(|snapshot| Stats::count(&snapshot.cases, self.started)),
+            stats: read.map(|snapshot| self.counts.of(&snapshot)),
             uptime: self.since.elapsed(),
             requests: app.requests.load(Ordering::Relaxed),
             notified: app.watch.notified(),
@@ -898,5 +1015,280 @@ mod tests {
             text.ends_with("0\r\n\r\n"),
             "the stream did not end cleanly: {text}"
         );
+    }
+
+    /// The first signal begins the stop, and says so; any after it forces
+    /// the exit.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_signal_begins_the_stop_and_the_next_forces_it() {
+        let begun = AtomicBool::new(false);
+        let (sender, mut stop) = oneshot::channel();
+        let mut first = Some(sender);
+        assert!(begins_stop(&begun, &mut first));
+        assert!(begun.load(Ordering::SeqCst));
+        assert!(first.is_none());
+        assert_eq!(stop.try_recv(), Ok(()));
+        assert!(!begins_stop(&begun, &mut first), "a second signal");
+        assert!(begun.load(Ordering::SeqCst));
+    }
+
+    /// A signal that comes once something else, `q` or a replaced binary,
+    /// has begun the stop forces the exit, and leaves `first` alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_after_another_stop_forces_the_exit() {
+        let begun = AtomicBool::new(true);
+        let (sender, mut stop) = oneshot::channel::<()>();
+        let mut first = Some(sender);
+        assert!(!begins_stop(&begun, &mut first));
+        assert!(first.is_some(), "the signal took the first stop");
+        assert_eq!(stop.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    }
+
+    /// A first signal whose stop nothing waits for any more forces the
+    /// exit, since nothing else would end serve.
+    #[cfg(unix)]
+    #[test]
+    fn a_first_signal_no_one_waits_for_forces_the_exit() {
+        let begun = AtomicBool::new(false);
+        let (sender, stop) = oneshot::channel::<()>();
+        drop(stop);
+        let mut first = Some(sender);
+        assert!(!begins_stop(&begun, &mut first));
+        assert!(begun.load(Ordering::SeqCst));
+        assert!(first.is_none());
+    }
+
+    /// The forced restore's slot stays held while the keys are taken, so a
+    /// forced stop in between waits, and finds the restore in place.
+    #[test]
+    fn a_forced_stop_waits_while_the_keys_are_taken() {
+        let forced: Restore = Arc::default();
+        let raw = arm(&forced, false, || {
+            assert!(forced.try_lock().is_err(), "the slot was free");
+            None
+        });
+        assert!(raw.is_none());
+        assert!(forced.lock().unwrap().is_some(), "no restore installed");
+    }
+
+    /// A signal that cannot be caught says why.
+    #[cfg(unix)]
+    #[test]
+    fn handlers_give_the_cause_of_a_signal_they_cannot_catch() {
+        let kill = SignalKind::from_raw(9);
+        let error = handlers(kill, SignalKind::terminate()).err().unwrap();
+        assert!(error.to_string().contains("Refusing"), "{error}");
+    }
+
+    /// Where an instance file goes, in a directory of the test's own: the
+    /// guard is given its path, so that no test reads or writes the state
+    /// directory.
+    struct Record {
+        path: PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Record {
+        fn new() -> Record {
+            let dir = tempfile::tempdir().unwrap();
+            Record {
+                path: dir.path().join("serve-cases-db-0.json"),
+                _dir: dir,
+            }
+        }
+
+        /// Records a serve on `/data/cases.db` with `pid` at `addr`.
+        fn write(&self, pid: i32, addr: &str) {
+            let info = Info {
+                pid,
+                url: format!("http://{addr}/"),
+                link: String::new(),
+                addr: addr.to_owned(),
+                store: "/data/cases.db".into(),
+                started_at: "2026-11-10T12:00:00Z".into(),
+                version: "0.0.0".into(),
+            };
+            std::fs::write(&self.path, serde_json::to_string(&info).unwrap()).unwrap();
+        }
+    }
+
+    fn this_pid() -> i32 {
+        i32::try_from(std::process::id()).unwrap()
+    }
+
+    /// A serve recorded whose process is there and whose address takes a
+    /// connection stops a second one, which names the store, the address and
+    /// the process (SV-02).
+    #[test]
+    fn a_serve_running_on_the_store_refuses_another() {
+        let record = Record::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        record.write(this_pid(), &addr);
+        let error = refuse_if_running_at(&record.path).unwrap_err();
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "cases serve is already running for /data/cases.db at http://{addr}/ (pid {})",
+                this_pid()
+            )
+        );
+    }
+
+    /// With no serve recorded, serve starts.
+    #[test]
+    fn a_store_with_no_serve_recorded_is_free() {
+        let record = Record::new();
+        assert!(instance::running_at(&record.path).unwrap().is_none());
+        refuse_if_running_at(&record.path).unwrap();
+    }
+
+    /// A record left by a serve that stopped without removing it does not
+    /// stop serve: its process is gone, or not a process at all, or its
+    /// address takes no connection, as when the process id went to another
+    /// process.
+    #[test]
+    fn a_stale_record_does_not_refuse() {
+        let record = Record::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap().to_string();
+        // Above any pid_max, so no process has it.
+        for pid in [0, -1, i32::MAX] {
+            record.write(pid, &live);
+            refuse_if_running_at(&record.path).unwrap();
+        }
+        // Port 0 takes no connection.
+        record.write(this_pid(), "127.0.0.1:0");
+        refuse_if_running_at(&record.path).unwrap();
+        record.write(this_pid(), &live);
+        assert!(
+            refuse_if_running_at(&record.path).is_err(),
+            "the check above"
+        );
+    }
+
+    /// A file that does not read as an instance file, or cannot be read at
+    /// all, counts as no serve running, and serve starts.
+    #[test]
+    fn a_record_that_does_not_read_does_not_refuse() {
+        let record = Record::new();
+        for text in ["", "not an instance file", r#"{"pid": 1}"#] {
+            std::fs::write(&record.path, text).unwrap();
+            assert!(instance::running_at(&record.path).is_err(), "{text:?}");
+            refuse_if_running_at(&record.path).unwrap();
+        }
+        std::fs::remove_file(&record.path).unwrap();
+        std::fs::create_dir(&record.path).unwrap();
+        assert!(instance::running_at(&record.path).is_err(), "a directory");
+        refuse_if_running_at(&record.path).unwrap();
+    }
+
+    /// A context whose config file holds `text`.
+    fn ctx_with(dir: &Path, text: &str) -> Ctx {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let config = config::load(Some(path.to_str().unwrap()));
+        assert!(config.error.is_none(), "{:?}", config.error);
+        let store = dir.join("cases.db");
+        Ctx {
+            store: store::AnyStore::Local(Db::new(&store)),
+            target: Target::Local { path: store },
+            config,
+            store_flag: None,
+            out: io::stdout().lock(),
+        }
+    }
+
+    /// A tokens file with `lines`, private to its owner.
+    fn tokens_file(dir: &Path, lines: &str) -> PathBuf {
+        let path = dir.join("store-tokens");
+        std::fs::write(&path, lines).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        path
+    }
+
+    /// With no `store-tokens-file`, or a blank one, serve takes no token.
+    #[test]
+    fn no_store_tokens_file_is_no_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = "a".repeat(32);
+        tokens_file(dir.path(), &token);
+        for text in [
+            "",
+            "store-tokens-file = \"\"\n",
+            "store-tokens-file = \"  \"\n",
+        ] {
+            let tokens = store_tokens(&ctx_with(dir.path(), text)).unwrap();
+            assert!(!tokens.has(token.as_bytes()), "{text:?}");
+            assert_eq!(format!("{tokens:?}"), "Tokens(0 kept)", "{text:?}");
+        }
+    }
+
+    /// serve takes the tokens of the file `store-tokens-file` names, with
+    /// the space around the name trimmed.
+    #[test]
+    fn a_store_tokens_file_gives_its_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = ("a".repeat(32), "b".repeat(40));
+        let path = tokens_file(dir.path(), &format!("# serve's tokens\n{one}\n\n{two}\n"));
+        let text = format!("store-tokens-file = \" {} \"\n", path.display());
+        let tokens = store_tokens(&ctx_with(dir.path(), &text)).unwrap();
+        assert!(tokens.has(one.as_bytes()));
+        assert!(tokens.has(two.as_bytes()));
+        assert!(!tokens.has("c".repeat(32).as_bytes()));
+        assert_eq!(format!("{tokens:?}"), "Tokens(2 kept)");
+    }
+
+    /// A `store-tokens-file` that cannot be read, holds no token or holds a
+    /// line that is not one stops serve, with an error that names the key
+    /// and the file and never the token.
+    #[test]
+    fn a_store_tokens_file_that_does_not_read_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let refusal = |path: &Path| {
+            let text = format!("store-tokens-file = \"{}\"\n", path.display());
+            store_tokens(&ctx_with(dir.path(), &text)).unwrap_err()
+        };
+        let error = refusal(&missing);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert!(
+            error.to_string().starts_with(&format!(
+                "the config file's store-tokens-file: cannot read {}: ",
+                missing.display()
+            )),
+            "{error}"
+        );
+
+        let empty = tokens_file(dir.path(), "# none yet\n\n");
+        let error = refusal(&empty);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the config file's store-tokens-file: {} holds no token; put one on a line of \
+                 its own, such as openssl rand -hex 32 gives",
+                empty.display()
+            )
+        );
+
+        let short = tokens_file(dir.path(), &format!("{}\nshort-secret\n", "a".repeat(32)));
+        let error = refusal(&short);
+        assert_eq!(error.status(), crate::error::Status::Failure);
+        assert!(
+            error.to_string().starts_with(&format!(
+                "the config file's store-tokens-file: line 2 of {}: ",
+                short.display()
+            )),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("short-secret"), "{error}");
     }
 }

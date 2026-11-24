@@ -6,6 +6,7 @@
 //! screen. `cases tui ID` shows that one case, and ends once it is no longer
 //! open (TU-11).
 
+mod actions;
 mod app;
 mod compose;
 mod editor;
@@ -17,6 +18,7 @@ mod kitty;
 mod markdown;
 mod reader;
 mod safe;
+mod select;
 pub(crate) mod stats;
 mod view;
 mod wrap;
@@ -30,7 +32,11 @@ use std::time::{Duration, Instant};
 use cases_core::{Kind, State};
 use cases_store_sqlite::{Db, Key};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, Event, KeyCode, KeyModifiers,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use ratatui::crossterm::execute;
 
 use crate::commands::write;
@@ -38,7 +44,7 @@ use crate::ctx::{self, Ctx};
 use crate::error::{Error, Status};
 use crate::store::{AnyStore, Target};
 
-use app::{App, Sending};
+use app::{App, Newline, Sending};
 use follow::Follow;
 use form::Act;
 use herdr::Herdr;
@@ -69,6 +75,9 @@ const RETRY_EVERY: Duration = Duration::from_secs(2);
 
 /// The longest the loop waits for a key, so that a signal is seen soon.
 const TICK: Duration = Duration::from_millis(100);
+
+/// The most moves of the pointer taken as one before the screen is drawn.
+const MOVES: usize = 64;
 
 /// Runs the inbox until the human quits or a signal stops it; or, given an
 /// id, the one case until it leaves open (TU-11).
@@ -129,6 +138,15 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     // reads keys, and only when the config file leaves it to the terminal.
     app.strip.image = mode.asks() && only.is_none() && kitty::supported();
     IMAGES.store(app.strip.image, Ordering::SeqCst);
+    // Whether the terminal speaks the kitty keyboard protocol, which tells
+    // shift+enter from enter: asked as the strip's images are, before
+    // anything reads keys. A terminal that does not answer within crossterm's
+    // wait is taken as one that does not.
+    let keyboard = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    KEYBOARD.store(keyboard, Ordering::SeqCst);
+    if keyboard {
+        app.newline = Newline::ShiftEnter;
+    }
     let mut terminal = init()?;
     let mut run = Run {
         reader: &mut reader,
@@ -158,7 +176,7 @@ pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
         return ended(ctx, &store, &app, key, args.json);
     }
     // The screen is gone: that the write was recorded is said here instead.
-    if let (Some(true), Some((said, _))) = (landed, &app.flash) {
+    if let (Some(true), Some(said)) = (landed, app.said_done()) {
         eprintln!("{said}");
     }
     Ok(())
@@ -199,7 +217,7 @@ fn land(reader: &mut Reader, app: &mut App, stop: &AtomicBool) -> Result<Option<
     match landed {
         Some(true) => return Ok(Some(true)),
         Some(false) => {
-            if let Some((said, _)) = &app.flash {
+            if let Some(said) = app.said() {
                 eprintln!("{said}");
             }
         }
@@ -288,26 +306,42 @@ fn init() -> io::Result<DefaultTerminal> {
         // alternate screen, then this stops the mouse reports.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(io::stdout(), DisableMouseCapture);
+            let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
             hook(info);
         }));
     });
     TAKEN.store(true, Ordering::SeqCst);
     let terminal = ratatui::try_init()?;
     IMAGE_HOOK.call_once(|| {
-        // Over ratatui's hook, so that the strip's image is deleted while
-        // the alternate screen, which holds it, is still up.
+        // Over ratatui's hook, so that the strip's image is deleted, and
+        // the keys given back, while the alternate screen, which holds
+        // them, is still up.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             unshow();
+            pop_keyboard();
             hook(info);
         }));
     });
-    // Clicks and the wheel only, in SGR form: not every move of the mouse,
-    // which would draw the screen again for each one.
+    // Clicks, the wheel and every move of the pointer, in SGR form: the
+    // moves light what the pointer is over. The loop takes the moves that
+    // queue up as one, so that the screen is not drawn again for each.
+    // And pastes bracketed, so that a new line in one is not enter, which
+    // sends (TU-12).
     if let Err(error) = io::stdout()
-        .write_all(b"\x1b[?1000h\x1b[?1006h")
+        .write_all(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h")
         .and_then(|()| io::stdout().flush())
+    {
+        restore();
+        return Err(error);
+    }
+    // Keys that tell shift+enter, a new line, from enter, which sends,
+    // where the terminal speaks the kitty keyboard protocol (TU-12).
+    if KEYBOARD.load(Ordering::SeqCst)
+        && let Err(error) = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
     {
         restore();
         return Err(error);
@@ -315,11 +349,20 @@ fn init() -> io::Result<DefaultTerminal> {
     Ok(terminal)
 }
 
+/// Gives the terminal its keys back as they were, when [`init`] asked for
+/// the kitty keyboard protocol's.
+fn pop_keyboard() {
+    if KEYBOARD.load(Ordering::SeqCst) {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
+}
+
 /// Puts the terminal back as it was: the strip's image deleted, no mouse
 /// reports, then as ratatui restores it.
 fn restore() {
     unshow();
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    pop_keyboard();
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     TAKEN.store(false, Ordering::SeqCst);
 }
@@ -337,6 +380,10 @@ fn unshow() {
 /// Whether the strip draws a kitty image, so that putting the terminal
 /// back deletes it (TU-13).
 static IMAGES: AtomicBool = AtomicBool::new(false);
+
+/// Whether the screen asks for the kitty keyboard protocol's keys, so that
+/// putting the terminal back gives the old ones back (TU-12).
+static KEYBOARD: AtomicBool = AtomicBool::new(false);
 
 /// Whether the screen has the terminal: from [`init`] until [`restore`],
 /// so that a second signal puts it back, and leaves alone the terminal of
@@ -388,14 +435,20 @@ fn signals() -> Result<Arc<AtomicBool>, Error> {
 
 /// Puts the terminal back from the signal thread, as [`restore`] does,
 /// while the loop may be stuck holding stdout: written to its file
-/// descriptor, past the lock. No mouse reports, the main screen, the
-/// cursor shown, then not raw.
+/// descriptor, past the lock. The keys as they were, no mouse reports,
+/// the main screen, the cursor shown, then not raw.
 #[cfg(unix)]
 fn put_back() {
     if IMAGES.load(Ordering::SeqCst) {
         let _ = rustix::io::write(io::stdout(), &kitty::delete(kitty::id()));
     }
-    let _ = rustix::io::write(io::stdout(), b"\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h");
+    if KEYBOARD.load(Ordering::SeqCst) {
+        let _ = rustix::io::write(io::stdout(), b"\x1b[<1u");
+    }
+    let _ = rustix::io::write(
+        io::stdout(),
+        b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+    );
     let _ = ratatui::crossterm::terminal::disable_raw_mode();
 }
 
@@ -429,8 +482,9 @@ impl Run<'_> {
     /// Hands `write` to the reads' thread; the app waits for how it went.
     fn send(&mut self, app: &mut App, write: Write, sending: Sending) {
         self.reader.write(write);
-        // An older line would hide the one that says it is being sent.
-        app.flash = None;
+        // What the toasts said was before this write: what it does is said
+        // after it, alone, so that q tells it on the way out.
+        app.toasts.clear();
         app.sending = Some(sending);
     }
 
@@ -450,20 +504,26 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
     let mut last_read = Instant::now();
     // The strip's image as the terminal has it (TU-13).
     let mut image = kitty::Shown::default();
+    // Whether the screen is drawn on this turn: not after only moves of
+    // the pointer that leave it over the same thing.
+    let mut draw = true;
     while !app.quit && !run.stop.load(Ordering::Relaxed) && !app.left() {
         if let Some(snapshot) = run.reader.take() {
             run.apply(app, snapshot)?;
             last_read = Instant::now();
+            draw = true;
             // The one case may have left with this read.
             continue;
         }
         if let Some(herdr) = run.herdr.as_deref_mut() {
             herdr.report(app.waiting());
         }
-        app.expire_flash(Instant::now());
-        terminal.draw(|frame| view::draw(frame, app))?;
-        if app.strip.image {
-            show(&mut image, app)?;
+        draw |= app.expire_toasts(Instant::now());
+        if draw {
+            terminal.draw(|frame| view::draw(frame, app))?;
+            if app.strip.image {
+                show(&mut image, app)?;
+            }
         }
         // While a read runs, a look for it every tick.
         let wait = match run.every() {
@@ -471,15 +531,41 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
             Some(every) => every.saturating_sub(last_read.elapsed()).min(TICK),
             None => TICK,
         };
-        if event::poll(wait)? {
-            match event::read()? {
+        let mut next = if event::poll(wait)? {
+            Some(event::read()?)
+        } else {
+            None
+        };
+        // The pointer's moves and drags that queue up are taken as one:
+        // only where it ends up is lit. A few at most, so that a pointer
+        // that keeps moving does not hold up the screen and the reads.
+        let mut moves = 0;
+        let mut lit = false;
+        while let Some(Event::Mouse(mouse)) = next
+            && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+            && moves < MOVES
+        {
+            moves += 1;
+            lit |= app.mouse(mouse);
+            next = if event::poll(Duration::ZERO)? {
+                Some(event::read()?)
+            } else {
+                None
+            };
+        }
+        draw = next.is_some() || moves == 0 || lit;
+        if let Some(event) = next {
+            match event {
                 Event::Key(key) => {
                     app.key(key);
                     run.interrupted = app.quit
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c');
                 }
-                Event::Mouse(mouse) => app.mouse(mouse),
+                Event::Mouse(mouse) => {
+                    app.mouse(mouse);
+                }
+                Event::Paste(text) => app.paste(&text),
                 // The screen is drawn afresh: the image is deleted, so that
                 // none is left where the strip was, and sent again.
                 Event::Resize(..) => {
@@ -489,6 +575,12 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, run: &mut Run) -> R
                 }
                 _ => {}
             }
+        }
+        // What the mouse selected, to the clipboard (TU-12).
+        if let Some(text) = app.copied.take() {
+            let mut out = io::stdout();
+            out.write_all(&select::osc52(&text))?;
+            out.flush()?;
         }
         if let Some(record) = app.pending_message.take() {
             run.send(

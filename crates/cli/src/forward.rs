@@ -61,12 +61,15 @@ impl Forward {
 
     /// How each connection is made.
     ///
-    /// Over ssh: `ssh -T -o BatchMode=yes [-p port] -- [user@]host cases
-    /// dial-stdio`, with the ssh on the PATH and the user's ssh config.
-    /// `-T` keeps a tty off the pipe, which would garble the HTTP stream
-    /// even with `RequestTTY force` in that config, and `BatchMode` makes a
-    /// host-key or password prompt fail the dial rather than hang it or
-    /// break into the terminal.
+    /// Over ssh: `ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p port] --
+    /// [user@]host cases dial-stdio`, with the ssh on the PATH and the
+    /// user's ssh config. `-T` keeps a tty off the pipe, which would garble
+    /// the HTTP stream even with `RequestTTY force` in that config, and
+    /// `BatchMode` makes a host-key or password prompt fail the dial rather
+    /// than hang it or break into the terminal. `ConnectTimeout` limits
+    /// connecting and ssh's handshake to 10 s a try, rather than the
+    /// request's whole timeout; on the command line, it wins over one in
+    /// that config.
     ///
     /// Over a command: `sh -c <command>`, so that it is quoted, and may set
     /// variables, as it would be at a shell. A shell runs the last command
@@ -82,7 +85,9 @@ impl Forward {
             Forward::Http(_) => return None,
             Forward::Ssh { user, host, port } => (user, host, port),
         };
-        let mut args = vec!["-T".to_owned(), "-o".to_owned(), "BatchMode=yes".to_owned()];
+        let mut args: Vec<String> = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+            .map(str::to_owned)
+            .into();
         if let Some(port) = port {
             args.push("-p".to_owned());
             args.push(port.to_string());
@@ -673,7 +678,7 @@ mod tests {
         ] {
             let forward = forward(text);
             assert_eq!(forward.to_string(), shown);
-            let mut want: Vec<String> = ["-T", "-o", "BatchMode=yes"]
+            let mut want: Vec<String> = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
                 .into_iter()
                 .chain(dial)
                 .map(str::to_owned)
@@ -717,6 +722,84 @@ mod tests {
         ] {
             assert!(text.parse::<Forward>().is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn a_refused_forward_says_why() {
+        let tail = "; it is ssh://[user@]host[:port], exec:<command> for a command that runs \
+                    cases dial-stdio on the far side, or http://host[:port] for a cases serve \
+                    there";
+        for (text, why) in [
+            ("devbox", "the scheme is not ssh, exec, http or https"),
+            ("ftp://devbox", "the scheme is not ssh, exec, http or https"),
+            ("exec:", "exec: has no command"),
+            ("EXEC:   ", "exec: has no command"),
+            (
+                "ssh://devbox/path",
+                "it may not have a path, a query or a fragment",
+            ),
+            (
+                "ssh://devbox?x",
+                "it may not have a path, a query or a fragment",
+            ),
+            (
+                "ssh://devbox#x",
+                "it may not have a path, a query or a fragment",
+            ),
+            ("ssh://@devbox", "the user is not one"),
+            ("ssh://-l@devbox", "the user is not one"),
+            ("ssh://devbox:0", "the port is not one"),
+            ("ssh://devbox:65536", "the port is not one"),
+            ("ssh://devbox:", "the port is not one"),
+            ("ssh://", "the host is not one"),
+            ("ssh://.devbox", "the host is not one"),
+            ("ssh://[zz]", "the host is not one"),
+        ] {
+            let error = text.parse::<Forward>().unwrap_err().to_string();
+            assert_eq!(error, format!("{text:?} is not a forward: {why}{tail}"));
+        }
+        // An http forward's refusal carries the address parser's reason.
+        let error = "http://devbox/path"
+            .parse::<Forward>()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("\"http://devbox/path\" is not a forward: ") && error.ends_with(tail),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn what_is_taken_for_a_user_and_a_port() {
+        // The last `@` and the last `:` split the user and the port off.
+        assert_eq!(
+            forward("ssh://a.b-c_d@host:65535"),
+            Forward::Ssh {
+                user: Some("a.b-c_d".to_owned()),
+                host: "host".to_owned(),
+                port: Some(65535),
+            }
+        );
+        assert_eq!(
+            forward("ssh://host:1"),
+            Forward::Ssh {
+                user: None,
+                host: "host".to_owned(),
+                port: Some(1),
+            }
+        );
+        // A bare address in brackets keeps its colons; only a port after
+        // the closing bracket is one.
+        assert_eq!(
+            forward("ssh://[fe80::1]:2200"),
+            Forward::Ssh {
+                user: None,
+                host: "[fe80::1]".to_owned(),
+                port: Some(2200),
+            }
+        );
+        assert!("ssh://[fe80::1".parse::<Forward>().is_err());
+        assert!("ssh://fe80::1".parse::<Forward>().is_err());
     }
 
     #[test]
@@ -784,5 +867,29 @@ mod tests {
             assert_eq!(args(&forward), ["-c", command]);
             assert_eq!(forward.dial().unwrap().to_string(), shown);
         }
+    }
+
+    #[test]
+    fn a_deadline_is_kept_on_the_store_until_it_is_taken_away() {
+        let forward = forward("exec:true");
+        let forwarded = Forwarded::new(&forward, None);
+        let shown = |f: &Forwarded| format!("{:?}", f.store().client());
+        assert!(shown(&forwarded).contains("deadline: None"));
+        forwarded.until(Some(Instant::now() + Duration::from_secs(60)));
+        assert!(shown(&forwarded).contains("deadline: Some("));
+        forwarded.until(None);
+        assert!(shown(&forwarded).contains("deadline: None"));
+    }
+
+    /// The signals a process started with ignored are left alone. Rust's
+    /// runtime starts every process, a test's too, with SIGPIPE ignored.
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn a_signal_the_process_started_ignoring_is_left_alone() {
+        use signal_hook::consts::{SIGPIPE, SIGSYS, SIGUSR2};
+        assert!(left_alone(SIGPIPE));
+        assert!(!left_alone(SIGUSR2));
+        // Above every signal that is ignored, nothing is left to shift in.
+        assert!(!left_alone(SIGSYS));
     }
 }

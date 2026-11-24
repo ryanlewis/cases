@@ -42,3 +42,30 @@ pub(crate) fn run(_: &Args, ctx: &mut Ctx) -> Result<(), Error> {
     dial::serve(db, dial::lease(), &mut input, &mut ctx.out)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::forward::{Forward, Forwarded};
+    use crate::store::Target;
+
+    /// The command line never gives it another store (see
+    /// `store::local_path`), so only a context made by hand reaches this.
+    #[test]
+    fn a_store_that_is_not_a_local_file_is_refused() {
+        let forward: Forward = "ssh://devbox".parse().unwrap();
+        let mut ctx = Ctx {
+            store: AnyStore::Forward(Box::new(Forwarded::new(&forward, None))),
+            target: Target::Forward { forward },
+            config: Config::default(),
+            store_flag: None,
+            out: io::stdout().lock(),
+        };
+        let error = run(&Args {}, &mut ctx).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "dial-stdio serves a local store file only"
+        );
+    }
+}

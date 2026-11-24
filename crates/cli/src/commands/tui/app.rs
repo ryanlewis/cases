@@ -11,8 +11,9 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 
+use super::actions::{self, Action};
 use super::compose::{self, Compose, Part};
-use super::form::{Act, Form, Outcome, Which};
+use super::form::{Act, Form, Outcome, Press, Spot, Which};
 use super::reader::Wrote;
 use crate::commands::list;
 use crate::output::Actors;
@@ -23,8 +24,11 @@ fn filter_of(filter: Filter, states: &[State]) -> impl Fn(&Case) -> bool + '_ {
     move |case| filter.takes(case) && states.contains(&case.state())
 }
 
-/// How long a line in the footer stays.
-const FLASH_FOR: Duration = Duration::from_secs(4);
+/// How long a toast stays.
+const TOAST_FOR: Duration = Duration::from_secs(4);
+
+/// The most toasts shown at once: a new one pushes out the oldest.
+const TOASTS: usize = 3;
 
 /// The list's filters, as the web inbox has them (IN-01, IN-07), and the
 /// briefings' tab beside them (TU-10).
@@ -123,21 +127,126 @@ pub(crate) enum Hit {
     ApprovalRow(usize),
     /// A field of the form.
     Field(Which),
+    /// A signoff's or a briefing's answer, in the answer's panel.
+    Mark(&'static str),
+    /// An approval row's verdict, by the row's place, in the answer's panel.
+    Verdict(usize, &'static str),
+    /// A line of an approval row's verdicts, by the row's place, and
+    /// whether the human carries the step out: the view splits it into a
+    /// [`Hit::Verdict`] for each, so it is never where a click lands.
+    Verdicts(usize, bool),
+    /// One of the answer's panel's buttons.
+    Press(Press),
+    /// One of the case's bar's buttons.
+    Verb(Verb),
+    /// An action the palette lists.
+    Palette(Action),
+    /// An action a row's menu lists.
+    Menu(Action),
+    /// A dialog, behind its buttons: a click on it does nothing.
+    Dialog,
+    /// A toast, by its id: a click puts it away.
+    Toast(u64),
+}
+
+/// The palette: what is typed to find an action, and the one of those
+/// found the keys are on.
+#[derive(Debug, Default)]
+pub(crate) struct Palette {
+    pub(crate) query: String,
+    pub(crate) at: usize,
+}
+
+/// A row's menu: the case it is on, where the right-click was, and the
+/// action the keys are on.
+#[derive(Debug)]
+pub(crate) struct Menu {
+    pub(crate) key: Key,
+    pub(crate) at: Position,
+    pub(crate) item: usize,
+}
+
+/// A short-lived notice in a corner of the screen: what a write did, or
+/// why a key did nothing.
+#[derive(Debug, Clone)]
+pub(crate) struct Toast {
+    /// Which toast it is, while it is up: a click names it by this.
+    pub(crate) id: u64,
+    pub(crate) text: String,
+    /// Whether it says something was done, rather than not.
+    pub(crate) done: bool,
+    at: Instant,
 }
 
 /// Whether one case's screen (TU-11) takes a key that reaches
-/// [`App::pane_key`]: its answer, a park, help, and the keys that scroll
-/// it by the page. j, k, the arrows, q and a form's keys are taken before
+/// [`App::pane_key`]: its answer, by a number, n, enter or tab too, a
+/// park, help, and the keys that scroll it by the page. j, k, the arrows, q and a form's keys are taken before
 /// that. The list's, the filters' and messages' keys do nothing there,
 /// and nor does a withdraw or a resume, as the screen ends once the case
 /// leaves open. The help it shows is [`super::view::ONE_KEYS`].
-fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
+pub(crate) fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
     match code {
         KeyCode::Char('d' | 'u') => ctrl,
-        KeyCode::Char('a' | 'p' | '?' | ' ' | 'J' | 'K') | KeyCode::PageDown | KeyCode::PageUp => {
-            true
-        }
+        KeyCode::Char('a' | 'n' | 'p' | '?' | ' ' | 'J' | 'K' | '1'..='9')
+        | KeyCode::Enter
+        | KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::PageDown
+        | KeyCode::PageUp => true,
         _ => false,
+    }
+}
+
+/// Whether r resumes `case`: only a parked one.
+pub(crate) fn resumes(case: &Case) -> bool {
+    case.state() == State::Parked
+}
+
+/// Whether e edits `case`: only a message no agent has picked up (HU-08).
+pub(crate) fn edits(case: &Case) -> bool {
+    case.kind() == Kind::Message && case.state() == State::Sent
+}
+
+/// An act on the selected case that the case's bar offers as a button,
+/// each pressing the key that does it (TU-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verb {
+    Answer,
+    Park,
+    Resume,
+    Withdraw,
+    Edit,
+}
+
+impl Verb {
+    #[cfg(test)]
+    pub(crate) const ALL: [Verb; 5] = [
+        Verb::Answer,
+        Verb::Park,
+        Verb::Resume,
+        Verb::Withdraw,
+        Verb::Edit,
+    ];
+
+    /// The key that does it, which its button underlines.
+    pub(crate) fn key(self) -> char {
+        match self {
+            Verb::Answer => 'a',
+            Verb::Park => 'p',
+            Verb::Resume => 'r',
+            Verb::Withdraw => 'w',
+            Verb::Edit => 'e',
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Verb::Answer => "Answer",
+            Verb::Park => "Park",
+            Verb::Resume => "Resume",
+            Verb::Withdraw => "Withdraw",
+            Verb::Edit => "Edit",
+        }
     }
 }
 
@@ -145,11 +254,15 @@ fn one_case_takes(code: KeyCode, ctrl: bool) -> bool {
 const WHEEL: u16 = 3;
 
 /// Which pane has the keys. Side by side both show; on a narrow terminal
-/// only the one with the keys does (TU-02).
+/// only the one with the keys does (TU-02). The answer's panel has them
+/// while [`App::form`] is an answer; that is drawn in the case's pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
     List,
     Case,
+    /// A button of the case's bar, which tab reaches on a case with no
+    /// answer to give: enter presses it.
+    Bar(Verb),
 }
 
 /// The screen's state.
@@ -175,12 +288,24 @@ pub(crate) struct App {
     pub(crate) scroll: u16,
     /// The list's scroll, kept between frames.
     pub(crate) list_offset: usize,
-    /// A line for the footer, and when it was set.
-    pub(crate) flash: Option<(String, Instant)>,
+    /// The palette, while it is open (TU-12).
+    pub(crate) palette: Option<Palette>,
+    /// A row's menu, while it is open: where it was asked for, and the
+    /// action the keys are on.
+    pub(crate) menu: Option<Menu>,
+    /// The toasts shown, oldest first.
+    pub(crate) toasts: Vec<Toast>,
+    /// The id the next toast takes.
+    next_toast: u64,
     pub(crate) help: bool,
     pub(crate) quit: bool,
-    /// The form being filled in, for the selected case (TU-05).
+    /// The form that has the keys, for the selected case (TU-05): an
+    /// answer's, in the panel at the foot of the case, or a park's or a
+    /// withdraw's.
     pub(crate) form: Option<Form>,
+    /// What was chosen or typed in the answer's panels of other cases, or
+    /// of this one with the keys out of it: kept with each case.
+    pub(crate) drafts: Vec<Form>,
     /// A write for the loop to send.
     pub(crate) pending: Option<Send>,
     /// The write being sent, until the read after it lands (TU-04).
@@ -206,8 +331,27 @@ pub(crate) struct App {
     pub(crate) only: Option<One>,
     /// Where the last frame drew each part a click acts on, latest on top.
     pub(crate) hits: Vec<(Rect, Hit)>,
+    /// Where the pointer was last seen, when the terminal reports it.
+    pub(crate) pointer: Option<Position>,
+    /// What a click under the pointer would act on, which the view lights.
+    pub(crate) hover: Option<Hit>,
     /// The stats strip (TU-13).
     pub(crate) strip: Strip,
+    /// The key the footer offers for a new line in a field.
+    pub(crate) newline: Newline,
+    /// The text the mouse selects, to copy (TU-12).
+    pub(crate) selection: Option<super::select::Selection>,
+    /// Text for the loop to put on the clipboard.
+    pub(crate) copied: Option<String>,
+}
+
+/// The key for a new line in a field (TU-12): shift+enter where the
+/// terminal tells it from enter, through the kitty keyboard protocol, and
+/// alt+enter, which any terminal sends, otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Newline {
+    ShiftEnter,
+    AltEnter,
 }
 
 /// The stats strip's state (TU-13).
@@ -252,10 +396,14 @@ impl App {
             focus: Focus::List,
             scroll: 0,
             list_offset: 0,
-            flash: None,
+            palette: None,
+            menu: None,
+            toasts: Vec::new(),
+            next_toast: 0,
             help: false,
             quit: false,
             form: None,
+            drafts: Vec::new(),
             pending: None,
             sending: None,
             edit: None,
@@ -267,6 +415,8 @@ impl App {
             answered: Group::Folded,
             only: None,
             hits: Vec::new(),
+            pointer: None,
+            hover: None,
             strip: Strip {
                 stats: None,
                 shown: true,
@@ -274,6 +424,9 @@ impl App {
                 image: false,
                 area: None,
             },
+            newline: Newline::AltEnter,
+            selection: None,
+            copied: None,
         }
     }
 
@@ -319,8 +472,39 @@ impl App {
         self.now = now;
         self.problem = None;
         self.keep_selection();
+        // A row's menu is on its case: one the selection left goes.
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|menu| Some(menu.key) != self.selected)
+        {
+            self.menu = None;
+        }
         self.follow_form();
         self.follow_compose();
+        self.settle_focus();
+    }
+
+    /// Where the keys go back to when they leave the answer, or a button
+    /// of the case's bar: the list, or the case on one case's screen.
+    fn home(&self) -> Focus {
+        if self.only.is_some() {
+            Focus::Case
+        } else {
+            Focus::List
+        }
+    }
+
+    /// Takes the keys off a button of the case's bar that the case no
+    /// longer offers, or once the case has an answer to give, whose parts
+    /// the ring goes round instead, as after the selection or the case
+    /// moved: back to where they go home to.
+    fn settle_focus(&mut self) {
+        if let Focus::Bar(verb) = self.focus
+            && (!self.verbs().contains(&verb) || self.answerable())
+        {
+            self.focus = self.home();
+        }
     }
 
     /// Closes the edit of a message an agent has picked up since, or that
@@ -351,6 +535,40 @@ impl App {
     /// has moved to a state the form cannot write to, and otherwise
     /// following it as [`Form::follow`] says.
     fn follow_form(&mut self) {
+        // The write being sent moves its case on: how it went is said once
+        // it lands, by `sent`, not as a case that moved with nothing sent.
+        let sending = match &self.sending {
+            Some(Sending::Event(send)) => Some(send.key),
+            _ => None,
+        };
+        // A draft follows its case quietly, and goes once its case can no
+        // longer be answered, saying so as the form does.
+        let cases = &self.cases;
+        let mut gone = Vec::new();
+        self.drafts.retain_mut(
+            |draft| match cases.iter().find(|(key, _)| *key == draft.key) {
+                Some((_, case)) if draft.act.fits(case) => {
+                    draft.follow(case);
+                    true
+                }
+                _ if Some(draft.key) == sending => true,
+                Some((_, case)) => {
+                    gone.push(format!(
+                        "{} is now {}: nothing was sent",
+                        draft.key,
+                        case.state()
+                    ));
+                    false
+                }
+                None => {
+                    gone.push(format!("{} is gone: nothing was sent", draft.key));
+                    false
+                }
+            },
+        );
+        for line in gone {
+            self.flash(&line);
+        }
         let Some(form) = &self.form else {
             return;
         };
@@ -365,6 +583,7 @@ impl App {
                     form.follow(case);
                 }
             }
+            _ if Some(form.key) == sending => {}
             Some(case) => {
                 let line = format!("{} is now {}: nothing was sent", form.key, case.state());
                 self.form = None;
@@ -521,23 +740,297 @@ impl App {
         })
     }
 
+    /// Says why something was not done, or what to do, in a toast.
     pub(crate) fn flash(&mut self, text: &str) {
-        self.flash = Some((text.into(), Instant::now()));
+        self.toast(text, false);
     }
 
-    pub(crate) fn expire_flash(&mut self, now: Instant) {
-        if self
-            .flash
-            .as_ref()
-            .is_some_and(|(_, at)| now.duration_since(*at) > FLASH_FOR)
+    /// Says that something was done, in a toast.
+    pub(crate) fn done(&mut self, text: &str) {
+        self.toast(text, true);
+    }
+
+    fn toast(&mut self, text: &str, done: bool) {
+        // The same again is the newest toast up for longer, not another.
+        if let Some(last) = self
+            .toasts
+            .last_mut()
+            .filter(|last| last.text == text && last.done == done)
         {
-            self.flash = None;
+            last.at = Instant::now();
+            return;
         }
+        if self.toasts.len() >= TOASTS {
+            self.toasts.remove(0);
+        }
+        self.toasts.push(Toast {
+            id: self.next_toast,
+            text: text.into(),
+            done,
+            at: Instant::now(),
+        });
+        self.next_toast += 1;
+    }
+
+    /// The newest toast's text.
+    pub(crate) fn said(&self) -> Option<&str> {
+        self.toasts.last().map(|toast| toast.text.as_str())
+    }
+
+    /// The newest text of a toast that says something was done.
+    pub(crate) fn said_done(&self) -> Option<&str> {
+        self.toasts
+            .iter()
+            .rev()
+            .find(|toast| toast.done)
+            .map(|toast| toast.text.as_str())
+    }
+
+    /// Puts away the toasts that have been up long enough.
+    ///
+    /// Gives whether any went, so that the screen is drawn without them.
+    pub(crate) fn expire_toasts(&mut self, now: Instant) -> bool {
+        let up = self.toasts.len();
+        self.toasts
+            .retain(|toast| now.duration_since(toast.at) <= TOAST_FOR);
+        self.toasts.len() != up
+    }
+
+    /// What a click at `at` acts on, from where the last frame drew it.
+    pub(crate) fn hit_at(&self, at: Position) -> Option<Hit> {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(rect, _)| rect.contains(at))
+            .map(|(_, hit)| *hit)
+    }
+
+    /// Whether a click on `hit` would act, as [`App::click`] has it, so
+    /// that the pointer over it lights it: not a pane, which only the wheel
+    /// acts on, nor a dialog's face; nothing under help, which a click only
+    /// closes; only a dialog's buttons while it asks; and not the list or
+    /// the tabs while a form or a message is open.
+    pub(crate) fn acts_on(&self, hit: Hit) -> bool {
+        if self.help {
+            return false;
+        }
+        if self.asking() {
+            return matches!(hit, Hit::Key(_));
+        }
+        if self.palette.is_some() || self.menu.is_some() {
+            return matches!(hit, Hit::Palette(_) | Hit::Menu(_));
+        }
+        let modal = self.modal();
+        let typing = self.form.as_ref().is_some_and(|f| f.editing.is_some());
+        match hit {
+            Hit::List
+            | Hit::Case
+            | Hit::Dialog
+            | Hit::Verdicts(..)
+            | Hit::Palette(_)
+            | Hit::Menu(_) => false,
+            Hit::Tab(_) => !modal && !typing && self.only.is_none(),
+            Hit::Row(_) | Hit::Fold => !modal && !typing,
+            Hit::Choice(_)
+            | Hit::LeftOut(_)
+            | Hit::ApprovalRow(_)
+            | Hit::Field(_)
+            | Hit::Mark(_)
+            | Hit::Verdict(..)
+            | Hit::Press(_)
+            | Hit::Verb(_) => !modal,
+            // ^k is the field's while one is typed in.
+            Hit::Key(key) if key.code == KeyCode::Char('k') => !self.typing(),
+            Hit::Key(_) | Hit::Toast(_) => true,
+        }
+    }
+
+    /// Whether a form that is not the answer's panel, or a message, has
+    /// the keys: a park's or a withdraw's, which the case's bar and its
+    /// panel wait for, as the list and the filters do.
+    pub(crate) fn modal(&self) -> bool {
+        self.compose.is_some() || self.form.as_ref().is_some_and(|f| f.act != Act::Answer)
+    }
+
+    /// The answer's panel of the case `key` as it stands: the form with
+    /// the keys, or the case's draft.
+    pub(crate) fn answer_of(&self, key: Key) -> Option<&Form> {
+        self.form
+            .iter()
+            .chain(&self.drafts)
+            .find(|form| form.key == key && form.act == Act::Answer)
+    }
+
+    /// Takes the keys out of the answer's panel, keeping what was chosen or
+    /// typed in it as its case's draft.
+    fn leave_panel(&mut self) {
+        if self.form.as_ref().is_some_and(|f| f.act == Act::Answer)
+            && let Some(form) = self.form.take()
+            && form.touched()
+        {
+            self.drafts.retain(|draft| draft.key != form.key);
+            self.drafts.push(form);
+        }
+    }
+
+    /// What a click under the pointer would act on, from where the last
+    /// frame drew each part: what the view lights.
+    pub(crate) fn hovered(&self) -> Option<Hit> {
+        self.pointer
+            .and_then(|at| self.hit_at(at))
+            .filter(|hit| self.acts_on(*hit))
+    }
+
+    /// The acts the case's bar offers on the selected case, as buttons
+    /// (TU-12): those its keys would do, so that the bar and the keys
+    /// agree. None while a form or a message is open, which takes the keys;
+    /// on one case's screen (TU-11), only those it takes.
+    pub(crate) fn verbs(&self) -> Vec<Verb> {
+        if self.modal() {
+            return Vec::new();
+        }
+        // As the table of actions has them, so that the bar, the palette,
+        // a row's menu and the keys agree.
+        Action::ALL
+            .into_iter()
+            .filter(|action| action.verb().is_some() && action.fits(self))
+            .filter_map(Action::verb)
+            .collect()
+    }
+
+    /// Whether a field of the answer, a park's or a withdraw's form, or of
+    /// a message, is being typed in.
+    pub(crate) fn typing(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.editing.is_some())
+            || self.compose.as_ref().is_some_and(|c| c.part.is_some())
+    }
+
+    /// A key while the palette is open: typing finds, the arrows choose,
+    /// enter runs, and esc closes it.
+    fn palette_key(&mut self, code: KeyCode, ctrl: bool) {
+        let found = self
+            .palette
+            .as_ref()
+            .map_or(0, |palette| actions::ranked(self, &palette.query).len());
+        let Some(palette) = &mut self.palette else {
+            return;
+        };
+        // Fewer may fit now than when the keys moved: the last is marked.
+        palette.at = palette.at.min(found.saturating_sub(1));
+        match code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Up => palette.at = palette.at.saturating_sub(1),
+            KeyCode::Down => palette.at = (palette.at + 1).min(found.saturating_sub(1)),
+            KeyCode::Enter => {
+                let at = palette.at;
+                self.run_found(at);
+            }
+            KeyCode::Backspace => {
+                palette.query.pop();
+                palette.at = 0;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                palette.query.push(c);
+                palette.at = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Runs the `at`th action the palette finds.
+    fn run_found(&mut self, at: usize) {
+        let query = self.palette.as_ref().map_or_default(|p| p.query.clone());
+        if let Some(action) = actions::ranked(self, &query).get(at).copied() {
+            self.run(action);
+        }
+    }
+
+    /// A key while a row's menu is open: the arrows choose, enter runs,
+    /// and esc closes it.
+    fn menu_key(&mut self, code: KeyCode) {
+        let items = Action::on_case(self).len();
+        let Some(menu) = &mut self.menu else {
+            return;
+        };
+        menu.item = menu.item.min(items.saturating_sub(1));
+        match code {
+            KeyCode::Esc => self.menu = None,
+            KeyCode::Up | KeyCode::Char('k') => menu.item = menu.item.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                menu.item = (menu.item + 1).min(items.saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                let item = menu.item;
+                if let Some(action) = Action::on_case(self).get(item).copied() {
+                    self.run(action);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Does `action`, from the palette or a row's menu, as its key does
+    /// outside the answer's panel: closed first, and the keys taken out
+    /// of the panel, keeping its draft. Quit asks first when something
+    /// typed would be lost.
+    pub(crate) fn run(&mut self, action: Action) {
+        self.palette = None;
+        self.menu = None;
+        if action == Action::Quit {
+            self.ask_quit();
+            return;
+        }
+        self.leave_panel();
+        if let Action::Filter(filter) = action {
+            if self.only.is_none() {
+                self.set_filter(filter);
+            }
+            return;
+        }
+        self.pane_key(action.code(), false);
+    }
+
+    /// A right-click (TU-12): on a row of the list, selects it and opens
+    /// its menu where the pointer is; anywhere else, or while anything is
+    /// open over the screen, it does nothing.
+    fn right_click(&mut self, hit: Option<Hit>, at: Position) {
+        if self.help
+            || self.asking()
+            || self.modal()
+            || self.typing()
+            || self.palette.is_some()
+            || self.only.is_some()
+        {
+            return;
+        }
+        if let Some(Hit::Row(key)) = hit
+            && let Some(row) = self.shown(self.filter).iter().position(|(k, _)| *k == key)
+        {
+            self.menu = None;
+            if self.selected != Some(key) {
+                self.leave_panel();
+                self.select(row);
+            }
+            self.menu = Some(Menu { key, at, item: 0 });
+        } else {
+            // A right-click off a row is any click off the menu.
+            self.menu = None;
+        }
+    }
+
+    /// Whether a question is up, in a dialog: quitting, or the form's or
+    /// the message's.
+    pub(crate) fn asking(&self) -> bool {
+        self.confirm_quit
+            || self.form.as_ref().is_some_and(|f| f.confirm.is_some())
+            || self.compose.as_ref().is_some_and(|c| c.confirm)
     }
 
     /// Does what `key` asks (TU-08).
     pub(crate) fn key(&mut self, key: KeyEvent) {
-        if key.kind == KeyEventKind::Release {
+        if key.kind == KeyEventKind::Release
+            || (key.code == KeyCode::Esc && super::select::clear(self))
+        {
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -550,6 +1043,24 @@ impl App {
             self.help = false;
             return;
         }
+        if self.palette.is_some() || self.menu.is_some() {
+            if ctrl && key.code == KeyCode::Char('c') {
+                self.palette = None;
+                self.menu = None;
+                self.ask_quit();
+            } else if self.palette.is_some() {
+                self.palette_key(key.code, ctrl);
+            } else {
+                self.menu_key(key.code);
+            }
+            return;
+        }
+        // ^k opens the palette from anywhere a field is not typed in, and
+        // no question is up; in a field, the field has it.
+        if ctrl && key.code == KeyCode::Char('k') && !self.typing() && !self.asking() {
+            self.palette = Some(Palette::default());
+            return;
+        }
         if self.quits(key.code, ctrl) {
             self.ask_quit();
             return;
@@ -558,29 +1069,172 @@ impl App {
             self.open_key(key);
             return;
         }
+        self.settle_focus();
         match self.focus {
             Focus::List => self.list_key(key.code, ctrl),
             Focus::Case => self.case_key(key.code, ctrl),
+            Focus::Bar(verb) => self.bar_key(verb, key.code, ctrl),
+        }
+        self.settle_focus();
+    }
+
+    /// A key while a button of the case's bar has the keys: the bar is
+    /// one stop, so tab and shift-tab go back to the list, left and right
+    /// move along the bar, stopping at either end, enter or space presses
+    /// the button, esc goes back, and any other key is the list's.
+    fn bar_key(&mut self, verb: Verb, code: KeyCode, ctrl: bool) {
+        let verbs = self.verbs();
+        let at = verbs.iter().position(|v| *v == verb).unwrap_or(0);
+        match code {
+            KeyCode::Left | KeyCode::Right => {
+                let to = if code == KeyCode::Left {
+                    at.saturating_sub(1)
+                } else {
+                    at + 1
+                };
+                if let Some(verb) = verbs.get(to) {
+                    self.focus = Focus::Bar(*verb);
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.focus = Focus::Case;
+                self.pane_key(KeyCode::Char(verb.key()), false);
+            }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => self.focus = self.home(),
+            _ => {
+                self.focus = self.home();
+                match self.focus {
+                    Focus::Case => self.case_key(code, ctrl),
+                    _ => self.list_key(code, ctrl),
+                }
+            }
+        }
+    }
+
+    /// Whether the selected case can be answered now.
+    pub(crate) fn answerable(&self) -> bool {
+        self.selected_case()
+            .is_some_and(|(_, case)| Act::Answer.fits(case))
+    }
+
+    /// Tab, or shift-tab when `by` is back, from the list or the case: onto
+    /// the answer's first part, or its last; on a case with no answer to
+    /// give, onto the case's bar, at its first button either way (TU-12).
+    fn ring(&mut self, by: isize) {
+        if self.answerable() {
+            self.answer_at(|form| {
+                let parts = form.parts();
+                let part = if by > 0 { parts.first() } else { parts.last() };
+                if let Some(part) = part {
+                    form.go(*part);
+                }
+                true
+            });
+            return;
+        }
+        if let Some(verb) = self.verbs().first() {
+            self.focus = Focus::Bar(*verb);
+        }
+    }
+
+    /// Puts the keys in the selected case's answer, where `to` puts them,
+    /// with the case scrolled to it; or, when `to` says it cannot, leaves
+    /// them where they were. A case that cannot be answered says why.
+    fn answer_at(&mut self, to: impl FnOnce(&mut Form) -> bool) {
+        let focus = self.focus;
+        let Some(form) = self.enter_panel() else {
+            return;
+        };
+        if to(form) {
+            form.reveal = true;
+        } else {
+            self.leave_panel();
+            self.focus = focus;
+        }
+    }
+
+    /// Takes a paste into the field being typed in, whole, new lines and
+    /// all; one in no field is dropped, rather than read as keys (TU-12).
+    pub(crate) fn paste(&mut self, text: &str) {
+        if self.asking() {
+            return;
+        }
+        if let Some(form) = &mut self.form
+            && let Some(which) = form.being_edited()
+        {
+            form.field(which).paste(text, false);
+            form.reveal = form.act == Act::Answer;
+        } else if let Some(compose) = &mut self.compose
+            && let Some(part) = compose.part
+        {
+            compose.field(part).paste(text, part != Part::Body);
         }
     }
 
     /// Does what the mouse asks (TU-12): a click acts on what it lands on,
-    /// and the wheel scrolls what it is over. While help or a question is
-    /// up, a click is any other key: it closes help, or answers no.
-    pub(crate) fn mouse(&mut self, event: MouseEvent) {
+    /// the wheel scrolls what it is over, and what the pointer is over is
+    /// lit. While help is up, a click is any other key: it closes help.
+    /// While a question is up, a click on one of its buttons presses its
+    /// key, on the dialog does nothing, and anywhere else answers no.
+    ///
+    /// Gives whether the screen is to be drawn again: not for a move of
+    /// the pointer that leaves it over the same thing.
+    pub(crate) fn mouse(&mut self, event: MouseEvent) -> bool {
         let at = Position::new(event.column, event.row);
-        let hit = self
-            .hits
-            .iter()
-            .rev()
-            .find(|(rect, _)| rect.contains(at))
-            .map(|(_, hit)| *hit);
+        let selected = super::select::mouse(self, event);
+        let hit = self.hit_at(at);
+        self.pointer = Some(at);
+        let was = self.hover;
+        self.hover = self.hovered();
+        // A toast is not scrolled: the wheel over one scrolls what is
+        // under it.
+        let under = || {
+            self.hits
+                .iter()
+                .rev()
+                .filter(|(_, hit)| !matches!(hit, Hit::Toast(_)))
+                .find(|(rect, _)| rect.contains(at))
+                .map(|(_, hit)| *hit)
+        };
         match event.kind {
+            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                return self.hover != was || selected;
+            }
+            // The palette and a row's menu take a click: on one of their
+            // actions, runs it; on their face, nothing; anywhere else,
+            // closes them.
+            MouseEventKind::Down(MouseButton::Left)
+                if self.palette.is_some() || self.menu.is_some() =>
+            {
+                // What was drawn under the click, if it still fits; a row's
+                // menu, on its own case.
+                match hit {
+                    Some(Hit::Palette(action)) if action.fits(self) => self.run(action),
+                    Some(Hit::Menu(action))
+                        if action.fits(self)
+                            && self.menu.as_ref().map(|menu| menu.key) == self.selected =>
+                    {
+                        self.run(action);
+                    }
+                    Some(Hit::Dialog) => {}
+                    _ => {
+                        self.palette = None;
+                        self.menu = None;
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => self.right_click(hit, at),
+            _ if self.palette.is_some() || self.menu.is_some() => {}
             MouseEventKind::Down(MouseButton::Left) => self.click(hit),
-            MouseEventKind::ScrollDown => self.wheel(hit, 1),
-            MouseEventKind::ScrollUp => self.wheel(hit, -1),
+            MouseEventKind::ScrollDown => self.wheel(under(), 1),
+            MouseEventKind::ScrollUp => self.wheel(under(), -1),
             _ => {}
         }
+        self.settle_focus();
+        // What the click or the wheel did may have put something over the
+        // pointer, as help, which nothing under it is lit through.
+        self.hover = self.hovered();
+        true
     }
 
     fn wheel(&mut self, hit: Option<Hit>, by: isize) {
@@ -593,7 +1247,16 @@ impl App {
             {
                 self.move_by(by);
             }
-            Some(Hit::List | Hit::Row(_) | Hit::Fold | Hit::Tab(_) | Hit::Key(_)) | None => {}
+            Some(
+                Hit::List
+                | Hit::Row(_)
+                | Hit::Fold
+                | Hit::Tab(_)
+                | Hit::Key(_)
+                | Hit::Dialog
+                | Hit::Toast(_),
+            )
+            | None => {}
             Some(_) if by > 0 => self.scroll = self.scroll.saturating_add(WHEEL),
             Some(_) => self.scroll = self.scroll.saturating_sub(WHEEL),
         }
@@ -603,20 +1266,21 @@ impl App {
         if self.help || self.confirm_quit {
             if let Some(Hit::Key(key)) = hit {
                 self.key(key);
-            } else {
+            } else if !(self.confirm_quit && hit == Some(Hit::Dialog)) {
                 self.help = false;
                 self.confirm_quit = false;
             }
             return;
         }
-        // A question the form or the message asks: a click is any key but
-        // the y drawn in the footer.
+        // A question the form or the message asks: a click on one of the
+        // dialog's buttons presses its key, and one off the dialog is any
+        // other key, which answers no.
         if self.form.as_ref().is_some_and(|f| f.confirm.is_some())
             || self.compose.as_ref().is_some_and(|c| c.confirm)
         {
             if let Some(Hit::Key(key)) = hit {
                 self.key(key);
-            } else {
+            } else if hit != Some(Hit::Dialog) {
                 if let Some(form) = &mut self.form {
                     form.confirm = None;
                 }
@@ -629,37 +1293,81 @@ impl App {
         let Some(hit) = hit else {
             return;
         };
-        let open = self.form.is_some() || self.compose.is_some();
+        let open = self.modal() || self.form.as_ref().is_some_and(|f| f.editing.is_some());
         match hit {
             Hit::Key(key) => self.key(key),
+            Hit::Toast(id) => {
+                self.toasts.retain(|toast| toast.id != id);
+            }
             // As the keys: the list and the filters wait while a form or a
-            // message is open.
-            Hit::List | Hit::Case => {}
-            _ if open && self.form.is_none() => {}
-            Hit::Tab(filter) if !open && self.only.is_none() => self.set_filter(filter),
-            Hit::Fold if !open => self.pane_key(KeyCode::Char('f'), false),
+            // message is open. A dialog's face does nothing.
+            // The list and the filters wait while a park, a withdraw or a
+            // message is open, or a field of the answer is typed in; with
+            // the keys only in the answer's panel, they take them out of it.
+            Hit::Tab(filter) if !open && self.only.is_none() => {
+                self.leave_panel();
+                self.set_filter(filter);
+            }
+            Hit::Fold if !open => {
+                self.leave_panel();
+                self.pane_key(KeyCode::Char('f'), false);
+            }
             Hit::Row(key) if !open => {
                 if self.selected == Some(key) {
                     self.focus = Focus::Case;
                 } else if let Some(at) = self.shown(self.filter).iter().position(|(k, _)| *k == key)
                 {
+                    self.leave_panel();
                     self.select(at);
                 }
             }
-            Hit::Tab(_) | Hit::Fold | Hit::Row(_) => {}
-            Hit::Choice(_) | Hit::LeftOut(_) | Hit::ApprovalRow(_) | Hit::Field(_) => {
-                // A choice or an item of a case with no form opens its answer;
-                // one of another case than the form's does nothing.
-                match &self.form {
-                    None => self.start(Act::Answer),
-                    Some(form) if Some(form.key) != self.selected => return,
-                    Some(_) => {}
+            Hit::Tab(_)
+            | Hit::Fold
+            | Hit::Row(_)
+            | Hit::List
+            | Hit::Case
+            | Hit::Dialog
+            | Hit::Verdicts(..)
+            | Hit::Palette(_)
+            | Hit::Menu(_) => {}
+            _ if self.modal() => {}
+            // The bar's buttons do what their keys do outside the panel.
+            Hit::Verb(verb) => {
+                self.leave_panel();
+                self.pane_key(KeyCode::Char(verb.key()), false);
+            }
+            Hit::Press(press) => {
+                if let Some(form) = self.enter_panel() {
+                    let outcome = form.press(press);
+                    self.form_outcome(outcome);
                 }
-                if let Some(form) = &mut self.form {
+            }
+            Hit::Choice(_)
+            | Hit::LeftOut(_)
+            | Hit::ApprovalRow(_)
+            | Hit::Field(_)
+            | Hit::Mark(_)
+            | Hit::Verdict(..) => {
+                // A click in the answer's panel puts the keys there, and
+                // does what it lands on.
+                if let Some(form) = self.enter_panel() {
                     form.click(hit);
                 }
             }
         }
+    }
+
+    /// Puts the keys in the selected case's answer's panel, with its draft,
+    /// and gives its form; none when the case cannot be answered.
+    fn enter_panel(&mut self) -> Option<&mut Form> {
+        let here = self
+            .form
+            .as_ref()
+            .is_some_and(|f| f.act == Act::Answer && Some(f.key) == self.selected);
+        if !here {
+            self.start(Act::Answer);
+        }
+        self.form.as_mut().filter(|form| form.act == Act::Answer)
     }
 
     /// Whether the key quits: ctrl+c always, and q unless a field of the
@@ -686,6 +1394,10 @@ impl App {
             || self.compose.as_ref().is_some_and(|compose| {
                 compose.typed() && !sent(compose.editing.map(|(key, _)| key))
             })
+            || self
+                .drafts
+                .iter()
+                .any(|draft| draft.typed() && !sent(Some(draft.key)))
         {
             self.confirm_quit = true;
         } else {
@@ -752,7 +1464,13 @@ impl App {
             }
         }
         match code {
-            KeyCode::Char('a') => self.start(Act::Answer),
+            KeyCode::Char('a') => {
+                // The panel is at the foot of the case: scrolled to.
+                self.start(Act::Answer);
+                if self.form.is_some() {
+                    self.scroll = u16::MAX;
+                }
+            }
             KeyCode::Char('p') => self.start(Act::Park),
             KeyCode::Char('w') => self.start(Act::Withdraw),
             KeyCode::Char('r') => self.resume(),
@@ -763,8 +1481,20 @@ impl App {
             KeyCode::Char('e') => self.edit_sent(),
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('s') if !ctrl && self.strip.room => self.strip.shown = !self.strip.shown,
-            KeyCode::Tab => self.set_filter(self.filter.step(1)),
-            KeyCode::BackTab => self.set_filter(self.filter.step(-1)),
+            KeyCode::Tab => self.ring(1),
+            KeyCode::BackTab => self.ring(-1),
+            KeyCode::Char(']') => self.set_filter(self.filter.step(1)),
+            KeyCode::Char('[') => self.set_filter(self.filter.step(-1)),
+            // A number answers the case at once: an option, an answer or
+            // a row, by its number, with the keys put on it there.
+            KeyCode::Char(c @ '1'..='9') => {
+                let n = c.to_digit(10).unwrap_or(0);
+                self.answer_at(|form| form.pick(n));
+            }
+            KeyCode::Char('n') => self.answer_at(|form| {
+                form.go(Spot::Field(Which::Note));
+                true
+            }),
             KeyCode::Char('f') if self.filter == Filter::Briefings => {
                 self.answered = match self.answered {
                     Group::Folded => Group::Shown,
@@ -772,18 +1502,15 @@ impl App {
                 };
                 self.keep_selection();
             }
-            KeyCode::Char(c @ '1'..='5') => {
-                let at = usize::from(u8::try_from(c).unwrap_or(b'1') - b'1');
-                self.set_filter(Filter::ALL[at]);
-            }
             _ => self.move_key(code, ctrl),
         }
     }
 
-    /// The keys that move about: open the selected case, scroll it by the
-    /// page, or select the first or last case.
+    /// The keys that move about: into the case's answer, open the selected
+    /// case, scroll it by the page, or select the first or last case.
     fn move_key(&mut self, code: KeyCode, ctrl: bool) {
         match code {
+            KeyCode::Enter if self.answerable() => self.ring(1),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if self.selected.is_some() => {
                 self.focus = Focus::Case;
             }
@@ -807,7 +1534,14 @@ impl App {
         };
         let key = *key;
         if act.fits(case) {
-            self.form = Some(Form::new(key, case, act));
+            let fresh = Form::new(key, case, act);
+            self.leave_panel();
+            let draft = self
+                .drafts
+                .iter()
+                .position(|draft| draft.key == key && act == Act::Answer)
+                .map(|at| self.drafts.remove(at));
+            self.form = Some(draft.unwrap_or(fresh));
             if self.focus == Focus::List {
                 self.focus = Focus::Case;
             }
@@ -836,7 +1570,7 @@ impl App {
             return;
         };
         let key = *key;
-        if case.state() != State::Parked {
+        if !resumes(case) {
             let line = format!("{key} is {}: only a parked case resumes", case.state());
             self.flash(&line);
             return;
@@ -849,6 +1583,14 @@ impl App {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => self.form = None,
+            Outcome::Leave => {
+                self.leave_panel();
+                self.focus = self.home();
+            }
+            Outcome::Park => {
+                self.leave_panel();
+                self.start(Act::Park);
+            }
             Outcome::Edit(which) => self.edit = Some(which),
             Outcome::Missing(what) => self.flash(&format!("nothing sent: {what}")),
             Outcome::Send(record) => {
@@ -866,7 +1608,7 @@ impl App {
             return;
         };
         let key = *key;
-        if case.kind() == Kind::Message && case.state() == State::Sent {
+        if edits(case) {
             self.compose = Some(Compose::edit(key, case));
             self.focus = Focus::Case;
         } else {
@@ -917,7 +1659,7 @@ impl App {
                         "sent message {key}; no session is listening for it now, so it waits until one is"
                     )
                 };
-                self.flash(&line);
+                self.done(&line);
             }
             Err(why) => self.flash(&format!("nothing sent: {why}")),
         }
@@ -956,6 +1698,10 @@ impl App {
             // Not asked for here: nothing to say.
             _ => {}
         }
+        // With the write said, a form or a draft its read left open on a
+        // case it no longer fits, as when the write was refused because
+        // the case moved on meanwhile, goes, saying nothing was sent.
+        self.follow_form();
     }
 
     /// Queues a write for the loop, with the list as it stands, so that the
@@ -985,6 +1731,7 @@ impl App {
                 if self.form.as_ref().is_some_and(|f| f.key == send.key) {
                     self.form = None;
                 }
+                self.drafts.retain(|draft| draft.key != send.key);
                 if self
                     .compose
                     .as_ref()
@@ -1006,7 +1753,7 @@ impl App {
                 if self.form.is_none() && self.selected != Some(send.key) {
                     self.focus = Focus::List;
                 }
-                self.flash(&format!("recorded {} on {}", send.what, send.key));
+                self.done(&format!("recorded {} on {}", send.what, send.key));
             }
             Err(Refusal::Stale) => {
                 // The case as it is now is on screen. A form keeps what was
@@ -1028,6 +1775,14 @@ impl App {
                     && form.key == send.key
                 {
                     form.amended(case);
+                }
+                // Or its draft, when the keys left the answer while it was
+                // being sent.
+                if let Some(case) = now
+                    && !edit
+                    && let Some(draft) = self.drafts.iter_mut().find(|d| d.key == send.key)
+                {
+                    draft.amended(case);
                 }
                 let mut replaced = false;
                 if let (Some(compose), Some(case)) = (&mut self.compose, now)

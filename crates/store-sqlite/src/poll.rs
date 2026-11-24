@@ -197,4 +197,77 @@ mod tests {
         assert_eq!(cases.len(), 3);
         assert!(cases.values().all(Result::is_ok));
     }
+
+    /// The statements each idle read runs, with nothing changed since the
+    /// last: a poll, and the version, each run in its transaction the same
+    /// five reads of the store. SQLite runs one more for them, the pragma
+    /// behind `pragma_table_info`.
+    #[test]
+    fn an_idle_read_runs_five_statements() {
+        use std::sync::{Arc, Mutex};
+
+        use rusqlite::trace::{TraceEvent, TraceEventCodes};
+
+        let (_dir, db) = scratch();
+        let key = create(&db);
+        note(&db, key);
+        let mut poller = db.poller();
+        poller.poll().unwrap();
+        let run: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = Arc::clone(&run);
+        db.with_connection_mut(|conn| {
+            conn.trace_v2(
+                TraceEventCodes::SQLITE_TRACE_STMT,
+                Some(move |event: TraceEvent<'_>| {
+                    if let TraceEvent::Stmt(statement, _) = event {
+                        seen.lock().unwrap().push(statement.sql().into_owned());
+                    }
+                }),
+            )
+            .unwrap();
+        });
+        // The reads run since the last call, apart from the transaction's
+        // begin and commit and the pragma SQLite runs for one of them.
+        let reads = || {
+            let run = std::mem::take(&mut *run.lock().unwrap());
+            let (around, reads): (Vec<_>, Vec<_>) = run.into_iter().partition(|sql| {
+                sql.starts_with("BEGIN") || sql == "COMMIT" || sql == "PRAGMA table_info='meta'"
+            });
+            assert_eq!(around.len(), 3, "{around:#?}");
+            reads
+        };
+        poller.poll().unwrap();
+        let polled = reads();
+        // The schema version, whether the store is upgraded, its id, its
+        // counters and count, and the tag: no read of a row or a log.
+        let polled: Vec<String> = polled
+            .iter()
+            .map(|sql| sql.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(
+            polled,
+            [
+                "SELECT max(schema_version) FROM meta",
+                "SELECT (SELECT count(*) FROM sqlite_master WHERE (type, name) IN \
+                 (VALUES ('table', 'removed'), ('trigger', 'removed_log'), \
+                 ('table', 'gone'), ('trigger', 'gone_log'))) >= 4 \
+                 AND (SELECT count(*) FROM pragma_table_info('meta') WHERE name = 'store_id') > 0",
+                "SELECT max(store_id) FROM meta",
+                "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0), \
+                 coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'cases'), 0), \
+                 (SELECT count(*) FROM cases)",
+                "SELECT at FROM events WHERE change = ?1 \
+                 UNION ALL SELECT at FROM archive_events WHERE change = ?1 \
+                 UNION ALL SELECT at FROM removed WHERE change = ?1 \
+                 UNION ALL SELECT at FROM gone WHERE change = ?1 LIMIT 1",
+            ],
+            "a poll"
+        );
+        db.version().unwrap();
+        let version: Vec<String> = reads()
+            .iter()
+            .map(|sql| sql.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(version, polled, "the version");
+    }
 }

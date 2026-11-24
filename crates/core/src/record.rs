@@ -753,7 +753,8 @@ object!(Resume {
 /// `serde_json` reads the integer `-0` as the float -0.0, which a whole number
 /// does not read from, though `-0` has no fraction part. The space keeps the
 /// JSON valid, and each byte where it was. A `-0` in a string, and a number
-/// such as `-0.5` or `-0e1`, are left as they are.
+/// such as `-0.5` or `-0e1`, are left as they are, and so is the sign of an
+/// exponent, as in `1e-0`.
 fn unsigned_zeros(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
     let (mut in_string, mut escaped) = (false, false);
@@ -769,6 +770,7 @@ fn unsigned_zeros(text: &str) -> Cow<'_, str> {
         } else if byte == b'"' {
             in_string = true;
         } else if byte == b'-'
+            && !matches!(bytes[..i].last(), Some(b'e' | b'E'))
             && bytes.get(i + 1) == Some(&b'0')
             && !matches!(bytes.get(i + 2), Some(b'0'..=b'9' | b'.' | b'e' | b'E'))
         {
@@ -937,6 +939,26 @@ mod tests {
             panic!("the note does not read");
         };
         assert_eq!(note.body, r#"a " -0, b\"#);
+    }
+
+    #[test]
+    fn a_zero_exponent_is_json_inside_a_field_this_version_does_not_know() {
+        for text in [
+            r#"{"ack": true, "x": 1e-0}"#,
+            r#"{"ack": true, "x": 2.5E-0}"#,
+            r#"{"ack": true, "x": [1e-0, {"y": 3e-0}]}"#,
+            r#"{"ack": true, "x": -0, "y": -1e-0}"#,
+        ] {
+            let Ok(Record::Answer(answer)) = Record::read(EventType::Answer, text) else {
+                panic!("{text} does not read");
+            };
+            assert!(answer.ack, "{text}");
+        }
+        // In a field this version knows, the float is still not a whole number.
+        assert_eq!(
+            category(EventType::Answer, r#"{"choice": 1e-0}"#),
+            Some(Category::Malformed)
+        );
     }
 
     #[test]

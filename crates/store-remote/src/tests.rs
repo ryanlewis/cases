@@ -9,7 +9,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cases_core::{Append, Category, Key, Poller, Store, StoreError, Version, Writer};
+use cases_core::{Append, Category, Key, Poller, Refolded, Store, StoreError, Version, Writer};
 
 use crate::client::Limits;
 use crate::fake::{Fake, Fault, TOKEN};
@@ -580,12 +580,25 @@ fn the_poller_follows_a_remote_store() {
     let (b, _) = store.create(&open(), &unnamed()).unwrap();
     let mut poller = Poller::new(&store);
     assert_eq!(poller.poll().unwrap().len(), 2);
+    assert_eq!(poller.refolded(), &Refolded::All);
     store.append(&a, &note(), &unnamed(), None).unwrap();
     store.archive(&b, None).unwrap();
     let cases = poller.poll().unwrap();
     assert_eq!(cases.keys().copied().collect::<Vec<_>>(), [a]);
     assert_eq!(cases[&a].as_ref().unwrap().revision(), 2);
+    // The far side says what changed, and the poller what it folded again.
+    let only = |refolded: &Refolded| {
+        let Refolded::Changed {
+            folded, removed, ..
+        } = refolded
+        else {
+            panic!("not only some cases: {refolded:?}");
+        };
+        (folded.clone(), removed.clone())
+    };
+    assert_eq!(only(poller.refolded()), (vec![a], vec![b]));
     assert_eq!(poller.poll().unwrap().len(), 1);
+    assert_eq!(only(poller.refolded()), (vec![], vec![]));
     let lines = fake.lines();
     // Every case at first, and then only what changed.
     assert_eq!(lines.len(), 7);

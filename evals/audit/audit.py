@@ -160,7 +160,9 @@ def section(mod, rows):
     if any(r["cost"] for r in rows):
         lines += ["", "### Cost per decision", "",
                   "A decision is a case opened or a message taken. Extra calls are API calls that made only "
-                  "`cases` calls other than an open (the cost study's method); their cost is at Opus 5.5 prices.",
+                  "`cases` bookkeeping other than an open: every command in them is a `cases` call or shell glue, so work "
+                  "chained with a close does not count. Before 2026-11-09 any call with a `cases` call in it counted, "
+                  "so older reports are not comparable. Their cost is at Opus 5.5 prices.",
                   "", "| period | sessions | decisions | extra calls / decision | ask calls / decision | "
                   "$ of cases-only calls / decision |", "| --- | --- | --- | --- | --- | --- |"]
         for p in periods:

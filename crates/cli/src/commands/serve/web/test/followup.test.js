@@ -57,3 +57,21 @@ test("a human's park and resume after the note leave it a follow-up", () => {
 test("a case with no events is not a follow-up", () => {
   assert.equal(followUp({ ...decision("open"), events: undefined }), null);
 });
+
+test("a note after an amend that reopened the case leaves it not a follow-up", () => {
+  const amend = { seq: 4, author: "agent", event: "amend", from: "pickedup", file: "", data: { body: "new question", reopen: true } };
+  const after = { ...note, seq: 5, from: "open", data: { body: "and the budget?" } };
+  assert.equal(followUp({ ...decision("open", open, answer, pickup, amend, after), amend_seq: 4 }), null);
+  assert.equal(followUp({ ...decision("open", open, answer, { ...amend, seq: 3, from: "answered" }, { ...after, seq: 4 }), amend_seq: 3 }), null);
+});
+
+test("a note that reopened the case, then an amend that does not reopen it, leaves it a follow-up", () => {
+  const amend = { seq: 5, author: "agent", event: "amend", from: "open", file: "", data: { labels: ["gifts"] } };
+  const second = { ...note, seq: 6, from: "open", data: { body: "and the budget?" } };
+  assert.deepEqual(followUp(decision("open", open, answer, pickup, note, amend, second)), { answer, notes: [note, second] });
+});
+
+test("a note that reopened the case, then more notes, leaves it a follow-up", () => {
+  const second = { ...note, seq: 5, from: "open", data: { body: "and the budget?" } };
+  assert.deepEqual(followUp(decision("open", open, answer, pickup, note, second)), { answer, notes: [note, second] });
+});

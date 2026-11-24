@@ -1,5 +1,5 @@
 // The inbox's API (spec/api.md), as the page uses it.
-import type { Case, Category, Index, List, Listener, Listeners, NewMessage, Notifications, Refusal, Write } from "./types.js";
+import type { Case, Category, Index, List, Listener, Listeners, NewMessage, Notifications, Refusal, ServedCase, Write } from "./types.js";
 
 export type { NewMessage };
 
@@ -56,12 +56,27 @@ export class Refused extends Error {
 export async function list(states: readonly string[]): Promise<Case[]> {
   const response = await get<List>(`cases?state=${encodeURIComponent(states.join(","))}`);
   if (!response.ok) throw new Refused(response);
-  return response.body.list;
+  return response.body.list.map(received);
 }
 
 // The case `id`, as show --json gives it; `ok` is false when there is none.
-export function one(id: string): Promise<Reply<Case>> {
-  return get<Case>(`cases/${encodeURIComponent(id)}`);
+export async function one(id: string): Promise<Reply<Case>> {
+  return receivedReply(await get<ServedCase>(`cases/${encodeURIComponent(id)}`));
+}
+
+// Case `c` as serve sent it, with empty data on each event whose record
+// has none, as the page reads an event: the page never meets an event with
+// no data, wherever it reads one.
+export function received(c: ServedCase): Case {
+  // A case serve sent without events (as in a write's reply) has none to
+  // give data to, and is left as it is.
+  if (!c.events) return c as Case;
+  return { ...c, events: c.events.map((e) => ({ ...e, data: e.data || {} })) };
+}
+
+// A reply whose body is a case as serve sent it, with the case as received.
+function receivedReply(response: Reply<ServedCase>): Reply<Case> {
+  return response.ok ? { ...response, body: received(response.body) } : response;
 }
 
 // The workers listening for messages now (ST-16); null when that is not
@@ -91,21 +106,41 @@ export function write(id: string, what: Exclude<What, "message">, body: Write): 
 // it is from before serve restarted is read again, and the write sent once
 // more: nothing was written.
 async function post(path: string, body: unknown): Promise<Reply<Case>> {
-  if (!token) await index();
+  return receivedReply(await postServed(path, body));
+}
+
+// POSTs as post does, and gives the case in the reply as serve sent it.
+async function postServed(path: string, body: unknown): Promise<Reply<ServedCase>> {
+  if (!token) await tokenFor();
   const send = () =>
     fetch(`/v1/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Cases-CSRF": token },
       body: JSON.stringify(body),
       cache: "no-store",
-    }).then(read<Case>);
+    }).then(read<ServedCase>);
   let response = await send();
   if (response.status === 403 && category(response) === "csrf") {
-    await index();
+    // serve checks the token before it writes anything, so nothing was
+    // written yet.
+    await tokenFor();
     response = await send();
   }
   return response;
 }
+
+// Reads the token for a write not sent, or not written, yet; throws Unsent
+// when serve does not give it.
+async function tokenFor(): Promise<void> {
+  try {
+    await index();
+  } catch (e) {
+    throw new Unsent();
+  }
+}
+
+// A write whose token could not be read: it was not recorded.
+class Unsent extends Error {}
 
 // Sends the human's message, `body`, and says what came of it, as send
 // does: the message as it is once sent, or why it was refused. A message has
@@ -117,6 +152,7 @@ export async function sendMessage(body: NewMessage): Promise<Sent> {
     if (response.ok) return { after: response.body };
     return { refusal: message(response) };
   } catch (e) {
+    if (e instanceof Unsent) return { refusal: "serve could not be reached for the token a write needs, so the message was not sent. send it again once serve is back." };
     return { refusal: "serve could not be reached, so the message may or may not have been sent. look for it in flight before sending it again." };
   }
 }
@@ -138,14 +174,16 @@ export async function send(id: string, what: Exclude<What, "message">, body: Wri
         ? "this case changed after it was drawn, so this was not recorded. check the thread before sending again."
         : message(response);
     const current = response.body && response.body.error && response.body.error.case;
-    return current ? { refusal, current } : { refusal };
+    return current ? { refusal, current: received(current) } : { refusal };
   } catch (e) {
     // The request may have reached serve, which finishes a write whose
     // answer never came back, so what came of it is not known. No case is
     // given: a form that took the revision of a case that already holds this
     // write would send it again and have it accepted. The form keeps its
     // revision, so a second send is refused as stale if the first was
-    // recorded, and the stream redraws the case when serve is back.
+    // recorded, and the stream redraws the case when serve is back. A write
+    // whose token could not be read was not recorded at all.
+    if (e instanceof Unsent) return { refusal: "serve could not be reached for the token a write needs, so this was not recorded. send it again once serve is back." };
     return { refusal: "serve could not be reached, so this may or may not have been recorded. check the thread before sending again." };
   }
 }
@@ -167,4 +205,25 @@ export function category(response: Reply<unknown>): Category | "" {
 export function message(response: Reply<unknown>): string {
   if (response.body && response.body.error) return response.body.error.message;
   return `serve answered ${response.status}`;
+}
+
+// Runs `send`, once: a send while one is out does nothing, until it is
+// answered or 10 s have passed (IN-09). `sending` holds the send that is out,
+// and only that send lets it go: one slower than 10 s does not, when it comes
+// back, let go of the send that went after it. `send` is given the send's own
+// mark, the value `sending` holds while it is out.
+export async function once(sending: { current: object | null }, send: (self: object) => Promise<void>): Promise<void> {
+  if (sending.current) return;
+  const self = {};
+  sending.current = self;
+  const done = () => {
+    if (sending.current === self) sending.current = null;
+  };
+  const release = setTimeout(done, 10000);
+  try {
+    await send(self);
+  } finally {
+    clearTimeout(release);
+    done();
+  }
 }

@@ -32,3 +32,6 @@ export function decision(state, ...events) {
 }
 
 export const steps = { open, answer, pickup, note };
+
+// A form's fields, as the answer form keeps them, with `extra` set.
+export const fields = (extra = {}) => ({ choice: "", verdicts: {}, rowNotes: {}, signoff: "", briefing: "", file: [], stuck: "", text: "", note: "", ...extra });

@@ -394,9 +394,9 @@ def write_baseline(out_dir):
         summary = f.read().split("\n", 1)[1]
     text = f"""# Baseline of the cases skill eval
 
-The first measured run of the suite in `evals/cases-skill/`, on commit `{meta.get('commit', '')[:10]}`, before any change to the skill. A hillclimb compares against these numbers: the training split to improve on, the held-out split as its final check. Raw results are not committed; this file is `run.py baseline` over them.
+A measured run of the suite in `evals/cases-skill/`, on commit `{meta.get('commit', '')[:10]}`. A hillclimb compares against these numbers: the training split to improve on, the held-out split as its final check. Raw results are not committed; this file is `run.py baseline` over them.
 
-What the numbers rest on, and where the graders are weak, is in the suite's README ("Graders" and "Known weaknesses of the graders"). Hillclimb candidate #1, seen before this run: SKILL.md says to scope every `wait --pickup` with `--id` or with `--label` and `--worker`, but its messages section describes a listening wait with `--worker` alone. The grader accepts `--worker` alone.
+What the numbers rest on, and where the graders are weak, is in the suite's README ("Graders" and "Known weaknesses of the graders"). Leads for a hillclimb, seen by hand before the suite's runs, are in `hillclimb-candidates.md`.
 {summary}"""
     path = os.path.join(HERE, "BASELINE.md")
     with open(path, "w") as f:

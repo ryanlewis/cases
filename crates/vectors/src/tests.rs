@@ -1222,3 +1222,30 @@ fn names_say_which_case_a_key_is() {
     let ghost = Key::new(9).unwrap();
     assert_eq!(names.name_of(ghost), format!("<{ghost}>"));
 }
+
+#[test]
+fn a_file_says_each_vector_given_twice_and_each_step_that_is_not_one() {
+    let vectors: Vec<Vector> = serde_json::from_str(
+        r#"[
+            {"description": "a", "steps": [
+                {"open": {}, "as": "x"},
+                {"version": "x"},
+                {"open": {}, "as": "x"},
+                {"version": "x"}
+            ]},
+            {"description": "a", "steps": [{"clock": "noon"}]},
+            {"description": "b", "steps": [{"open": {}, "as": "y"}, {"version": "v"}]}
+        ]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        check_file("f", &vectors),
+        [
+            r#"f.json: "a", step 3: the case "x" is named twice"#,
+            r#"f.json: "a", step 4: the version "x" is named twice"#,
+            r#"f.json: "a" twice"#,
+            r#"f.json: "a", step 1: "noon" is not a time"#,
+        ]
+    );
+    assert!(check_file("f", &vectors[2..]).is_empty());
+}

@@ -41,8 +41,14 @@ static FDS: Mutex<()> = Mutex::new(());
 
 /// A listener on `addr`, made while no process starts.
 pub(crate) fn listen(addr: &str) -> TcpListener {
+    try_listen(addr).expect("a listener")
+}
+
+/// A listener on `addr`, made while no process starts, or why there is
+/// none, such as the address being taken.
+pub(crate) fn try_listen(addr: &str) -> std::io::Result<TcpListener> {
     let _alone = FDS.lock().unwrap_or_else(PoisonError::into_inner);
-    TcpListener::bind(addr).expect("a listener")
+    TcpListener::bind(addr)
 }
 
 /// A pipe, made while no process starts.
@@ -342,7 +348,26 @@ impl Env {
 
     /// The instance file a running serve on the store at `store` keeps.
     pub(crate) fn instance_file_of(&self, store: &Path) -> PathBuf {
+        // Resolved as cases resolves it: its symlinks, as far as it is
+        // there, and the rest as text.
         let store = std::path::absolute(store).expect("an absolute path");
+        let there = store
+            .ancestors()
+            .find_map(|there| Some((there, std::fs::canonicalize(there).ok()?)));
+        let store = match there {
+            Some((there, real)) => real.join(store.strip_prefix(there).expect("a prefix")),
+            None => store,
+        };
+        let store: PathBuf = store.components().fold(PathBuf::new(), |mut path, part| {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    path.pop();
+                }
+                part => path.push(part),
+            }
+            path
+        });
         let hash = store
             .as_os_str()
             .as_encoded_bytes()
@@ -375,7 +400,16 @@ impl Env {
 
     /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one.
     pub(crate) fn fake_serve_on(&self, store: &Path, addr: &str) -> (TcpListener, String) {
-        let listener = listen(addr);
+        self.fake_serve_with(store, listen(addr))
+    }
+
+    /// A serve on the store at `store`, as [`Env::fake_serve`] fakes one,
+    /// on a listener the test bound.
+    pub(crate) fn fake_serve_with(
+        &self,
+        store: &Path,
+        listener: TcpListener,
+    ) -> (TcpListener, String) {
         let addr = listener.local_addr().expect("an address");
         let url = format!("http://{addr}/");
         let info = serde_json::json!({
@@ -388,6 +422,22 @@ impl Env {
         });
         write_file(&self.instance_file_of(store), &info.to_string());
         (listener, url)
+    }
+
+    /// Records a serve of process `pid` on this store whose address takes no
+    /// connection, as a serve that stopped without removing its file leaves.
+    /// It is at port 0, which takes no connection, ever: a port freed for
+    /// the test could be taken by another before cases dials it.
+    pub(crate) fn stale_instance(&self, pid: u32) {
+        let info = serde_json::json!({
+            "pid": pid,
+            "url": "http://127.0.0.1:0/",
+            "addr": "127.0.0.1:0",
+            "store": std::path::absolute(&self.store).expect("an absolute path"),
+            "started_at": "2026-09-25T12:00:00Z",
+            "version": "0.0.0",
+        });
+        write_file(&self.instance_file(), &info.to_string());
     }
 }
 

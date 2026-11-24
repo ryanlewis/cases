@@ -102,6 +102,16 @@ fn script_on(env: &Env, store: &str, vars: &[(&str, &str)]) -> Command {
 /// the terminal is raw and its loop is about to start, and what it wrote
 /// until then.
 fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
+    start_with(command, false)
+}
+
+/// [`start`], in a terminal that answers the screen's asks before it
+/// starts, as one does: DA1, which ends each, and, when `keyboard`, the
+/// kitty keyboard protocol's query, which says it speaks it.
+fn start_with(
+    command: &mut Command,
+    keyboard: bool,
+) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
     // stdin stays open: `script` may end when its input does.
     let mut script = spawn(
         command
@@ -120,6 +130,7 @@ fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
         }
     });
     let mut seen = Vec::new();
+    let mut answered = 0;
     let deadline = Instant::now() + Duration::from_secs(10);
     let pid = loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -127,6 +138,18 @@ fn start(command: &mut Command) -> (Child, Receiver<Vec<u8>>, String, Vec<u8>) {
             panic!("the TUI did not start: {}", String::from_utf8_lossy(&seen));
         };
         seen.extend(chunk);
+        let asks: Vec<usize> = (0..seen.len())
+            .filter(|at| seen[*at..].starts_with(b"\x1b[c"))
+            .collect();
+        for at in asks.into_iter().skip(answered) {
+            let stdin = script.stdin.as_mut().expect("a stdin");
+            if keyboard && seen[..at].ends_with(b"\x1b[?u") {
+                stdin.write_all(b"\x1b[?0u").expect("the answer is typed");
+            }
+            stdin.write_all(b"\x1b[?62c").expect("the answer is typed");
+            stdin.flush().expect("the answer is sent");
+            answered += 1;
+        }
         let text = String::from_utf8_lossy(&seen);
         let pid = text
             .lines()
@@ -779,7 +802,13 @@ struct Tui {
 
 impl Tui {
     fn start(command: &mut Command) -> Tui {
-        let (script, received, pid, shown) = start(command);
+        Tui::start_with(command, false)
+    }
+
+    /// [`Tui::start`], in a terminal that speaks the kitty keyboard
+    /// protocol when `keyboard` says so.
+    fn start_with(command: &mut Command, keyboard: bool) -> Tui {
+        let (script, received, pid, shown) = start_with(command, keyboard);
         Tui {
             script,
             received,
@@ -919,6 +948,17 @@ impl Tui {
             .expect("the TUI took the mouse");
         self.from = captured;
         assert!(self.shows("\x1b[?1000l"), "the mouse was not given back");
+        assert!(
+            self.shows("\x1b[?1003l"),
+            "the pointer's moves are still reported"
+        );
+        assert!(self.shows("\x1b[?2004l"), "pastes are still bracketed");
+        // And the keys are as they were, when the screen asked for the
+        // kitty keyboard protocol's (TU-12).
+        if let Some(pushed) = self.shown.windows(5).rposition(|w| w == b"\x1b[>1u") {
+            self.from = pushed;
+            assert!(self.shows("\x1b[<1u"), "the keys were not given back");
+        }
     }
 
     /// Types q, and checks that it quits.
@@ -1018,7 +1058,7 @@ fn an_edit_refused_as_stale_shows_the_message_as_it_is_now() {
         .to_owned();
     let mut tui = Tui::start(&mut script(&env));
     // In flight, the message is the one case; e edits its body.
-    tui.keys(&[b"2"]);
+    tui.keys(&[b"]"]);
     assert!(tui.shows("Ship it"), "{}", tui.drawn());
     tui.keys(&[b"e", b" Mine."]);
     env.ok(&["amend", &id, "--as", "Ryan", "--body", "From the web."]);
@@ -1033,7 +1073,9 @@ fn an_edit_refused_as_stale_shows_the_message_as_it_is_now() {
     // A second send has nothing to save: the old draft is gone.
     tui.mark();
     tui.keys(&[SEND]);
-    assert!(tui.shows("the body is as"), "{}", tui.drawn());
+    // Its toast takes the place of the last one, which shares its first
+    // words: only the cells that differ are drawn again.
+    assert!(tui.shows("as it was"), "{}", tui.drawn());
     assert_eq!(env.case(&id).body(), "From the web.");
     tui.keys(&[ESC]);
     tui.quits();
@@ -1123,6 +1165,27 @@ fn a_local_store_is_read_again() {
     tui.quits();
 }
 
+/// A drag over the case's title, then the release, puts it on the
+/// clipboard with OSC 52, and says so (TU-12). The title is drawn at
+/// columns 49 to 55 of row 8, counted from 1, on a 120 by 40 terminal.
+#[cfg(unix)]
+#[test]
+fn a_drag_copies_to_the_clipboard() {
+    let env = Env::new();
+    env.open_fyi("Copy me");
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Copy me"), "{}", tui.drawn());
+    tui.mark();
+    tui.keys(&[b"\x1b[<0;49;8M", b"\x1b[<32;55;8M", b"\x1b[<0;55;8m"]);
+    assert!(
+        tui.shows("\x1b]52;c;Q29weSBtZQ==\x07"),
+        "nothing was copied: {}",
+        tui.drawn()
+    );
+    assert!(tui.shows("copied 7 characters"), "{}", tui.drawn());
+    tui.quits();
+}
+
 /// A smaller terminal has the whole screen drawn again, at its new size.
 #[cfg(unix)]
 #[test]
@@ -1156,6 +1219,109 @@ fn a_resize_draws_the_screen_again() {
         tui.drawn()
     );
     tui.quits();
+}
+
+/// A key that comes with a resize is read with it. crossterm 0.29 reads
+/// the terminal in mio by default, whose epoll tells of each file once:
+/// told of the resize and the key in one wake, it gave the resize and lost
+/// the key, which then waited for the next key. `q` typed as the window
+/// changed size did not quit (as `a_resize_draws_the_screen_again` showed
+/// on CI). The child has both wait before it reads; on Linux, cases has
+/// crossterm read in poll(2), which tells again of what is still there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_that_comes_with_a_resize_is_read() {
+    let child = format!(
+        "'{}' --exact a_key_that_comes_with_a_resize_is_read_child --nocapture --test-threads=1",
+        std::env::current_exe().unwrap().display()
+    );
+    let mut script = spawn(
+        Command::new("/usr/bin/script")
+            .args(["-q", "-c", &child, "/dev/null"])
+            .env("CASES_KEY_WITH_RESIZE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    );
+    let mut stdout = script.stdout.take().expect("a stdout");
+    let (chunks, received) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buffer = [0; 4096];
+        while let Ok(n) = stdout.read(&mut buffer) {
+            if n == 0 || chunks.send(buffer[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut shown = Vec::new();
+    let wait_for = |text: &str, shown: &mut Vec<u8>| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !String::from_utf8_lossy(shown).contains(text) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(chunk) => shown.extend(chunk),
+                Err(_) => return false,
+            }
+        }
+        true
+    };
+    let ready = wait_for("resize waits", &mut shown);
+    if ready {
+        let stdin = script.stdin.as_mut().expect("a stdin");
+        stdin.write_all(b"q").expect("the key is typed");
+        stdin.flush().expect("the key is sent");
+    }
+    let done = ready && wait_for("child done", &mut shown);
+    let _ = script.kill();
+    let _ = script.wait();
+    let shown = String::from_utf8_lossy(&shown);
+    assert!(done, "the child did not finish: {shown}");
+    assert!(shown.contains("read q"), "{shown}");
+}
+
+/// The child of [`a_key_that_comes_with_a_resize_is_read`], in a terminal
+/// of its own: a resize, and then the key, wait before it reads.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_that_comes_with_a_resize_is_read_child() {
+    use ratatui::crossterm::event::{self, Event, KeyCode};
+    use ratatui::crossterm::terminal;
+    use rustix::event::{PollFd, PollFlags, Timespec};
+    use rustix::process::{Signal, getpid, kill_process};
+    if std::env::var_os("CASES_KEY_WITH_RESIZE").is_none() {
+        return;
+    }
+    terminal::enable_raw_mode().unwrap();
+    // The first look makes crossterm's reader, which takes SIGWINCH.
+    assert!(!event::poll(Duration::ZERO).unwrap(), "something to read");
+    // The resize: the signal is handled before the call returns.
+    kill_process(getpid(), Signal::WINCH).unwrap();
+    print!("a resize waits\r\n");
+    std::io::stdout().flush().unwrap();
+    // The key: poll(2) sees it there without reading it.
+    let stdin = std::io::stdin();
+    let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+    let within = Timespec {
+        tv_sec: 5,
+        tv_nsec: 0,
+    };
+    rustix::event::poll(&mut fds, Some(&within)).unwrap();
+    let mut read = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        if !event::poll(left).unwrap() {
+            break;
+        }
+        let event = event::read().unwrap();
+        let q = matches!(&event, Event::Key(key) if key.code == KeyCode::Char('q'));
+        read.push(format!("{event:?}"));
+        if q {
+            print!("read q\r\n");
+            break;
+        }
+    }
+    terminal::disable_raw_mode().unwrap();
+    println!("read {read:?}\nchild done");
 }
 
 /// SIGTERM ends the loop, and the terminal is put back.
@@ -1433,6 +1599,66 @@ fn on_one_case_of_a_forwarded_store_an_answer_elsewhere_exits_0() {
     tui.ends();
 }
 
+/// In a terminal that speaks the kitty keyboard protocol, the screen asks
+/// for its keys, which tell shift+enter, a new line in a field, from
+/// enter, which sends; and gives them back on quitting, which
+/// [`Tui::ends`] checks. In one that does not, it asks for nothing, and
+/// alt+enter is the new line (TU-12).
+#[cfg(unix)]
+#[test]
+fn shift_enter_is_a_new_line_where_the_terminal_tells_it_from_enter() {
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start_with(&mut script(&env), true);
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(
+        tui.shows("\x1b[>1u"),
+        "the keyboard protocol was not asked for"
+    );
+    // Enter, into the guidance; shift+enter as the protocol has it.
+    tui.keys(&[b"\r", b"use", b"\x1b[13;2u", b"the mirror"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(
+        !tui.drawn().contains("\x1b[>1u"),
+        "the protocol was asked for"
+    );
+    // Alt+enter, as a terminal with no protocol sends it.
+    tui.keys(&[b"\r", b"use", b"\x1b\r", b"the mirror"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+}
+
+/// Review repro: a paste with a new line in it goes into the field whole,
+/// as the terminal brackets it, rather than its new line sending what was
+/// pasted so far and the rest being read as keys (TU-12).
+#[cfg(unix)]
+#[test]
+fn a_paste_goes_into_the_field_whole() {
+    let env = Env::new();
+    let id = env.open_stuck();
+    let mut tui = Tui::start(&mut script(&env));
+    assert!(tui.shows("Blocked"), "{}", tui.drawn());
+    assert!(tui.shows("\x1b[?2004h"), "pastes are not bracketed");
+    tui.keys(&[b"\r", b"\x1b[200~use\rthe mirror\x1b[201~"]);
+    tui.mark();
+    tui.keys(&[b"\r"]);
+    assert!(tui.shows("recorded answer"), "{}", tui.drawn());
+    tui.quits();
+    assert_eq!(env.case(&id).answer().unwrap().text, "use\nthe mirror");
+}
+
 /// A click, as the terminal reports it (SGR), on a tab switches to it; on
 /// quitting the mouse is no longer reported, which [`Tui::ends`] checks.
 #[cfg(unix)]
@@ -1443,9 +1669,14 @@ fn a_click_on_a_tab_switches_to_it() {
     let mut tui = Tui::start(&mut script(&env));
     assert!(tui.shows("FYI"), "{}", tui.drawn());
     assert!(tui.shows("\x1b[?1000h"), "the mouse is not reported");
+    // Its moves too, which light what the pointer is over.
+    assert!(
+        tui.shows("\x1b[?1003h"),
+        "the pointer's moves are not reported"
+    );
     tui.mark();
-    // "Done" is drawn from column 34, row 2, counted from 1.
-    tui.keys(&[b"\x1b[<0;35;2M", b"\x1b[<0;35;2m"]);
+    // "Done" is drawn from column 28, row 2, counted from 1, in its pill.
+    tui.keys(&[b"\x1b[<0;29;2M", b"\x1b[<0;29;2m"]);
     assert!(tui.shows("no cases here."), "{}", tui.drawn());
     tui.quits();
 }

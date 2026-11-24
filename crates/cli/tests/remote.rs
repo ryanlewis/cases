@@ -1107,6 +1107,47 @@ fn a_remote_wait_rides_out_a_503_after_its_first_read() {
     );
 }
 
+/// A read of the store that fails after the first, once a held poll has
+/// said it changed, is ridden out too: the wait says so once, reads again,
+/// and wakes on the answer.
+#[test]
+fn a_remote_wait_rides_out_a_503_on_a_read_after_its_first() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Read through an outage");
+    // The first read and the first held poll, then the read it wakes to
+    // and both its retries.
+    r.fake.fault(PASS);
+    r.fake.fault(PASS);
+    for _ in 0..3 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let wait = r.wait(&["--id", &id, "--timeout", "60s"]);
+    assert!(soon(Duration::from_secs(20), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&id),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(json(out.stdout.lines().next().unwrap())["id"], id.as_str());
+    assert_eq!(
+        out.stderr,
+        "warning: the server failed (503): the fake failed; the wait goes on, trying again \
+         until the timeout\n"
+    );
+}
+
 /// A wait whose first read fails fails at once, even for a failure it
 /// would ride out later, so that a wrong store is not waited on.
 #[test]
@@ -1129,12 +1170,14 @@ fn a_remote_wait_whose_first_read_fails_fails_at_once() {
 }
 
 /// A 429 whose `Retry-After` runs past the timeout is not waited out: the
-/// wait ends at its timeout, having said why once.
+/// wait tries once more at its timeout and, limited again, ends with that
+/// failure, exit 1, not as one that nothing came to.
 #[test]
 fn a_remote_wait_does_not_overshoot_on_a_429() {
     let r = Remote::new(&["me"]);
     let id = r.open(Some(&r.ids[0]), "Limited");
     r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
     r.fake.fault(Fault::Rate(Some(10)));
     let start = Instant::now();
     let out = Output::from(
@@ -1143,15 +1186,254 @@ fn a_remote_wait_does_not_overshoot_on_a_429() {
             .unwrap(),
     );
     let took = start.elapsed();
-    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
     assert!(took < Duration::from_secs(5), "{took:?}");
     assert_eq!(
         out.stderr
-            .matches("the server is limiting requests; try again in 10 s")
+            .matches("warning: the server is limiting requests; try again in 10 s")
             .count(),
         1,
         "{out:?}"
     );
+    assert!(
+        out.stderr
+            .ends_with("Error: the server is limiting requests; try again in 10 s\n"),
+        "{out:?}"
+    );
+}
+
+/// A steady wait on a remote store with a case still open holds its poll
+/// no longer than its quiet time, and prints once that passes with no
+/// event new to it, well before its timeout (AG-18).
+#[test]
+fn a_steady_remote_wait_prints_at_the_end_of_its_quiet_time() {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    let wait = r.wait(&[
+        "--id",
+        &answered,
+        "--id",
+        &left,
+        "--mood",
+        "steady",
+        "--timeout",
+        "40s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let start = Instant::now();
+    r.ok(&["--store", &r.ids[0], "answer", &answered, "--ack"]);
+    // The holds sent before the answer landed, the last of which it ends.
+    let before = holds(&r.fake).len();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let took = start.elapsed();
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+    // Its quiet time is 10 s, from the read that found the answer.
+    assert!(
+        took >= Duration::from_secs(9) && took < Duration::from_secs(16),
+        "{took:?}"
+    );
+    // The holds after the answer are cut to the quiet time left.
+    let holds = holds(&r.fake);
+    assert!(holds[before..].iter().all(|&secs| secs <= 10), "{holds:?}");
+}
+
+/// A steady wait whose server fails, in a way it rides out, at the read
+/// after its timeout still prints what it collected, exit 0 (AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_read_at_its_timeout_prints_what_it_has() {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    // The first read and held poll, the read the answer wakes it to and
+    // the held poll to its timeout; then every read fails.
+    for _ in 0..4 {
+        r.fake.fault(PASS);
+    }
+    for _ in 0..20 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let wait = r.wait(&[
+        "--id",
+        &answered,
+        "--id",
+        &left,
+        "--mood",
+        "steady",
+        "--timeout",
+        "4s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], answered.as_str());
+}
+
+/// A steady wait that holds a message, and whose server then fails until its
+/// timeout, cannot take it: it ends with the failure, exit 1, and the message
+/// is still sent for the next wait (AG-16, AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_take_its_message_at_its_timeout_leaves_it_sent() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].as_str();
+    // A case it waits on still open, so that it lingers after the message.
+    r.ok(&[
+        "--store",
+        store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        "6s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = r.ok(&[
+        "--store",
+        store,
+        "message",
+        "--as",
+        "Ryan",
+        "--title",
+        "Rebase onto main",
+        "--to",
+        "w9",
+        "--body",
+        "Then run the tests.",
+    ]);
+    let sent = sent.trim();
+    // Time for the read it wakes to; every request after that fails.
+    thread::sleep(Duration::from_secs(2));
+    for _ in 0..50 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    let rows = r.fake.db(store).rows(&common::key(sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
+}
+
+/// A steady wait holding one message, on a remote store, with its take at
+/// the end of the quiet time to be met by `fault`. Gives the store, the
+/// message and the wait.
+fn holding_a_message(fault: Fault) -> (Remote, String, Child) {
+    holding_message_for("30s", fault)
+}
+
+/// [`holding_a_message`], with `timeout`.
+fn holding_message_for(timeout: &str, fault: Fault) -> (Remote, String, Child) {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    r.ok(&[
+        "--store",
+        &store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        timeout,
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = r.ok(&[
+        "--store",
+        &store,
+        "message",
+        "--as",
+        "Ryan",
+        "--title",
+        "Rebase onto main",
+        "--to",
+        "w9",
+        "--body",
+        "Then run the tests.",
+    ]);
+    r.fake.fault_event(fault);
+    (r, sent.trim().to_owned(), wait)
+}
+
+/// A pickup that was stored but whose answer was lost is this wait's: it is
+/// read back and printed, for no later wait takes the message again
+/// (AG-16).
+#[test]
+fn a_steady_wait_whose_pickup_answer_is_lost_still_prints_the_message() {
+    let (_r, sent, wait) = holding_a_message(Fault::Lost);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], sent.as_str(), "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+}
+
+/// A take that fails at the end of the quiet time is tried again at the next
+/// read, not when something else changes the store.
+#[test]
+fn a_steady_wait_tries_a_failed_take_again_at_once() {
+    let start = Instant::now();
+    let (r, sent, wait) = holding_a_message(Fault::Status(503));
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(&sent), "{out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        start.elapsed()
+    );
+    let posts = r.fake.lines();
+    let posts = posts
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"));
+    assert_eq!(posts.count(), 2);
 }
 
 /// A steady wait on a remote store holds the poll while it collects, and
@@ -1189,4 +1471,976 @@ fn a_steady_remote_wait_collects_until_its_timeout() {
         "{:?}",
         holds(&r.fake)
     );
+}
+
+/// A steady wait, its server failing from the read it found an answer at:
+/// it holds the answer, and nothing new can come. Gives it with the time
+/// it was woken to that read, before which its quiet time cannot start.
+fn collecting_through_an_outage(timeout: &[&str]) -> (Remote, String, Child, Instant) {
+    let r = Remote::new(&["me"]);
+    let answered = r.open(Some(&r.ids[0]), "Answered");
+    let left = r.open(Some(&r.ids[0]), "Left open");
+    // The first read and held poll, and the read the answer wakes it to;
+    // then every request fails.
+    for _ in 0..3 {
+        r.fake.fault(PASS);
+    }
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let mut args = vec!["--id", &answered, "--id", &left, "--mood", "steady"];
+    args.extend(timeout);
+    let wait = r.wait(&args);
+    assert!(soon(Duration::from_secs(10), || holds(&r.fake).len() == 1));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&r.ids[0])
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    (r, answered, wait, Instant::now())
+}
+
+/// A steady wait that holds an answer, and whose server then fails every
+/// request, prints the answer at the end of its quiet time, exit 0: not at
+/// its timeout and, with none, not never (AG-18).
+#[test]
+fn a_steady_remote_wait_that_cannot_read_while_it_collects_prints_at_the_end_of_its_quiet_time() {
+    let mut waits = [
+        collecting_through_an_outage(&["--timeout", "60s"]),
+        collecting_through_an_outage(&[]),
+    ];
+    // When each ended, watched together, so that neither is timed by the
+    // other. Its quiet time is 10 s; well past it, a wait is stopped.
+    let mut ended = [None, None];
+    let until = Instant::now() + Duration::from_secs(40);
+    while ended.contains(&None) && Instant::now() < until {
+        for (wait, ended) in waits.iter_mut().zip(&mut ended) {
+            if ended.is_none() && wait.2.try_wait().unwrap().is_some() {
+                *ended = Some(Instant::now());
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    for ((_r, answered, mut wait, woke), ended) in waits.into_iter().zip(ended) {
+        let Some(ended) = ended else {
+            wait.kill().unwrap();
+            let out = wait.wait_with_output().unwrap();
+            panic!("still waiting {:?} after it woke: {out:?}", woke.elapsed());
+        };
+        let out = Output::from(wait.wait_with_output().unwrap());
+        assert_eq!(out.code, 0, "{out:?}");
+        let lines: Vec<_> = out.stdout.lines().map(json).collect();
+        assert_eq!(lines.len(), 1, "{out:?}");
+        assert_eq!(lines[0]["id"], answered.as_str());
+        let took = ended - woke;
+        assert!(took >= Duration::from_secs(9), "{took:?}");
+        assert_eq!(
+            out.stderr,
+            "warning: the server failed (503): the fake failed; the wait goes on, trying again \
+             until it prints what it has\n"
+        );
+    }
+}
+
+/// A wait whose pause after a failure runs to its timeout tries once more
+/// there: a store that answers has nothing for it, exit 2, whatever it said
+/// before.
+#[test]
+fn a_remote_wait_tries_once_more_at_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Limited once");
+    r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(!out.stderr.contains("Error:"), "{out:?}");
+}
+
+/// The one try at the timeout gets a second to answer. A store that failed
+/// before it and gives no answer in that time cannot be told from one still
+/// down, so the wait ends with the failure, exit 1, even if it is back and
+/// only slow. Running the wait again then finds it.
+#[test]
+fn a_remote_wait_that_failed_and_gets_no_answer_at_its_timeout_exits_1() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Slow at the end");
+    r.fake.fault(PASS);
+    r.fake.fault(Fault::Rate(Some(10)));
+    r.fake.fault(Fault::Slow(Duration::from_secs(2)));
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr
+            .ends_with("Error: the server is limiting requests; try again in 10 s\n"),
+        "{out:?}"
+    );
+}
+
+/// A wait whose server fails for a while and is back before its timeout has
+/// heard from the store since: nothing came, exit 2.
+#[test]
+fn a_remote_wait_whose_server_is_back_before_its_timeout_exits_2() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Back in time");
+    // The first read, then the first held poll and both its retries.
+    r.fake.fault(PASS);
+    for _ in 0..3 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(
+        r.wait(&["--id", &id, "--timeout", "8s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(out.stderr.contains("the wait goes on"), "{out:?}");
+    assert!(!out.stderr.contains("Error:"), "{out:?}");
+}
+
+/// A steady wait that holds nothing rides a failing server out until its
+/// timeout, as an eager one does, and ends there with the failure, exit 1:
+/// exit 2 is for a wait that nothing came to.
+#[test]
+fn a_steady_remote_wait_with_nothing_collected_rides_out_a_503_until_its_timeout() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(Some(&r.ids[0]), "Unanswered");
+    r.fake.fault(PASS);
+    for _ in 0..100 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let start = Instant::now();
+    let out = Output::from(
+        r.wait(&["--id", &id, "--mood", "steady", "--timeout", "3s"])
+            .wait_with_output()
+            .unwrap(),
+    );
+    let took = start.elapsed();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr
+            .ends_with("Error: the server failed (503): the fake failed\n"),
+        "{out:?}"
+    );
+    assert!(
+        took >= Duration::from_secs(3) && took < Duration::from_secs(6),
+        "{took:?}"
+    );
+    assert!(
+        out.stderr
+            .contains("the server failed (503): the fake failed; the wait goes on, trying again until the timeout\n"),
+        "{out:?}"
+    );
+}
+
+/// The reads of cases that `args` sends, as request lines.
+fn case_reads(r: &Remote, args: &[&str]) -> Vec<String> {
+    let before = r.fake.lines().len();
+    r.ok(args);
+    r.fake.lines()[before..]
+        .iter()
+        .filter(|line| line.starts_with("GET ") && line.contains("/store/cases"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn show_answer_and_inbox_read_the_case_they_name_once() {
+    let r = Remote::new(&["me"]);
+    let id = r.open(None, "Read once");
+    let part = &id[1..id.len() - 1];
+    let store = format!("GET /v1/stores/{}/store/cases", r.ids[0]);
+    // The case by its key, for a whole id; the list, for part of one.
+    let (one, all) = (format!("{store}/1 HTTP/1.1"), format!("{store} HTTP/1.1"));
+    for (args, want) in [
+        (vec!["show", id.as_str()], &one),
+        (vec!["show", part], &all),
+        (vec!["inbox", "--print", id.as_str()], &one),
+        (vec!["answer", id.as_str(), "--ack"], &one),
+    ] {
+        assert_eq!(
+            case_reads(&r, &args),
+            std::slice::from_ref(want),
+            "{args:?}"
+        );
+    }
+}
+
+/// A steady wait on a remote store with a case left open, holding one
+/// message, with `timeout`. Gives the store, the message and the wait.
+fn steady_holding(timeout: &str) -> (Remote, String, Child) {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    r.ok(&[
+        "--store",
+        &store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        timeout,
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    (r, sent.trim().to_owned(), wait)
+}
+
+/// A pickup stored whose answer is lost, with the store still out of
+/// reach for the read back, is this wait's all the same: no later wait takes
+/// the message.
+#[test]
+fn a_steady_wait_whose_pickup_answer_and_read_back_are_lost_still_prints() {
+    let (r, sent, wait) = holding_a_message(Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "the pickup is stored");
+    assert!(out.stdout.contains(&sent), "lost: {out:?}");
+}
+
+/// The same on a default-mood wait.
+#[test]
+fn an_eager_wait_whose_pickup_answer_and_read_back_are_lost_still_prints() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    r.ok(&[
+        "--store",
+        &store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "12s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let sent = sent.trim();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let rows = r.fake.db(&store).rows(&common::key(sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "the pickup is stored");
+    assert!(out.stdout.contains(sent), "lost: {out:?}");
+}
+
+/// A wait that holds only messages and cannot take them at its timeout
+/// exits 1 with why, and only then. Here the timeout is longer than the
+/// quiet time, and the store fails from inside the quiet time on.
+#[test]
+fn a_steady_wait_holding_a_message_through_an_outage_past_its_quiet_time_exits_1() {
+    let start = Instant::now();
+    let (r, sent, wait) = steady_holding("15s");
+    thread::sleep(Duration::from_secs(2));
+    for _ in 0..80 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
+    // It rode the outage out past its quiet time, to its timeout.
+    assert!(
+        start.elapsed() >= Duration::from_secs(14),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// A wait whose time runs out with its pickup's answer lost and every read
+/// back failed names the message on stderr: it may be picked up, and no
+/// later wait would then take it.
+#[test]
+fn a_wait_whose_time_runs_out_before_it_can_read_back_names_the_message() {
+    let (r, sent, wait) = holding_message_for("12s", Fault::Lost);
+    for _ in 0..200 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("{sent}: may be picked up, but not printed:")),
+        "{out:?}"
+    );
+    assert!(!out.stderr.contains("not taken"), "{out:?}");
+}
+
+/// A pickup whose outcome was unknown, with the message moved on past it by
+/// the time a read comes back, cannot be settled: the wait names it on
+/// stderr, as it may be this wait's and no later wait would take it.
+#[test]
+fn a_pickup_of_unknown_outcome_that_the_message_has_moved_past_is_named() {
+    let (r, sent, wait) = holding_message_for("60s", Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let store = r.ids[0].clone();
+    let picked = || {
+        r.fake
+            .db(&store)
+            .rows(&common::key(&sent))
+            .unwrap()
+            .is_some_and(|rows| rows.len() == 2)
+    };
+    assert!(soon(Duration::from_secs(13), picked));
+    let close = cases_core::Append {
+        author: "agent".into(),
+        event: "close".into(),
+        data: r#"{"outcome": "Done."}"#.into(),
+    };
+    r.fake
+        .db(&store)
+        .append(
+            &common::key(&sent),
+            &close,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    // The next read settles it; a kill, not its timeout, then ends the wait.
+    thread::sleep(Duration::from_secs(6));
+    let mut wait = wait;
+    wait.kill().unwrap();
+    let out = wait.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.stdout, b"", "{out:?}");
+    assert!(
+        stderr.contains(&format!("{sent}: may be picked up, but not printed:")),
+        "{stderr}"
+    );
+}
+
+/// A default-mood wait whose pickup got no answer and was not stored, with
+/// the read back failed too, tries it again at the next read rather than
+/// hold on a store that has not changed.
+#[test]
+fn an_eager_wait_whose_unstored_pickup_got_no_answer_tries_again() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "25s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Hangup);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let start = Instant::now();
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(sent.trim()), "{out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// A wait with no case open and a pickup of unknown outcome, whose reads
+/// fail to its timeout, ends with that failure, exit 1, and names the
+/// message: it cannot say that nothing came.
+#[test]
+fn a_wait_with_nothing_open_ends_with_the_failure_of_an_unknown_pickup() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        "5s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..200 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "{}: may be picked up, but not printed:",
+            sent.trim()
+        )),
+        "{out:?}"
+    );
+}
+
+/// A wait that cannot read the store at the end of its quiet time still
+/// takes what it held, when the store takes the pickup: what it took is
+/// printed, exit 0.
+#[test]
+fn a_steady_wait_that_cannot_read_at_the_end_of_its_quiet_time_prints_what_it_takes() {
+    let (r, sent, wait) = steady_holding("30s");
+    thread::sleep(Duration::from_secs(2));
+    r.fake.fail_reads();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], sent.as_str(), "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+}
+
+/// A take that fails for ever, with reads that work, is tried about
+/// once a second, and ends at the timeout, exit 1, with the message sent.
+#[test]
+fn a_take_that_fails_for_ever_neither_spins_nor_passes_the_timeout() {
+    let start = Instant::now();
+    let (r, sent, wait) = holding_a_message(Fault::Status(503));
+    for _ in 0..80 {
+        r.fake.fault_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert!(
+        start.elapsed() < Duration::from_secs(34),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(out.stderr.matches("not taken").count(), 1, "{out:?}");
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
+    let posts = r.fake.lines();
+    let posts = posts
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"))
+        .count();
+    assert!((5..=25).contains(&posts), "{posts} tries");
+}
+
+/// A pickup that never gets an answer, with reads that say the message is
+/// still sent, stays of unknown outcome at every read: the wait tries it
+/// about once a second, and ends at its timeout, exit 1, for it cannot say
+/// that nothing came.
+#[test]
+fn a_pickup_that_never_gets_an_answer_neither_spins_nor_passes_the_timeout() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "4s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    for _ in 0..30 {
+        r.fake.fault_event(Fault::Hangup);
+    }
+    let start = Instant::now();
+    r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let posts = event_posts(&r);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert!((2..=8).contains(&posts), "{posts} tries: {out:?}");
+    assert!(
+        start.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// A steady wait that can neither read nor take its message at the end of
+/// its quiet time waits as it did before the first event: it pauses longer
+/// between the reads that fail, and ends at its timeout with the failure,
+/// exit 1, the message still sent.
+#[test]
+fn a_steady_wait_that_can_neither_read_nor_take_at_the_end_of_its_quiet_time_waits_on() {
+    let (r, sent, wait) = steady_holding("16s");
+    thread::sleep(Duration::from_secs(2));
+    for _ in 0..40 {
+        r.fake.fault_event(Fault::Status(503));
+    }
+    r.fake.fail_reads();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let lines = r.fake.lines();
+    let reads = lines.iter().filter(|line| line.starts_with("GET ")).count();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(rows_of(&r, &sent), Some(1), "{out:?}");
+    assert!(reads <= 50, "{reads} reads: {out:?}");
+}
+
+/// An eager wait takes each message as it reads it: one it cannot take does
+/// not stop it taking the next, which it prints at once. The first stays
+/// sent for a later read.
+#[test]
+fn an_eager_wait_that_cannot_take_one_message_takes_the_next() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let message = |title: &str| {
+        let sent = r.ok(&[
+            "--store", &store, "message", "--as", "Ryan", "--title", title, "--to", "w9",
+        ]);
+        sent.trim().to_owned()
+    };
+    let (one, two) = (message("One"), message("Two"));
+    r.fake.fault_event(Fault::Status(503));
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "10s",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], two.as_str(), "{out:?}");
+    assert_eq!(rows_of(&r, &one), Some(1), "{out:?}");
+    assert!(out.stderr.contains(&format!("{one}: not taken")), "{out:?}");
+}
+
+/// A wait holding an answer and a message whose store fails to its
+/// timeout prints the answer, exit 0, and leaves the message sent; the next
+/// wait, from that `next_since`, takes the message.
+#[test]
+fn a_steady_wait_holding_an_answer_and_a_message_at_a_failing_timeout() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let open = |title: &str| {
+        r.ok(&[
+            "--store",
+            &store,
+            "open",
+            "--kind",
+            "fyi",
+            "--urgency",
+            "today",
+            "--title",
+            title,
+            "--worker",
+            "w9",
+        ])
+        .trim()
+        .to_owned()
+    };
+    let answered = open("Answered");
+    let _left = open("Left open");
+    let args = ["--pickup", "--worker", "w9", "--by", "w9"];
+    let mut first = args.to_vec();
+    first.extend(["--mood", "steady", "--timeout", "6s"]);
+    let wait = r.wait(&first);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let answer = cases_core::Append {
+        author: "human".into(),
+        event: "answer".into(),
+        data: r#"{"ack": true}"#.into(),
+    };
+    r.fake
+        .db(&store)
+        .append(
+            &common::key(&answered),
+            &answer,
+            &cases_core::Writer::new(None),
+            None,
+        )
+        .unwrap();
+    r.fake.wake();
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let sent = sent.trim();
+    thread::sleep(Duration::from_secs(2));
+    for _ in 0..50 {
+        r.fake.fault(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    r.fake.clear_faults();
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], answered.as_str(), "{out:?}");
+    let rows = r.fake.db(&store).rows(&common::key(sent)).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(1), "it was picked up");
+
+    let since = lines[0]["next_since"].as_str().unwrap().to_owned();
+    let mut next = args.to_vec();
+    next.extend(["--since", &since, "--timeout", "3s"]);
+    let again = Output::from(r.wait(&next).wait_with_output().unwrap());
+    assert_eq!(again.code, 0, "{again:?}");
+    let lines: Vec<_> = again.stdout.lines().map(json).collect();
+    // The answer's pickup failed with the store, so it is still answered,
+    // and comes again, not fresh; the message is the news.
+    assert_eq!(lines.len(), 2, "{again:?}");
+    assert_eq!(lines[0]["id"], answered.as_str(), "{again:?}");
+    assert_eq!(lines[0]["fresh"], false, "{again:?}");
+    assert_eq!(lines[1]["id"], sent, "{again:?}");
+    assert_eq!(lines[1]["fresh"], true, "{again:?}");
+}
+
+/// The read back of a lost pickup also covers a default-mood wait, when
+/// the store answers the read.
+#[test]
+fn an_eager_wait_whose_pickup_answer_is_lost_still_prints() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "12s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Lost);
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "Rebase", "--to", "w9",
+    ]);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(sent.trim()), "{out:?}");
+}
+
+/// A steady wait on a remote store, with a case left open, holding the
+/// messages `titles`. Gives the store, the messages and the wait.
+fn holding_messages(timeout: &str, titles: &[&str]) -> (Remote, Vec<String>, Child) {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    r.ok(&[
+        "--store",
+        &store,
+        "open",
+        "--kind",
+        "fyi",
+        "--urgency",
+        "today",
+        "--title",
+        "Left open",
+        "--worker",
+        "w9",
+    ]);
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--mood",
+        "steady",
+        "--timeout",
+        timeout,
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    let sent = titles
+        .iter()
+        .map(|title| {
+            let args = [
+                "--store", &store, "message", "--as", "Ryan", "--title", title, "--to", "w9",
+            ];
+            r.ok(&args).trim().to_owned()
+        })
+        .collect();
+    (r, sent, wait)
+}
+
+fn rows_of(r: &Remote, id: &str) -> Option<usize> {
+    r.fake
+        .db(&r.ids[0])
+        .rows(&common::key(id))
+        .unwrap()
+        .map(|rows| rows.len())
+}
+
+/// A pickup with no answer whose read back says sent, and which the server
+/// applies half a second later, before the next read, is still this wait's.
+#[test]
+fn a_pickup_applied_after_a_read_back_that_said_sent() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Late(Duration::from_millis(500)));
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(rows_of(&r, &sent[0]), Some(2), "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "lost: {out:?}");
+}
+
+/// A pickup with no answer and a failed read back, whose next read says
+/// sent and which lands just before the second try, refused as stale, is
+/// still this wait's.
+#[test]
+fn a_pickup_applied_after_the_next_read_said_sent() {
+    let (r, sent, wait) = holding_messages("20s", &["One"]);
+    r.fake.fault_event(Fault::Deferred);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(rows_of(&r, &sent[0]), Some(2), "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "lost: {out:?}");
+}
+
+/// Of two messages, the first taken and the second of unknown outcome, the
+/// second is printed or, at the least, named.
+#[test]
+fn one_message_fine_then_one_unknown() {
+    let (r, sent, wait) = holding_messages("30s", &["One", "Two"]);
+    r.fake.fault_event(PASS);
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(rows_of(&r, &sent[1]), Some(2), "{out:?}");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    let named = format!("{}: may be picked up, but not printed:", sent[1]);
+    assert!(
+        out.stdout.contains(&sent[1]) || out.stderr.contains(&named),
+        "lost unnamed: {out:?}"
+    );
+}
+
+/// Two messages, the first of unknown outcome: the read settles it, and
+/// both are printed.
+#[test]
+fn one_message_unknown_then_one_fine() {
+    let (r, sent, wait) = holding_messages("30s", &["One", "Two"]);
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    for id in &sent {
+        assert!(out.stdout.contains(id), "{out:?}");
+        assert_eq!(rows_of(&r, id), Some(2), "{out:?}");
+    }
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// An unknown pickup held through an outage that outlasts the quiet time,
+/// so that the wait starts collecting again: the read after it settles it.
+#[test]
+fn an_unknown_pickup_held_when_the_quiet_time_restarts() {
+    let (r, sent, wait) = holding_messages("40s", &["One"]);
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..15 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<_> = out.stdout.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out:?}");
+    assert_eq!(lines[0]["id"], sent[0].as_str(), "{out:?}");
+    assert_eq!(lines[0]["state"], "pickedup", "{out:?}");
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+    assert_eq!(rows_of(&r, &sent[0]), Some(2), "{out:?}");
+}
+
+/// A pickup that was not stored is written once more, stored once and
+/// printed once.
+#[test]
+fn a_pickup_not_stored_is_held_again_and_taken_once() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Hangup);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    assert_eq!(rows_of(&r, &sent[0]), Some(2), "{out:?}");
+    let posts = r.fake.lines();
+    let posts = posts
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"))
+        .count();
+    assert_eq!(posts, 2, "{out:?}");
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// An unknown pickup of a message deleted before the next read: the wait
+/// does not hang, and names it at its timeout.
+#[test]
+fn an_unknown_pickup_of_a_message_deleted_since_ends_at_the_timeout() {
+    let start = Instant::now();
+    let (r, sent, wait) = holding_messages("18s", &["One"]);
+    r.fake.fault_event(Fault::Lost);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let key = common::key(&sent[0]);
+    let store = r.ids[0].clone();
+    let picked = || rows_of(&r, &sent[0]) == Some(2);
+    assert!(soon(Duration::from_secs(15), picked));
+    r.fake.db(&store).delete(&key, None).unwrap();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert!(
+        start.elapsed() < Duration::from_secs(25),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(out.stdout, "", "{out:?}");
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+fn event_posts(r: &Remote) -> usize {
+    let lines = r.fake.lines();
+    let posts = lines
+        .iter()
+        .filter(|line| line.starts_with("POST ") && line.contains("/events"));
+    posts.count()
+}
+
+/// Another session with the same `--by` stores the pickup just before this
+/// wait's, which is refused as stale, with no unknown pickup before it: this
+/// wait does not print the message.
+#[test]
+fn a_stale_refusal_with_no_unknown_before_it_prints_nothing() {
+    let (r, sent, wait) = holding_messages("14s", &["One"]);
+    r.fake.fault_event(Fault::Twice);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent[0])).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "{out:?}");
+    assert_eq!(event_posts(&r), 1, "{out:?}");
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(out.stdout, "", "printed twice: {out:?}");
+}
+
+/// A pickup really not stored, whose read back answers `sent`: taken again
+/// and printed once.
+#[test]
+fn a_steady_pickup_not_stored_with_a_read_back_that_works_is_printed_once() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Hangup);
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    let rows = r.fake.db(&r.ids[0]).rows(&common::key(&sent[0])).unwrap();
+    assert_eq!(rows.map(|rows| rows.len()), Some(2), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
+    assert!(!out.stderr.contains("may be picked up"), "{out:?}");
+}
+
+/// The same, with the read back failing too.
+#[test]
+fn a_steady_pickup_not_stored_with_a_read_back_that_fails_is_printed_once() {
+    let (r, sent, wait) = holding_messages("30s", &["One"]);
+    r.fake.fault_event(Fault::Hangup);
+    for _ in 0..3 {
+        r.fake.fault_after_event(Fault::Status(503));
+    }
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(&sent[0]), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
+}
+
+/// The same on a default-mood wait.
+#[test]
+fn an_eager_pickup_not_stored_with_a_read_back_that_works_is_printed_once() {
+    let r = Remote::new(&["me"]);
+    let store = r.ids[0].clone();
+    let wait = r.wait(&[
+        "--pickup",
+        "--worker",
+        "w9",
+        "--by",
+        "w9",
+        "--timeout",
+        "20s",
+    ]);
+    assert!(soon(Duration::from_secs(10), || !holds(&r.fake).is_empty()));
+    r.fake.fault_event(Fault::Hangup);
+    let sent = r.ok(&[
+        "--store", &store, "message", "--as", "Ryan", "--title", "One", "--to", "w9",
+    ]);
+    let sent = sent.trim();
+    let out = Output::from(wait.wait_with_output().unwrap());
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout.lines().count(), 1, "{out:?}");
+    assert!(out.stdout.contains(sent), "{out:?}");
+    assert_eq!(event_posts(&r), 2, "{out:?}");
 }

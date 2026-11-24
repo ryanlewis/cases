@@ -93,3 +93,9 @@ test("the page opens the first case, and the next after a send, in the grouped o
   // The page opens listed(...)[0], and after a send the case after the one sent.
   assert.deepEqual(listed(inbox, [], "inbox", Date.now()).map((c) => c.id), ordered(inbox).map((c) => c.id));
 });
+
+test("a follow-up whose answer has no data says you answered, and its card draws", () => {
+  const c = decision("open", steps.open, { ...steps.answer, data: null }, steps.pickup, steps.note);
+  assert.equal(ask(c, followUp(c)), "follow-up · you answered");
+  assert.ok(render(html`<${List} inbox=${[c]} done=${[]} show="inbox" selected="" now=${0} />`).includes("follow-up · you answered"));
+});

@@ -3,6 +3,7 @@
 //! kind or urgency this version does not know, which is `unknown`, and for an
 //! open or amend by the side that does not open its kind, which is `author`.
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -54,53 +55,89 @@ pub(crate) fn check_open(
     let kind = known::<Kind>(&open.kind, "kind")?;
     check_opener(kind, author, EventType::Open)?;
     let urgency = known::<Urgency>(&open.urgency, "urgency")?;
+    check_open_shape(open, kind)?;
+    check_open_fields(open, kind)?;
+    if write {
+        check_open_write(open)?;
+    }
+    Ok((kind, urgency))
+}
+
+/// Checks the shape of an open for its kind: its text, the fields only some
+/// kinds take, and what its kind needs.
+fn check_open_shape(open: &Open, kind: Kind) -> Result<(), Error> {
+    check_open_text(open, kind)?;
+    check_kind_fields(kind, &open.options, &open.rows)?;
+    check_briefing_fields(kind, open.landed, &open.left_out)?;
+    check_open_needs(open, kind)
+}
+
+/// Checks an open's options, recommend, rows, `for`, `re` and labels.
+fn check_open_fields(open: &Open, kind: Kind) -> Result<(), Error> {
+    check_blank("option", &open.options)?;
+    check_recommend(kind, open.recommend, open.options.len())?;
+    check_rows(&open.rows, &[])?;
+    if set_blank(&open.for_) {
+        return Err(Error::invalid("for is blank"));
+    }
+    if set_blank(&open.re) {
+        return Err(Error::invalid("re is blank"));
+    }
+    check_labels(&open.labels, &[])
+}
+
+/// Whether `s` is given and is only white space.
+fn set_blank(s: &str) -> bool {
+    !s.is_empty() && blank(s)
+}
+
+/// Checks an open's title, and that a briefing has a body.
+fn check_open_text(open: &Open, kind: Kind) -> Result<(), Error> {
     if blank(&open.title) {
         return Err(Error::invalid("the title is blank"));
     }
     if kind == Kind::Briefing && blank(&open.body) {
         return Err(Error::invalid("a briefing needs a body"));
     }
-    check_kind_fields(kind, &open.options, &open.rows)?;
-    check_briefing_fields(kind, open.landed, &open.left_out)?;
+    Ok(())
+}
+
+/// Checks that an open has what its kind needs: a decision an option, an
+/// approval a row, a message a worker or a label.
+fn check_open_needs(open: &Open, kind: Kind) -> Result<(), Error> {
     match kind {
         Kind::Decision if open.options.is_empty() => {
-            return Err(Error::invalid("a decision needs at least one option"));
+            Err(Error::invalid("a decision needs at least one option"))
         }
         Kind::Approval if open.rows.is_empty() => {
-            return Err(Error::invalid("an approval needs at least one row"));
+            Err(Error::invalid("an approval needs at least one row"))
         }
         // A worker of only white space names no one, on a replay too, where
         // the write rule that refuses it does not run.
         Kind::Message if blank(&open.worker) && open.labels.is_empty() => {
-            return Err(Error::invalid("a message goes to a worker or a label"));
+            Err(Error::invalid("a message goes to a worker or a label"))
         }
-        _ => {}
+        _ => Ok(()),
     }
-    check_blank("option", &open.options)?;
-    check_recommend(kind, open.recommend, open.options.len())?;
-    check_rows(&open.rows, &[])?;
-    if !open.for_.is_empty() && blank(&open.for_) {
-        return Err(Error::invalid("for is blank"));
-    }
-    if !open.re.is_empty() && blank(&open.re) {
-        return Err(Error::invalid("re is blank"));
-    }
-    check_labels(&open.labels, &[])?;
-    if write {
-        check_new("option", &open.options, &[])?;
-        check_blank("link", &open.links)?;
-        check_new("link", &open.links, &[])?;
-        for (field, value) in [
-            ("worker", &open.worker),
-            ("brief", &open.brief),
-            ("context", &open.context),
-        ] {
-            if !value.is_empty() && blank(value) {
-                return Err(Error::invalid(format!("the {field} is blank")));
-            }
+}
+
+/// The rules only a write of an open applies (AG-02): new options, links
+/// neither blank nor given twice, and no worker, brief or context of only
+/// white space.
+fn check_open_write(open: &Open) -> Result<(), Error> {
+    check_new("option", &open.options, &[])?;
+    check_blank("link", &open.links)?;
+    check_new("link", &open.links, &[])?;
+    for (field, value) in [
+        ("worker", &open.worker),
+        ("brief", &open.brief),
+        ("context", &open.context),
+    ] {
+        if set_blank(value) {
+            return Err(Error::invalid(format!("the {field} is blank")));
         }
     }
-    Ok((kind, urgency))
+    Ok(())
 }
 
 /// Refuses an open or an amend, `event`, by the side that does not open
@@ -128,41 +165,11 @@ fn known<T: FromStr<Err = Error>>(value: &str, field: &str) -> Result<T, Error> 
 
 /// Checks an amend against the case as it stands.
 pub(crate) fn check_amend(amend: &Amend, case: &Case) -> Result<(), Error> {
-    check_kind_fields(case.kind(), &amend.options, &amend.rows)?;
-    check_briefing_fields(case.kind(), amend.landed.is_some(), &amend.left_out)?;
-    if !amend.title.is_empty() && blank(&amend.title) {
-        return Err(Error::invalid("the title is blank"));
-    }
-    if !amend.body.is_empty() && blank(&amend.body) {
-        return Err(Error::invalid("the body is blank"));
-    }
-    if !amend.context.is_empty() && blank(&amend.context) {
-        return Err(Error::invalid("the context is blank"));
-    }
-    check_blank("option", &amend.options)?;
-    check_rows(&amend.rows, case.rows())?;
-    check_blank("link", &amend.links)?;
-    check_new("option", &amend.options, case.options())?;
-    // The options as amended: a recommend may name one this amend adds.
-    check_recommend(
-        case.kind(),
-        amend.recommend,
-        case.options().len() + amend.options.len(),
-    )?;
-    check_new("link", &amend.links, case.links())?;
-    check_dropped_links(amend, case.links())?;
-    check_labels(&amend.labels, case.labels())?;
+    check_amend_fields(amend, case)?;
+    check_amend_against(amend, case)?;
     // What changes the question is listed once, in changes_question; the
     // rest are changes that leave it as it was.
-    if !changes_question(amend, case)
-        && amend.links.is_empty()
-        && amend.drop_links.is_empty()
-        && amend.labels.is_empty()
-        && (amend.title.is_empty() || amend.title == case.title())
-        && (amend.context.is_empty() || amend.context == case.context())
-        && (amend.recommend == 0 || amend.recommend == case.recommend())
-        && amend.landed.is_none_or(|landed| landed == case.landed())
-    {
+    if !changes_question(amend, case) && !changes_lists(amend) && !changes_rest(amend, case) {
         // This also refuses an amend that sets nothing at all, and one that
         // only reopens the case: a reopen asks again, so it says what for.
         return Err(Error::invalid(
@@ -174,21 +181,78 @@ pub(crate) fn check_amend(amend: &Amend, case: &Case) -> Result<(), Error> {
     Ok(())
 }
 
+/// Checks an amend's fields for the case's kind, and that none it gives is
+/// blank; its rows are checked against the case's.
+fn check_amend_fields(amend: &Amend, case: &Case) -> Result<(), Error> {
+    check_kind_fields(case.kind(), &amend.options, &amend.rows)?;
+    check_briefing_fields(case.kind(), amend.landed.is_some(), &amend.left_out)?;
+    check_amend_text(amend)?;
+    check_blank("option", &amend.options)?;
+    check_rows(&amend.rows, case.rows())?;
+    check_blank("link", &amend.links)
+}
+
+/// Checks an amend's options, recommend, links and labels against the
+/// case's: what it adds is new, and what it drops the case has.
+fn check_amend_against(amend: &Amend, case: &Case) -> Result<(), Error> {
+    check_new("option", &amend.options, case.options())?;
+    // The options as amended: a recommend may name one this amend adds.
+    check_recommend(
+        case.kind(),
+        amend.recommend,
+        case.options().len() + amend.options.len(),
+    )?;
+    check_new("link", &amend.links, case.links())?;
+    check_dropped_links(amend, case.links())?;
+    check_labels(&amend.labels, case.labels())
+}
+
+/// Refuses an amend's title, body or context of only white space.
+fn check_amend_text(amend: &Amend) -> Result<(), Error> {
+    for (field, value) in [
+        ("title", &amend.title),
+        ("body", &amend.body),
+        ("context", &amend.context),
+    ] {
+        if set_blank(value) {
+            return Err(Error::invalid(format!("the {field} is blank")));
+        }
+    }
+    Ok(())
+}
+
+/// Whether an amend adds links or labels, or drops links.
+fn changes_lists(amend: &Amend) -> bool {
+    !amend.links.is_empty() || !amend.drop_links.is_empty() || !amend.labels.is_empty()
+}
+
+/// Whether an amend sets a title, context, recommend or `landed` other than
+/// the case's: changes that leave the question as it was.
+fn changes_rest(amend: &Amend, case: &Case) -> bool {
+    (!amend.title.is_empty() && amend.title != case.title())
+        || (!amend.context.is_empty() && amend.context != case.context())
+        || (amend.recommend != 0 && amend.recommend != case.recommend())
+        || amend.landed.is_some_and(|landed| landed != case.landed())
+}
+
 /// Refuses a link to drop that the case does not have, one given twice, and
 /// one the same amend adds.
 fn check_dropped_links(amend: &Amend, have: &[String]) -> Result<(), Error> {
-    for (i, link) in amend.drop_links.iter().enumerate() {
-        if amend.drop_links[..i].contains(link) {
+    let have: BTreeSet<&str> = have.iter().map(String::as_str).collect();
+    let added: BTreeSet<&str> = amend.links.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    for link in &amend.drop_links {
+        if !seen.insert(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the link {link:?} is dropped twice"
             )));
         }
-        if !have.contains(link) {
+        if !have.contains(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has no link {link:?} to drop"
             )));
         }
-        if amend.links.contains(link) {
+        if added.contains(link.as_str()) {
             return Err(Error::invalid(format!(
                 "the link {link:?} is both added and dropped"
             )));
@@ -321,14 +385,16 @@ fn check_choice(answer: &Answer, given: usize, options: usize) -> Result<(), Err
 
 /// An approval's answer gives each of the case's `rows` one verdict.
 fn check_verdicts(answer: &Answer, rows: &[ApprovalRow]) -> Result<(), Error> {
-    for (i, verdict) in answer.rows.iter().enumerate() {
-        if !rows.iter().any(|row| row.id == verdict.id) {
+    let ids: BTreeSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    let mut seen = BTreeSet::new();
+    for verdict in &answer.rows {
+        if !ids.contains(verdict.id.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has no row {:?}",
                 verdict.id
             )));
         }
-        if answer.rows[..i].iter().any(|v| v.id == verdict.id) {
+        if !seen.insert(verdict.id.as_str()) {
             return Err(Error::invalid(format!(
                 "row {:?} has two verdicts",
                 verdict.id
@@ -341,10 +407,7 @@ fn check_verdicts(answer: &Answer, rows: &[ApprovalRow]) -> Result<(), Error> {
             )));
         }
     }
-    if let Some(row) = rows
-        .iter()
-        .find(|row| !answer.rows.iter().any(|v| v.id == row.id))
-    {
+    if let Some(row) = rows.iter().find(|row| !seen.contains(row.id.as_str())) {
         return Err(Error::invalid(format!("row {:?} has no verdict", row.id)));
     }
     Ok(())
@@ -477,13 +540,15 @@ fn check_labels(added: &[String], have: &[String]) -> Result<(), Error> {
 
 /// Refuses a value given twice in `added`, or one the case already has.
 fn check_new(what: &str, added: &[String], have: &[String]) -> Result<(), Error> {
-    for (i, value) in added.iter().enumerate() {
-        if added[..i].contains(value) {
+    let have: BTreeSet<&str> = have.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    for value in added {
+        if !seen.insert(value.as_str()) {
             return Err(Error::invalid(format!(
                 "the {what} {value:?} is given twice"
             )));
         }
-        if have.contains(value) {
+        if have.contains(value.as_str()) {
             return Err(Error::invalid(format!(
                 "the case has the {what} {value:?} already"
             )));
@@ -496,6 +561,7 @@ fn check_new(what: &str, added: &[String], have: &[String]) -> Result<(), Error>
 /// digits, `.`, `-` and `_`, unique in the case, and its label, script and
 /// link are not blank. Its `by` is left out, for the agent, or `human`.
 fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
+    let mut ids: BTreeSet<&str> = have.iter().map(|row| row.id.as_str()).collect();
     for (i, row) in rows.iter().enumerate() {
         let id = &row.id;
         let id_fits = !id.is_empty()
@@ -508,7 +574,7 @@ fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
                 i + 1
             )));
         }
-        if rows[..i].iter().chain(have).any(|other| &other.id == id) {
+        if !ids.insert(id.as_str()) {
             return Err(Error::invalid(format!(
                 "the row id {id:?} is not unique in the case"
             )));
@@ -531,3 +597,6 @@ fn check_rows(rows: &[ApprovalRow], have: &[ApprovalRow]) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

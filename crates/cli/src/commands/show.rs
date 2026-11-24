@@ -30,8 +30,7 @@ pub(crate) struct Args {
 
 /// Prints the case.
 pub(crate) fn run(args: &Args, ctx: &mut Ctx) -> Result<(), Error> {
-    let key = ctx.find_case(&args.id)?;
-    let case = ctx.case(key)?;
+    let (key, case) = ctx.find(&args.id)?;
     ctx::warn_problems(key, &case);
     if args.answer {
         return output::json(&mut ctx.out, &AnswerJson::new(&case));

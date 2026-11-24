@@ -13,10 +13,11 @@ export interface FollowUp {
 }
 
 // The follow-up case `c` is, or null. It is one when it is open, it has been
-// answered, and the last event the agent wrote after its last answer is a
-// note. An amend after the note that changes the question (the case's
-// `amend_seq`) asks it afresh, so the case is drawn as it was first asked;
-// one that only adds a label, a link or context does not.
+// answered, no amend reopened it after its last answer (an amend whose `from`
+// is answered or picked up), and the last event the agent wrote after that
+// answer is a note. An amend after the note that changes the question (the
+// case's `amend_seq`) asks it afresh, so the case is drawn as it was first
+// asked; one that only adds a label, a link or context does not.
 export function followUp(c: Case): FollowUp | null {
   if (c.state !== "open") return null;
   const events = c.events || [];
@@ -26,7 +27,9 @@ export function followUp(c: Case): FollowUp | null {
   });
   const answer = events[last];
   if (!answer) return null;
-  const agent = events.slice(last + 1).filter((e) => e.author === "agent" && e.event !== "amend");
+  const after = events.slice(last + 1);
+  if (after.some((e) => e.event === "amend" && (e.from === "answered" || e.from === "pickedup"))) return null;
+  const agent = after.filter((e) => e.author === "agent" && e.event !== "amend");
   const lastNote = agent[agent.length - 1];
   if (lastNote?.event !== "note" || (c.amend_seq || 0) > lastNote.seq) return null;
   return { answer, notes: agent.filter((e) => e.event === "note") };
