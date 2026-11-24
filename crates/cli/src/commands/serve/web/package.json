@@ -14,7 +14,7 @@
     "marked": "18.0.14",
     "mermaid": "12.2.0",
     "preact": "10.29.8",
-    "preact-render-to-string": "6.8.1",
+    "preact-render-to-string": "6.8.3",
     "type-fest": "4.41.0",
     "typescript": "7.0.2"
   }
