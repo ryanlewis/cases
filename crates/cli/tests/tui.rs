@@ -1408,10 +1408,12 @@ fn with_status(env: &Env) -> (Tui, PathBuf) {
     (tui, status)
 }
 
-/// The exit status written to `status`, within 5 s.
+/// The exit status written to `status`, within 10 s: a q over
+/// [`over_a_slow_write`] waits out the hold on the answer's write (see
+/// [`SLOW_WRITE_SSH`]) before it exits.
 fn exit_status(status: &Path) -> String {
     let read = || std::fs::read_to_string(status).unwrap_or_default();
-    assert!(soon(Duration::from_secs(5), || read().ends_with('\n')));
+    assert!(soon(Duration::from_secs(10), || read().ends_with('\n')));
     read().trim().to_owned()
 }
 
