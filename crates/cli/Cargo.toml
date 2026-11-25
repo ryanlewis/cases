@@ -1,6 +1,6 @@
 [package]
 name = "cases"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 description = "A human-in-the-loop inbox for agents."
 edition.workspace = true
 rust-version.workspace = true
