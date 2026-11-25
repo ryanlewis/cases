@@ -22,7 +22,7 @@ jobs:
   # tagged commit must be on main, or nothing is built and nothing is
   # published.
   version:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -104,7 +104,7 @@ jobs:
   # under Rosetta when the runner has it.
   macos:
     needs: version
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -163,7 +163,7 @@ jobs:
   # Store Connect API key with the Developer role.
   macos-sign:
     needs: [version, macos]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     environment: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || '' }}
     outputs:
@@ -233,7 +233,7 @@ jobs:
   macos-verify:
     needs: [version, macos-sign]
     if: needs.macos-sign.outputs.signed == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 10
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -266,7 +266,7 @@ jobs:
   sums:
     needs: [version, linux, macos-sign, macos-verify]
     if: ${{ !cancelled() && !failure() }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -305,7 +305,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, sums]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:
       contents: write
