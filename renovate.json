@@ -15,6 +15,13 @@
     },
     {
       "customType": "regex",
+      "description": "Bump the runners named in a workflow's matrix as `runner: ubuntu-<version>`, which the github-actions manager cannot see behind `runs-on: ${{ matrix.runner }}`.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["runner: (?<depName>ubuntu)-(?<currentValue>\\d+\\.\\d+(?:-arm)?)\\b"],
+      "datasourceTemplate": "github-runners"
+    },
+    {
+      "customType": "regex",
       "description": "Bump the Rust toolchain pinned in rust-toolchain.toml. rust-lang/rust publishes a GitHub release for each stable version only.",
       "managerFilePatterns": ["/^rust-toolchain\\.toml$/"],
       "matchStrings": ["channel = \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
@@ -31,6 +38,15 @@
       "matchDatasources": ["github-releases"],
       "groupName": null,
       "automerge": true
+    },
+    {
+      "description": "taiki-e/install-action only installs a tool version it knows, and the workflows pin `fallback: none`. Bump it in the weekly batch with the tool pins it installs, so a tool bump gets the install-action release that knows it (#192), rather than waiting for the separate actions PR.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["taiki-e/install-action"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
+      "automerge": false
     },
     {
       "description": "serde_json is pinned exactly in normal and dev dependencies, and Cargo allows one 1.x in the build. Keep every pin in the weekly batch, so the dev-dependency patch group never bumps half of them (#129, #130).",
