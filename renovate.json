@@ -15,6 +15,13 @@
     },
     {
       "customType": "regex",
+      "description": "Bump the runners named in a workflow's matrix as `runner: ubuntu-<version>`, which the github-actions manager cannot see behind `runs-on: ${{ matrix.runner }}`.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["runner: (?<depName>ubuntu)-(?<currentValue>\\d+\\.\\d+(?:-arm)?)\\b"],
+      "datasourceTemplate": "github-runners"
+    },
+    {
+      "customType": "regex",
       "description": "Bump the Rust toolchain pinned in rust-toolchain.toml. rust-lang/rust publishes a GitHub release for each stable version only.",
       "managerFilePatterns": ["/^rust-toolchain\\.toml$/"],
       "matchStrings": ["channel = \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
