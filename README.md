@@ -26,10 +26,16 @@ cases gives every agent one place to put its questions, lets the human answer th
 
 Each release has a `cases` binary for macOS (arm64, x86_64) and Linux (static, x86_64, aarch64).
 
-Pick the target for the machine: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`.
+With Homebrew, on macOS or Linux:
 
 ```sh
-version=0.0.1-alpha.1
+brew install ryanlewis/tap/cases
+```
+
+Or by hand, from the release. Pick the target for the machine: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`.
+
+```sh
+version=0.0.1-alpha.7
 target=aarch64-apple-darwin
 cd "$(mktemp -d)"
 gh release download "v$version" --repo ryanlewis/cases \
@@ -40,7 +46,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS &&
   cases --version
 ```
 
-The `&&`s stop the install if the checksum does not match. On a Linux without `shasum` (it comes with perl), use `sha256sum -c --ignore-missing SHA256SUMS` instead. `~/.local/bin` must be on `PATH`. The macOS binaries are not notarised: a binary downloaded by `gh` runs, but one downloaded in a browser is quarantined until `xattr -d com.apple.quarantine ~/.local/bin/cases`.
+The `&&`s stop the install if the checksum does not match. On a Linux without `shasum` (it comes with perl), use `sha256sum -c --ignore-missing SHA256SUMS` instead. `~/.local/bin` must be on `PATH`. The macOS binaries are signed and notarised.
 
 ### From source
 
